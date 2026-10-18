@@ -9,7 +9,13 @@ O **CHDevFlow** organiza o trabalho de Hallan (Product Owner), ChatGPT (orquestr
 ## Navegação
 
 - [RFC de arquitetura](docs/RFC-CH-DEVFLOW.md)
-- [W1 — Esteiras e Kanban (bootstrap, ainda não ativado)](docs/W1-ESTEIRAS-KANBAN.md)
+- [W1 — Esteiras e Kanban (instalado e homologado)](docs/W1-ESTEIRAS-KANBAN.md)
+- [GitHub Project W1 — esteiras](https://github.com/users/hallanbrito/projects/2)
+- [W2-A — Arquitetura documental (proposta em revisão)](docs/W2-A/01-ARQUITETURA.md)
+- [W2-A — Contratos de missão e autorização](docs/W2-A/02-CONTRATOS.md)
+- [W2-A — Plano de testes proposto](docs/W2-A/03-PLANO-DE-TESTES.md)
+- [W2-A — Critérios de aceite e riscos](docs/W2-A/04-CRITERIOS-DE-ACEITE.md)
+- [W2-A — Missão autorizada CH-1](prompts/W2-A-MISSAO-DOCUMENTAL.md)
 - [W1 — Missão de provisionamento para Codex](prompts/W1-MISSAO-CODEX.md)
 - [W1 — Issue de rastreamento](https://github.com/hallanbrito/CHDevFlow/issues/2)
 - [Gerador de projeto C.H.](scripts/ch_init.py)
@@ -43,8 +49,9 @@ O primeiro experimento será no projeto **HallanCraft**, com implantação contr
 ## Próximas etapas
 
 1. Integrar a fundação documental após revisão do PO.
-2. Configurar Issues/Projects e as esteiras dos agentes.
-3. Construir um worker local para receber tarefas autorizadas e abrir Draft PRs.
-4. Desenvolver painel de aprovação e evoluir o `ch init` para CLI reutilizável.
+2. **W1 homologada:** Project #2 com esteiras e auto-add de Issues `ch:workflow`.
+3. **W2-A em revisão:** documentação do despachante assistido, sem executável, em Draft PR.
+4. Futuramente, somente com autorização própria: validar AGY/Antigravity no CachyOS, construir despachante e ensaiar tarefa CH-2 isolada no HallanCraft.
+5. Desenvolver painel de aprovação e evoluir o `ch init` para CLI reutilizável.
 
-**Importante:** automação permanente Codex/AGY, Kanban integrado e painel do PO são funcionalidades planejadas, ainda não implementadas.
+**Importante:** o **Kanban W1** já está instalado e homologado; **despachante Codex/AGY, automação permanente e painel PO não estão implementados**. As decisões da W2 definem limites futuros, mas não constituem autorização para executar ou fazer merge.
