@@ -1,0 +1,27 @@
+name: CHDevFlow W1 checks
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - "tests/**"
+      - ".github/workflows/w1-checks.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compilação sintática
+        run: python -m compileall -q scripts
+      - name: Prévia offline
+        run: python scripts/w1_github_project.py
+      - name: Testes
+        run: python -m unittest discover -s tests -v
