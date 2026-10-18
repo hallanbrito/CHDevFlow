@@ -50,7 +50,11 @@ def gh(*args: str) -> dict:
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError as error:
-        raise RuntimeError("Resposta JSON invalida do GitHub CLI") from error
+        # Alguns comandos de escrita do gh exibem texto simples, não JSON.
+        expected = ("--format" in args or "--json" in args or args[:2] == ("api", "graphql"))
+        if expected:
+            raise RuntimeError("Resposta JSON invalida do GitHub CLI") from error
+        return {}
 
 
 def graphql(query: str, **vars: object) -> dict:
