@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
@@ -164,9 +166,43 @@ def validate_plan(data):
     return issues
 
 
+def _stable_item(item):
+    """Reconciliar apenas a grafia de Esteira/Etapa; preservar demais dados."""
+    excluded = {"esteira", "etapa ch"}
+    stable = {k: v for k, v in item.items()
+              if not (isinstance(k, str) and k.casefold() in excluded)}
+    stable["Esteira"] = legacy._field_value(item, "Esteira")
+    stable["Etapa CH"] = legacy._field_value(item, "Etapa CH")
+    return stable
+
+
+def _selected_items(payload, issues):
+    result = {}
+    for item in payload["items"]:
+        c = item.get("content")
+        if (isinstance(c, dict) and c.get("type") == "Issue"
+                and c.get("repository") == REPO and c.get("number") in issues):
+            result[c["number"]] = item
+    if set(result) != set(issues):
+        raise ValueError("Issues do lote não encontradas")
+    return result
+
+
+def _verify_state(payload, issues, expected, remaining, state_reader):
+    """Revalida o lote inteiro, inclusive campos já alterados e não editáveis."""
+    changes, notes, _ = inspect(payload, issues, state_reader)
+    if notes or changes != remaining:
+        raise ValueError("Mudanças pendentes divergentes ou conflito no Project")
+    observed = _selected_items(payload, issues)
+    for number, item in observed.items():
+        if _stable_item(item) != expected[number]:
+            raise ValueError(f"#{number}: snapshot divergiu durante lote")
+    return observed
+
+
 def apply_plan(data, confirm, *, reader=fetch_project, state_reader=None,
-               writer=None, prompt=input, interactive=None):
-    """Só após confirmação no host; jamais assume que CLI comprova identidade do PO."""
+               writer=None, prompt=input, interactive=None, audit=None):
+    """Gate manual; a autorização do PO é evento externo, nunca inferido."""
     issues = validate_plan(data)
     if confirm != data["digest"]:
         raise ValueError("Digest não confirmado")
@@ -174,30 +210,84 @@ def apply_plan(data, confirm, *, reader=fetch_project, state_reader=None,
         interactive = sys.stdin.isatty()
     if not interactive:
         raise ValueError("Aplicação requer terminal interativo; sem cron/CI")
-    fresh = make_plan(reader(), issues, state_reader)
-    if fresh != data:
-        raise ValueError("Estado remoto mudou: regenere o plano; nada aplicado")
-    phrase = "APROVO KSYNC-03 " + data["digest"][:12]
-    if prompt(f"Digite exatamente '{phrase}' após autorização externa do PO: ") != phrase:
-        raise ValueError("Confirmação humana ausente")
+
+    audit = audit or (lambda _record: None)
+    try:
+        audit({"event": "PREFLIGHT", "digest": data["digest"], "issues": issues})
+        # Nenhuma escrita no Project antes de confirmar toda a versão do plano.
+        baseline = reader()
+        if make_plan(baseline, issues, state_reader) != data:
+            raise ValueError("Estado remoto mudou: regenere o plano; nada aplicado")
+        expected = {n: _stable_item(item) for n, item in
+                    _selected_items(baseline, issues).items()}
+        phrase = "APROVO KSYNC-03 " + data["digest"][:12]
+        if prompt(f"Digite exatamente '{phrase}' após autorização externa do PO: ") != phrase:
+            raise ValueError("Confirmação humana ausente")
+    except Exception as exc:
+        try:
+            audit({"event": "BLOCKED_PREWRITE", "reason_type": type(exc).__name__})
+        except Exception:
+            pass
+        raise
+
+    state_reader = state_reader or legacy.issue_state
     writer = writer or legacy.gh
     done = []
+    uncertain = None
     try:
+        audit({"event": "START", "digest": data["digest"], "issues": issues,
+               "requested_changes": len(data["changes"])})
         for entry in data["changes"]:
-            current, notes, _ = inspect(reader(), issues, state_reader)
-            if notes or current != data["changes"][len(done):]:
-                raise ValueError("Divergência ou conflito durante lote")
+            remaining = data["changes"][len(done):]
+            current = _verify_state(reader(), issues, expected, remaining, state_reader)
+            n, field = entry["number"], entry["field"]
+            before = legacy._field_value(current[n], field)
+            if before is not None:
+                raise ValueError(f"#{n}: campo {field} não está vazio")
+            audit({"event": "ATTEMPT", "number": n, "field": field,
+                   "before": before, "expected": entry["value"]})
+            # Após ATTEMPT a escrita pode ter acontecido mesmo se a rede falhar.
+            uncertain = entry
             writer("project", "item-edit", str(PROJECT), "--owner", OWNER,
-                   "--url", entry["url"], "--field", entry["field"],
+                   "--url", entry["url"], "--field", field,
                    "--value", entry["value"])
+            expected[n][field] = entry["value"]
+            # Confere o valor EXATO gravado e todos os campos do lote.
+            observed = _verify_state(reader(), issues, expected,
+                                     data["changes"][len(done) + 1:], state_reader)
+            after = legacy._field_value(observed[n], field)
+            if after != entry["value"]:
+                raise ValueError(f"#{n}: valor efetivo diferente do solicitado")
+            audit({"event": "VERIFIED", "number": n, "field": field,
+                   "before": before, "after": after,
+                   "snapshot_sha256": digest(_stable_item(observed[n]))})
             done.append(entry)
-            current, notes, _ = inspect(reader(), issues, state_reader)
-            if notes or current != data["changes"][len(done):]:
-                raise ValueError("Pós-escrita inconsistente")
+            uncertain = None
+        audit({"event": "COMPLETE", "confirmed": len(done)})
         return done
     except Exception as exc:
-        raise RuntimeError(f"APLICAÇÃO PARCIAL POSSÍVEL ({len(done)} confirmadas); "
+        record = {"event": "ABORT", "confirmed": len(done),
+                  "uncertain": None if uncertain is None else
+                  {"number": uncertain["number"], "field": uncertain["field"]},
+                  "reason_type": type(exc).__name__}
+        try:
+            audit(record)
+        except Exception:
+            pass  # Falha no log também interrompe; preservar erro original.
+        detail = (f"; resultado INDETERMINADO em #{uncertain['number']} "
+                  f"{uncertain['field']}" if uncertain else "")
+        raise RuntimeError(f"APLICAÇÃO PARCIAL POSSÍVEL ({len(done)} confirmadas){detail}; "
                            "não repetir sem auditoria. " + str(exc)) from exc
+
+
+def _audit_writer(handle):
+    def append(record):
+        event = {"protocol": "RUC/1.0", "mission": "KSYNC-03/#19",
+                 "timestamp_utc": datetime.now(timezone.utc).isoformat(), **record}
+        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return append
 
 
 def main(argv=None):
@@ -206,17 +296,21 @@ def main(argv=None):
     parser.add_argument("--plan-file", type=Path, help="Salvar plano local, sem sobrescrever")
     parser.add_argument("--apply-plan", type=Path, help="Plano pinado para execução futura autorizada")
     parser.add_argument("--confirm", help="SHA256 exato do plano para executar")
+    parser.add_argument("--audit-file", type=Path, help="JSONL de auditoria, criação exclusiva")
     args = parser.parse_args(argv)
     try:
         if args.apply_plan:
-            if args.issues or args.plan_file or not args.confirm:
-                raise ValueError("--apply-plan exige apenas --confirm")
+            if args.issues or args.plan_file or not args.confirm or not args.audit_file:
+                raise ValueError("--apply-plan exige --confirm e --audit-file; sem outros modos")
             data = json.loads(args.apply_plan.read_text(encoding="utf-8"))
-            done = apply_plan(data, args.confirm)
+            # Criar registro exclusivo com 0600 antes de qualquer tentativa.
+            fd = os.open(args.audit_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                done = apply_plan(data, args.confirm, audit=_audit_writer(handle))
             print(f"APLICADO E REVALIDADO: {len(done)} campos")
             return 0
-        if args.confirm:
-            raise ValueError("--confirm somente com --apply-plan")
+        if args.confirm or args.audit_file:
+            raise ValueError("--confirm/--audit-file somente com --apply-plan")
         numbers = parse_numbers(args.issues) if args.issues else None
         payload = fetch_project()
         changes, notes, _ = inspect(payload, numbers)

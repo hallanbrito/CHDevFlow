@@ -168,6 +168,114 @@ class Execution(unittest.TestCase):
                            prompt=lambda s: "APROVO KSYNC-03 " + self.plan["digest"][:12])
         self.assertEqual(self.writer.call_count, 1)
 
+    def test_wrong_value_after_write_never_reports_success(self):
+        events = []
+        def write(*args):
+            self.writer(*args)
+            field = args[args.index("--field") + 1]
+            self.live["items"][0]["esteira" if field == "Esteira" else "etapa CH"] = (
+                "ChatGPT" if field == "Esteira" else "EM_REVISAO"
+            )
+        with self.assertRaisesRegex(RuntimeError, "INDETERMINADO em #42 Etapa CH"):
+            app.apply_plan(self.plan, self.plan["digest"], reader=lambda: self.live,
+                           state_reader=self.state, writer=write, interactive=True,
+                           prompt=lambda *_: "APROVO KSYNC-03 " + self.plan["digest"][:12],
+                           audit=events.append)
+        self.assertEqual(self.writer.call_count, 2)
+        self.assertEqual(len([e for e in events if e["event"] == "VERIFIED"]), 1)
+        self.assertEqual(events[-1]["event"], "ABORT")
+        self.assertEqual(events[-1]["confirmed"], 1)
+
+    def test_unrelated_field_change_after_write_fails_snapshot(self):
+        def write(*args):
+            self.writer(*args)
+            self.live["items"][0]["esteira"] = "ChatGPT"
+            self.live["items"][0]["prioridade CH"] = "P0"
+        with self.assertRaisesRegex(RuntimeError, "snapshot divergiu"):
+            app.apply_plan(self.plan, self.plan["digest"], reader=lambda: self.live,
+                           state_reader=self.state, writer=write, interactive=True,
+                           prompt=lambda *_: "APROVO KSYNC-03 " + self.plan["digest"][:12])
+        self.assertEqual(self.writer.call_count, 1)
+
+    def test_change_between_two_fields_is_blocked(self):
+        reads = [0]
+        def read():
+            reads[0] += 1
+            if reads[0] == 4:
+                self.live["items"][0]["risco CH"] = "Alto"
+            return self.live
+        def write(*args):
+            self.writer(*args)
+            self.live["items"][0]["esteira"] = "ChatGPT"
+        with self.assertRaisesRegex(RuntimeError, "snapshot divergiu"):
+            app.apply_plan(self.plan, self.plan["digest"], reader=read,
+                           state_reader=self.state, writer=write, interactive=True,
+                           prompt=lambda *_: "APROVO KSYNC-03 " + self.plan["digest"][:12])
+        self.assertEqual(self.writer.call_count, 1)
+
+    def test_prewrite_conflict_is_audited_without_mutation(self):
+        events = []
+        self.live["items"][0]["risk"] = "changed"
+        with self.assertRaisesRegex(ValueError, "Estado remoto"):
+            app.apply_plan(self.plan, self.plan["digest"], reader=lambda: self.live,
+                           state_reader=self.state, writer=self.writer, interactive=True,
+                           audit=events.append)
+        self.writer.assert_not_called()
+        self.assertEqual([e["event"] for e in events],
+                         ["PREFLIGHT", "BLOCKED_PREWRITE"])
+
+    def test_network_failure_after_remote_write_is_indeterminate(self):
+        events = []
+        def write(*args):
+            self.writer(*args)
+            self.live["items"][0]["esteira"] = "ChatGPT"
+            raise RuntimeError("connection dropped")
+        with self.assertRaisesRegex(RuntimeError, "0 confirmadas.*INDETERMINADO"):
+            app.apply_plan(self.plan, self.plan["digest"], reader=lambda: self.live,
+                           state_reader=self.state, writer=write, interactive=True,
+                           prompt=lambda *_: "APROVO KSYNC-03 " + self.plan["digest"][:12],
+                           audit=events.append)
+        self.assertEqual(self.writer.call_count, 1)
+        self.assertEqual([e["event"] for e in events],
+                         ["PREFLIGHT", "START", "ATTEMPT", "ABORT"])
+        self.assertEqual(events[-1]["uncertain"], {"number": 42, "field": "Esteira"})
+
+    def test_audit_records_exact_before_after_and_completion(self):
+        events = []
+        def write(*args):
+            field = args[args.index("--field") + 1]
+            value = args[args.index("--value") + 1]
+            self.live["items"][0]["esteira" if field == "Esteira" else "etapa CH"] = value
+        app.apply_plan(self.plan, self.plan["digest"], reader=lambda: self.live,
+                       state_reader=self.state, writer=write, interactive=True,
+                       prompt=lambda *_: "APROVO KSYNC-03 " + self.plan["digest"][:12],
+                       audit=events.append)
+        verified = [e for e in events if e["event"] == "VERIFIED"]
+        self.assertEqual([(x["field"], x["before"], x["after"]) for x in verified],
+                         [("Esteira", None, "ChatGPT"), ("Etapa CH", None, "BACKLOG")])
+        self.assertEqual(events[-1], {"event": "COMPLETE", "confirmed": 2})
+
+    def test_audit_file_is_exclusive_jsonl_and_private(self):
+        with tempfile.TemporaryDirectory() as td:
+            import os
+            path = Path(td) / "audit.jsonl"
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                audit = app._audit_writer(handle)
+                audit({"event": "START", "digest": self.plan["digest"]})
+            records = [json.loads(x) for x in path.read_text().splitlines()]
+            self.assertEqual(records[0]["protocol"], "RUC/1.0")
+            self.assertEqual(records[0]["mission"], "KSYNC-03/#19")
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+
+    def test_cli_requires_audit_file_for_apply_path(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(app.main(["--apply-plan", "/fake", "--confirm", "x"]), 1)
+            self.assertEqual(app.main(["--audit-file", "/tmp/x"]), 1)
+        self.writer.assert_not_called()
+
     @mock.patch.object(app, "fetch_project")
     def test_cli_preview_never_writes_and_saves_exclusive_plan(self, fetch):
         fetch.return_value = payload(item(43))
