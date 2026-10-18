@@ -9,6 +9,9 @@ O **CHDevFlow** organiza o trabalho de Hallan (Product Owner), ChatGPT (orquestr
 ## Navegação
 
 - [RFC de arquitetura](docs/RFC-CH-DEVFLOW.md)
+- [W1 — Esteiras e Kanban (bootstrap, ainda não ativado)](docs/W1-ESTEIRAS-KANBAN.md)
+- [W1 — Missão de provisionamento para Codex](prompts/W1-MISSAO-CODEX.md)
+- [W1 — Issue de rastreamento](https://github.com/hallanbrito/CHDevFlow/issues/2)
 - [Gerador de projeto C.H.](scripts/ch_init.py)
 - [Gerador da árvore do projeto](scripts/ch_tree.py)
 - [Modelos de arquivos para novos projetos](templates/)
