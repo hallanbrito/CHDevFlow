@@ -77,12 +77,13 @@ def ensure_views(owner: str, number: int) -> None:
     if not project:
         raise RuntimeError("Project inacessivel na API GraphQL.")
     names = {view["name"] for view in project["views"]["nodes"]}
+    # GitHub GraphQL: ProjectV2ViewLayout usa BOARD_LAYOUT, não BOARD.
     for name, filter_value in VIEWS.items():
         if name in names:
             print("Preservando view:", name)
             continue
         made = graphql("""mutation($p:ID!, $n:String!){
-          createProjectV2View(input:{projectId:$p,name:$n,layout:BOARD}){
+          createProjectV2View(input:{projectId:$p,name:$n,layout:BOARD_LAYOUT}){
             projectV2View{id}
           }
         }""", p=project["id"], n=name)
