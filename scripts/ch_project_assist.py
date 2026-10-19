@@ -10,6 +10,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
@@ -121,7 +122,7 @@ def inspect(payload, selected=None, state_reader=None, activity_reader=None):
                                  + "; BACKLOG não sugerido")
                 else:
                     notes.append(f"ETAPA_PENDENTE_PO: #{n}: histórico inconclusivo; preservar etapa")
-            except (RuntimeError, ValueError, OSError):
+            except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
                 notes.append(f"ETAPA_PENDENTE_PO: #{n}: consulta de histórico falhou; preservar etapa")
     if chosen is not None and not chosen.issubset(found):
         raise ValueError("Uma ou mais Issues não estão neste Project/repositório")
@@ -346,7 +347,7 @@ def main(argv=None):
             print(f"Plano criado: {args.plan_file} | digest={plan['digest']}")
             print("Plano NÃO é autorização; aplicação depende de gate específico do PO.")
         return 0
-    except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+    except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
         print("BLOQUEADO:", legacy._safe_error(str(exc)), file=sys.stderr)
         return 1
 

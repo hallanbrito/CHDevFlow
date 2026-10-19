@@ -10,14 +10,14 @@ A prévia real da KSYNC-03 mostrou Issues #8 e #19, OPEN e com status Todo, rece
 
 O módulo scripts/ch_stage_evidence.py é usado por scripts/ch_project_sync.py (KSYNC-01) e scripts/ch_project_assist.py (KSYNC-03).
 
-Comando de leitura de histórico: gh api -H 'Accept: application/vnd.github+json' --paginate --slurp repos/hallanbrito/CHDevFlow/issues/N/timeline?per_page=100.
+Comando de leitura de histórico, **uma página por requisição**: gh api -H 'Accept: application/vnd.github+json' 'repos/hallanbrito/CHDevFlow/issues/N/timeline?per_page=100&page=P'. O código incrementa P de 1 até, no máximo, 30 e para ao receber menos de 100 eventos; não usa --paginate/--slurp porque isso baixaria todas as páginas antes da validação.
 
 - Consultar páginas completas da timeline com o gh autenticado no host. Verificar identidade do repositório e URL canônica da PR.
 - Eventos cross-referenced com PR do mesmo repositório geram evidência WORK_FOUND. Eventos referenced/committed com SHA-40 também são sinais conservadores de trabalho.
 - PR vinculado é indício de atividade, mas não prova que o PR implementou toda a Issue; um PR apenas mencionado pode bloquear uma sugestão e requerer atenção do PO. Estado merged_at é informativo, nunca uma decisão sobre HOMOLOGADA.
 - CLEAR significa somente que a consulta válida não mostrou os indícios definidos. Não comprova inexistência de trabalho.
-- Em erro de rede/API, JSON ou paginação inválida, identidade contraditória ou limite excedido, NÃO sugerir Etapa CH = BACKLOG.
-- Limite de 30 páginas e 3.000 eventos. Limitações residuais: TOCTOU entre timeline e eventual escrita, e cobertura da timeline como fonte histórica.
+- Em erro de rede/API, timeout de 45 segundos por chamada, JSON ou paginação inválida, identidade contraditória ou limite excedido, NÃO sugerir Etapa CH = BACKLOG. A KSYNC-03 captura também subprocess.TimeoutExpired, sem traceback na prévia, preservando Esteira como proposta independente.
+- Limite **efetivo de coleta** de 30 requisições/páginas e 3.000 eventos por Issue; se a página 30 contiver 100 eventos, o resultado é inconclusivo e a etapa é bloqueada. Um retorno de menos de 100 encerra a coleta. Commit referenced/committed só produz link do CHDevFlow quando commit_url corresponde exatamente ao mesmo repositório e SHA; metadado de procedência ausente/externo bloqueia a etapa. Limitações residuais: TOCTOU entre timeline e eventual escrita, limite por execução (até 45 segundos por chamada), e cobertura da timeline como fonte histórica.
 - Nenhuma chamada para alterar Issue, PR, Project, credenciais ou agentes.
 
 ## Política de estágios
@@ -39,7 +39,7 @@ Observação: a KSYNC-03 pode gerar plano somente para Esteira mesmo quando ETAP
 1. As Issues #8 e #19 deixam de receber BACKLOG quando o histórico de PR #9/#20 for verificado.
 2. Nunca converter merged/closed ou texto histórico em EM_EXECUCAO, EM_REVISAO ou HOMOLOGADA.
 3. Em falha de consulta de histórico, bloquear apenas a proposta da etapa, sem permitir falsa homologação.
-4. Identidade da PR, paginação e limites são verificados. Testes com mocks cobrem PR aberto/merged, falso vínculo, paginação e falha.
+4. Identidade da PR e do commit, paginação limitada durante a transferência e limites são verificados. Testes com mocks cobrem PR aberto/merged, falso vínculo, timeout, limite de 30 páginas, commit externo, paginação e falha.
 5. KSYNC-01 e KSYNC-03 compartilham o verificador; sem mudança em Autonomia CH e Decisao PO.
 6. Testes offline/CI e revisão humana do Draft PR antes de merge.
 7. Execução real do sincronizador, timers, deploy e acesso a HallanCraft estão fora de escopo.
@@ -57,3 +57,7 @@ Observação: a KSYNC-03 pode gerar plano somente para Esteira mesmo quando ETAP
 9. Decisão PO: aceitar/revisar; merge e execução real exigem autorizações específicas.
 
 **Não autorizado nesta fatia:** merge, --apply, --apply-plan, cron, deploy, workflow de escrita, dispatcher W2, execução Codex/AGY ou qualquer alteração em HallanCraft.
+
+## Hardening CH-AUD-031 (19/10/2026)
+
+Autorização específica do PO para AUD-01/02/03 exclusivamente na branch do Draft PR #22, sem execução de escrita, merge ou agendamento. A nova consulta abandona o download ilimitado e usa paginação explícita; histórico sem fim comprovado bloqueia a etapa. O commit tem procedência validada pelo commit_url canônico. Testes offline adicionais verificam timeout, repositório externo e limites de páginas; homologação live no CachyOS segue separada.

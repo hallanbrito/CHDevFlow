@@ -54,7 +54,7 @@ Regras adicionais:
 - A ausência das chaves no JSON é tratada como não preenchida, **não** como inexistência dos campos no Project.
 - O JSON é obtido por `gh project item-list <n> --owner ... --format json`, **sem `--field`**: essas opções são incompatíveis nessa versão do `gh`.
 - O script valida `totalCount` contra o array `items`, número+repositório, URL canônica, etiquetas e dados esperados. Dados incompletos causam bloqueio.
-- A KSYNC-03.1 bloqueia a proposta automática de `Etapa CH=BACKLOG` se há PR/commit associado ou falha de consulta da timeline. `Esteira` continua independente; PR merged não autoriza homologação. Ver [KSYNC-03.1](KSYNC-03.1-RECONCILIACAO.md).
+- A KSYNC-03.1 bloqueia a proposta automática de `Etapa CH=BACKLOG` se há PR/commit associado ou falha de consulta da timeline, inclusive timeout. A consulta usa páginas numeradas de até 100 eventos, máximo 30 páginas, sem `--slurp`; commit de origem externa não é tratado como evidência local. `Esteira` continua independente; PR merged não autoriza homologação. Ver [KSYNC-03.1](KSYNC-03.1-RECONCILIACAO.md).
 - `--apply` só usa `gh project item-edit ... --field Esteira|Etapa CH --value ...`; sem permissão para escrever no repositório, comentar Issues ou executar agentes.
 - Não há transação entre vários edits; se o serviço falhar no meio, haverá possibilidade de aplicação parcial, informada na saída. Conferir Project e repetir após diagnóstico. A reexecução é idempotente **quando o estado remoto reflete as operações concluídas**.
 - O plano é calculado usando estado do momento da leitura, sem lock remoto; para evitar concorrência, execute um sincronizador por vez, manualmente.

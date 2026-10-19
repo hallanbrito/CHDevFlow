@@ -63,6 +63,17 @@ class PlanningTests(unittest.TestCase):
                          [("Esteira", "ChatGPT")])
         self.assertIn("ETAPA_PENDENTE_PO", notes[0])
 
+    def test_timeline_timeout_blocks_backlog_but_not_lane(self):
+        def broken(*_):
+            raise sync.subprocess.TimeoutExpired(["gh", "api"], timeout=45)
+        changes, notes = sync.build_plan(
+            payload(item(19, labels=["ch:workflow", "ch:chatgpt"])),
+            REPO, lambda *_: "OPEN", activity_reader=broken
+        )
+        self.assertEqual([(x.field, x.value) for x in changes],
+                         [("Esteira", "ChatGPT")])
+        self.assertIn("indisponível", notes[0])
+
     def test_timeline_failure_blocks_backlog_but_not_lane(self):
         def broken(*_):
             raise RuntimeError("API offline")

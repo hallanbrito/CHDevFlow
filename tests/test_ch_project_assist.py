@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -66,6 +67,45 @@ class Planning(unittest.TestCase):
             [(e["field"], e["value"]) for e in plan["changes"]],
             [("Esteira", "ChatGPT")]
         )
+
+    def test_timeline_timeout_blocks_backlog_and_keeps_lane(self):
+        def timed_out(*_):
+            raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=45)
+        changes, notes, _ = app.inspect(
+            payload(item(19)), [19], lambda *_: "OPEN",
+            activity_reader=timed_out
+        )
+        self.assertEqual([(x["field"], x["value"]) for x in changes],
+                         [("Esteira", "ChatGPT")])
+        self.assertIn("ETAPA_PENDENTE_PO", notes[0])
+        self.assertIn("histórico falhou", notes[0])
+
+    def test_cli_timeout_preview_reports_warning_without_traceback_or_write(self):
+        with mock.patch.object(app, "fetch_project", return_value=payload(item(19))):
+            with mock.patch.object(app.legacy, "issue_state", return_value="OPEN"):
+                with mock.patch.object(
+                    app.legacy.ch_stage_evidence, "probe",
+                    side_effect=subprocess.TimeoutExpired(["gh", "api"], timeout=45)
+                ):
+                    with mock.patch.object(app.legacy, "gh") as writer:
+                        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                                rc = app.main(["--issues", "19"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("ETAPA_PENDENTE_PO", stdout.getvalue())
+        self.assertNotIn("Etapa CH: (vazio) -> BACKLOG", stdout.getvalue())
+        writer.assert_not_called()
+
+    def test_main_catches_project_fetch_timeout_without_traceback(self):
+        with mock.patch.object(
+            app, "fetch_project",
+            side_effect=subprocess.TimeoutExpired(["gh", "project"], timeout=45)
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                rc = app.main()
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOQUEADO:", stderr.getvalue())
 
     def test_unavailable_timeline_does_not_offer_backlog(self):
         def unavailable(*_):

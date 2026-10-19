@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -24,7 +25,13 @@ def client(*pages):
     calls = []
     def read(*args):
         calls.append(args)
-        return json.dumps([list(p) for p in pages])
+        match = re.search(r"[?&]page=(\d+)$", args[-1])
+        if not match:
+            raise AssertionError("Page parameter missing")
+        page_number = int(match.group(1))
+        if page_number > len(pages):
+            raise AssertionError("Unexpected extra page request")
+        return json.dumps(list(pages[page_number - 1]))
     return read, calls
 
 
@@ -40,18 +47,74 @@ class TimelineEvidence(unittest.TestCase):
         self.assertEqual(result["status"], "WORK_FOUND")
         self.assertEqual([e["number"] for e in result["references"]], [9])
         self.assertIn("PR #9 MERGED", stage.format_refs(result))
-        self.assertIn("--paginate", calls[0])
-        self.assertIn("--slurp", calls[0])
-        self.assertTrue(calls[0][-1].endswith("issues/8/timeline?per_page=100"))
+        self.assertNotIn("--paginate", calls[0])
+        self.assertNotIn("--slurp", calls[0])
+        self.assertTrue(calls[0][-1].endswith("issues/8/timeline?per_page=100&page=1"))
+        self.assertEqual(len(calls), 1)
 
     def test_realistic_issue19_pr20(self):
-        read, _ = client([{"event": "referenced",
-                           "commit_id": "2e66137db44530667ecfb12cb17480e02fe27c9e"},
+        sha = "2e66137db44530667ecfb12cb17480e02fe27c9e"
+        read, _ = client([{"event": "referenced", "commit_id": sha,
+                           "commit_url": f"https://api.github.com/repos/{stage.REPO}/commits/{sha}"},
                           event_pr(20)])
         result = stage.probe(stage.REPO, 19, read)
         self.assertEqual(result["status"], "WORK_FOUND")
         self.assertEqual([x["kind"] for x in result["references"]],
                          ["COMMIT", "PR"])
+
+    def test_empty_timeline_is_valid_clear(self):
+        read, calls = client([])
+        self.assertEqual(stage.probe(stage.REPO, 21, read)["status"], "CLEAR")
+        self.assertEqual(len(calls), 1)
+
+    def test_manual_pagination_max_requests_fail_closed(self):
+        full_page = [{"event": "labeled"}] * 100
+        read, calls = client(*([full_page] * stage.MAX_PAGES))
+        with self.assertRaisesRegex(stage.EvidenceError, "limite de páginas"):
+            stage.probe(stage.REPO, 25, read)
+        self.assertEqual(len(calls), stage.MAX_PAGES)
+        self.assertFalse(any("--paginate" in call or "--slurp" in call for call in calls))
+
+    def test_partial_page_finishes_without_more_requests(self):
+        read, calls = client([{"event": "labeled"}] * 99)
+        self.assertEqual(stage.probe(stage.REPO, 21, read)["status"], "CLEAR")
+        self.assertEqual(len(calls), 1)
+
+    def test_page_over_100_events_is_rejected(self):
+        read, calls = client([{"event": "labeled"}] * 101)
+        with self.assertRaisesRegex(stage.EvidenceError, "tamanho inválido"):
+            stage.probe(stage.REPO, 21, read)
+        self.assertEqual(len(calls), 1)
+
+    def test_external_commit_url_fails_closed_without_fabricated_local_link(self):
+        sha = "a" * 40
+        read, _ = client([{
+            "event": "referenced", "commit_id": sha,
+            "commit_url": f"https://api.github.com/repos/foreign/repo/commits/{sha}"
+        }])
+        with self.assertRaisesRegex(stage.EvidenceError, "Procedência"):
+            stage.probe(stage.REPO, 21, read)
+
+    def test_missing_commit_provenance_fails_closed(self):
+        sha = "a" * 40
+        read, _ = client([{"event": "referenced", "commit_id": sha}])
+        with self.assertRaisesRegex(stage.EvidenceError, "Procedência"):
+            stage.probe(stage.REPO, 21, read)
+
+    def test_valid_same_repo_commit_link(self):
+        sha = "f" * 40
+        read, _ = client([{"event": "committed", "commit_id": sha,
+                           "commit_url": f"https://api.github.com/repos/{stage.REPO}/commits/{sha}"}])
+        result = stage.probe(stage.REPO, 21, read)
+        self.assertEqual(result["status"], "WORK_FOUND")
+        self.assertEqual(result["references"][0]["url"],
+                         f"https://github.com/{stage.REPO}/commit/{sha}")
+
+    def test_forged_commit_sha_fails_closed(self):
+        read, _ = client([{"event": "referenced", "commit_id": "not-a-sha",
+                           "commit_url": "https://example.invalid/commit/not-a-sha"}])
+        with self.assertRaisesRegex(stage.EvidenceError, "SHA inválido"):
+            stage.probe(stage.REPO, 21, read)
 
     def test_no_activity_is_clear_but_not_homologated(self):
         read, _ = client([{"event": "labeled"}, {"event": "assigned"}])
@@ -65,9 +128,11 @@ class TimelineEvidence(unittest.TestCase):
         self.assertIn("não confirmado", stage.format_refs(result))
 
     def test_duplicate_cross_ref_only_once(self):
-        read, _ = client([event_pr(9)], [event_pr(9)])
+        read, calls = client([event_pr(9)] + [{"event": "labeled"}] * 99,
+                             [event_pr(9)])
         result = stage.probe(stage.REPO, 8, read)
         self.assertEqual(len(result["references"]), 1)
+        self.assertEqual(len(calls), 2)
 
     def test_other_repository_pr_fails_closed(self):
         read, _ = client([event_pr(9, repository_url=
@@ -86,7 +151,7 @@ class TimelineEvidence(unittest.TestCase):
             stage.probe(stage.REPO, 8, lambda *_: "invalid-json")
 
     def test_page_missing_or_invalid_fails_closed(self):
-        for data in ("[]", "{}", "[{}]", "[null]"):
+        for data in ("{}", "[{}]", "[null]", '"unexpected"'):
             with self.subTest(data=data), self.assertRaises(stage.EvidenceError):
                 stage.probe(stage.REPO, 8, lambda *_: data)
 
@@ -104,9 +169,10 @@ class TimelineEvidence(unittest.TestCase):
                     stage.probe(repo, number, never)
 
     def test_pagination_catches_pr_on_later_page(self):
-        read, _ = client([{"event": "labeled"}], [event_pr(20)])
+        read, calls = client([{"event": "labeled"}] * 100, [event_pr(20)])
         result = stage.probe(stage.REPO, 19, read)
         self.assertEqual(result["references"][0]["number"], 20)
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":
