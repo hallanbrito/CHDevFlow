@@ -1,0 +1,25 @@
+{
+  "totalCount": 2,
+  "items": [
+    {
+      "content": {
+        "type": "Issue",
+        "repository": "hallanbrito/CHDevFlow",
+        "number": 24,
+        "title": "BOOT-00: contratos do motor",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/24"
+      },
+      "labels": ["ch:workflow"]
+    },
+    {
+      "content": {
+        "type": "Issue",
+        "repository": "hallanbrito/CHDevFlow",
+        "number": 24,
+        "title": "BOOT-00: entrada duplicada acidental",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/24"
+      },
+      "labels": ["ch:workflow"]
+    }
+  ]
+}

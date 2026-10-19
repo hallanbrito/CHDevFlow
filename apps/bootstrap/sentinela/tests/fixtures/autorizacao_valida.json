@@ -1,0 +1,12 @@
+{
+  "approval_type": "CH2_RUN_APPROVAL",
+  "issue_ref": "24",
+  "mission_digest": "calc_digest_placeholder",
+  "baseline_sha": "d2a74426bfa1fab12aafb721c8dad60876f6f8ec",
+  "authorized_executor": "fake",
+  "authorized_repo": "hallanbrito/CHDevFlow",
+  "approved_by": "hallanbrito",
+  "approved_at": "2026-10-19T20:00:00Z",
+  "event_id": "event-fixture-auth-001",
+  "is_simulation": true
+}

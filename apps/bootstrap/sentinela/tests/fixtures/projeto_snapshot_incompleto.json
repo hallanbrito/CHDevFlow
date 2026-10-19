@@ -1,0 +1,13 @@
+{
+  "totalCount": 5,
+  "items": [
+    {
+      "content": {
+        "type": "Issue",
+        "repository": "hallanbrito/CHDevFlow",
+        "number": 24,
+        "title": "Incompleto"
+      }
+    }
+  ]
+}

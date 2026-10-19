@@ -1,0 +1,26 @@
+{
+  "schema": "chdevflow.mission/0.1",
+  "mission_id": "BOOT-01-ADULTERADA",
+  "source": {
+    "repository": "hallanbrito/CHDevFlow",
+    "issue": 24,
+    "issue_url": "https://github.com/hallanbrito/CHDevFlow/issues/24"
+  },
+  "target": {
+    "repository": "hallanbrito/CHDevFlow",
+    "base_sha": "d2a74426bfa1fab12aafb721c8dad60876f6f8ec",
+    "allowed_paths": [
+      "apps/bootstrap/sentinela/"
+    ]
+  },
+  "worker": "fake",
+  "autonomy": "CH-0",
+  "instruction_ref": "docs/bootstrap/BOOT-00-CONTRATOS.md",
+  "limits": {
+    "max_parallel": 1,
+    "timeout_seconds": 900,
+    "max_retries_after_diagnosis": 1,
+    "extra_cost_brl": 0
+  },
+  "mission_digest": "hash_falso_adulterado_0000000000000000000000000000000000000000"
+}
