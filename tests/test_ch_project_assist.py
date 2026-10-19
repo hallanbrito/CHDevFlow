@@ -3,6 +3,7 @@ import contextlib
 import copy
 import io
 import json
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -32,6 +33,90 @@ def payload(*entries):
 
 
 class Planning(unittest.TestCase):
+    def setUp(self):
+        self.stage_probe = mock.patch.object(
+            app.legacy.ch_stage_evidence, "probe",
+            return_value={"status": "CLEAR", "references": []}
+        )
+        self.stage_probe.start()
+        self.addCleanup(self.stage_probe.stop)
+
+    def test_issues_8_19_pr_evidence_never_suggests_backlog(self):
+        items = payload(item(8), item(19))
+        def evidence(_repo, number):
+            return {"status": "WORK_FOUND", "references": [
+                {"kind": "PR", "number": {8: 9, 19: 20}[number],
+                 "merged_at": "2026-10-18T15:27:28Z"}
+            ]}
+        changes, notes, _ = app.inspect(
+            items, [8, 19], lambda *_: "OPEN", activity_reader=evidence
+        )
+        self.assertEqual({(x["number"], x["field"]) for x in changes},
+                         {(8, "Esteira"), (19, "Esteira")})
+        self.assertEqual(len(notes), 2)
+        self.assertTrue(all(s.startswith("ETAPA_PENDENTE_PO:") for s in notes))
+
+    def test_pr_evidence_plan_only_lane(self):
+        with mock.patch.object(
+            app.legacy.ch_stage_evidence, "probe",
+            return_value={"status": "WORK_FOUND", "references": [
+                {"kind": "PR", "number": 20, "merged_at": "2026-10-19T00:04:13Z"}]}
+        ):
+            plan = app.make_plan(payload(item(19)), [19], lambda *_: "OPEN")
+        self.assertEqual(
+            [(e["field"], e["value"]) for e in plan["changes"]],
+            [("Esteira", "ChatGPT")]
+        )
+
+    def test_timeline_timeout_blocks_backlog_and_keeps_lane(self):
+        def timed_out(*_):
+            raise subprocess.TimeoutExpired(cmd=["gh", "api"], timeout=45)
+        changes, notes, _ = app.inspect(
+            payload(item(19)), [19], lambda *_: "OPEN",
+            activity_reader=timed_out
+        )
+        self.assertEqual([(x["field"], x["value"]) for x in changes],
+                         [("Esteira", "ChatGPT")])
+        self.assertIn("ETAPA_PENDENTE_PO", notes[0])
+        self.assertIn("histórico falhou", notes[0])
+
+    def test_cli_timeout_preview_reports_warning_without_traceback_or_write(self):
+        with mock.patch.object(app, "fetch_project", return_value=payload(item(19))):
+            with mock.patch.object(app.legacy, "issue_state", return_value="OPEN"):
+                with mock.patch.object(
+                    app.legacy.ch_stage_evidence, "probe",
+                    side_effect=subprocess.TimeoutExpired(["gh", "api"], timeout=45)
+                ):
+                    with mock.patch.object(app.legacy, "gh") as writer:
+                        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+                            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                                rc = app.main(["--issues", "19"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(stderr.getvalue(), "")
+        self.assertIn("ETAPA_PENDENTE_PO", stdout.getvalue())
+        self.assertNotIn("Etapa CH: (vazio) -> BACKLOG", stdout.getvalue())
+        writer.assert_not_called()
+
+    def test_main_catches_project_fetch_timeout_without_traceback(self):
+        with mock.patch.object(
+            app, "fetch_project",
+            side_effect=subprocess.TimeoutExpired(["gh", "project"], timeout=45)
+        ):
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                rc = app.main([])
+        self.assertEqual(rc, 1)
+        self.assertIn("BLOQUEADO:", stderr.getvalue())
+
+    def test_unavailable_timeline_does_not_offer_backlog(self):
+        def unavailable(*_):
+            raise RuntimeError("timeline unavailable")
+        changes, notes, _ = app.inspect(
+            payload(item(19)), [19], lambda *_: "OPEN",
+            activity_reader=unavailable
+        )
+        self.assertEqual([x["field"] for x in changes], ["Esteira"])
+        self.assertIn("histórico falhou", notes[0])
+
     def test_new_open_has_only_two_safe_changes(self):
         changes, notes, hashes = app.inspect(payload(item(21)), [21], lambda *_: "OPEN")
         self.assertEqual({(c["field"], c["value"]) for c in changes},
@@ -104,6 +189,12 @@ class Planning(unittest.TestCase):
 
 class Execution(unittest.TestCase):
     def setUp(self):
+        self.stage_probe = mock.patch.object(
+            app.legacy.ch_stage_evidence, "probe",
+            return_value={"status": "CLEAR", "references": []}
+        )
+        self.stage_probe.start()
+        self.addCleanup(self.stage_probe.stop)
         self.live = payload(item(42))
         self.state = lambda *_: "OPEN"
         self.plan = app.make_plan(self.live, [42], self.state)

@@ -45,6 +45,7 @@ python scripts/ch_project_assist.py --apply-plan CAMINHO --confirm SHA256_DO_PLA
 - Digest exato do plano e frase digitada no terminal.
 - Releitura de todo o Project; `totalCount` íntegro, repositório/Issues corretos e *snapshots* idênticos.
 - Até 5 Issues, 10 campos, OPEN, `status=Todo`, `ch:workflow` e exatamente um executor.
+- Desde KSYNC-03.1, a proposta inicial de `Etapa CH=BACKLOG` exige leitura íntegra e **limitada durante a coleta** da timeline da Issue sem PR/commit relacionado; evento de trabalho, procedência divergente ou erro (inclusive `subprocess.TimeoutExpired`) gera `ETAPA_PENDENTE_PO`, bloqueando somente a etapa. A consulta utiliza `gh api` por páginas (sem `--paginate --slurp`) e verifica `commit_url` antes de gerar link de commit. Ver [KSYNC-03.1](KSYNC-03.1-RECONCILIACAO.md).
 - Só preencher `Esteira` e `Etapa CH=BACKLOG` se vazios; jamais mexer em `Autonomia CH` e `Decisao PO`.
 - Nova consulta antes **e depois** de cada campo, comparando o snapshot completo normalizado de **cada Issue selecionada**, o valor exato escrito e as mudanças pendentes. Divergência interrompe sem retry/rollback automático.
 - Falha parcial claramente informada. O log inclui número, campo, valor anterior e posterior confirmado, digest do snapshot, resultado e tipo de erro (sem tokens). Falha durante ou após tentativa de escrita gera `INDETERMINADO` até auditoria manual; operações GitHub não constituem transação atômica e **TOCTOU** segue risco residual.
@@ -57,6 +58,7 @@ python scripts/ch_project_assist.py --apply-plan CAMINHO --confirm SHA256_DO_PLA
 |---|---|
 | Leitura sem escrita por padrão | Obrigatório |
 | CLOSED, labels conflitantes e status fora de Todo | Nunca propostos em lote de escrita |
+| PR/commit relacionado ou timeline indisponível | Nunca propor BACKLOG; separar Esteira permitida de etapa pendente do PO |
 | Repo diferente, JSON incompleto, duplicatas, URL errada | Falhar fechado |
 | Plano alterado ou remoto divergente | Bloquear antes da escrita |
 | Sem TTY e confirmação incorreta | Bloquear |
