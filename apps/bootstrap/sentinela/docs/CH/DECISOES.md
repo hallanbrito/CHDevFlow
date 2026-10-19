@@ -39,3 +39,7 @@ Este documento consolida as decisões vigentes de governança e arquitetura téc
 ### ADR-BOOT01-04: Máquina de Estados com Parada Segura em AWAITING_AUTH
 - **Decisão:** Sem uma autorização explicitamente identificada como simulação de teste (`is_simulation=True`), o supervisor encerra sua avaliação em `AWAITING_AUTH`.
 - **Motivo:** *Fail-closed* absoluto: o sistema nunca presume autorização e nunca avança para execução de tarefas sem consentimento formal prévio.
+
+### ADR-BOOT01-05: Proibição de Fallback Silencioso para Dados Sintéticos (AUD-01)
+- **Decisão:** O comando `watch --once --dry-run` não pode, sob nenhuma hipótese, substituir uma falha de consulta ao vivo (`LIVE_GITHUB`) por dados sintéticos ou fixtures embutidas. Falhas de rede, subprocesso ou autenticação devem interromper a execução com código de saída não-zero (código 1) e mensagem explícita de erro (`LIVE_GITHUB FAILED`). Da mesma forma, argumentos `--fixture` apontando para caminhos inexistentes ou malformados devem falhar fechados imediatamente.
+- **Motivo:** Auditoria independente AUD-01 (PR #26). Evitar que automações futuras ou operadores humanos confundam o sucesso de uma simulação interna com a leitura bem-sucedida do Project real no GitHub.

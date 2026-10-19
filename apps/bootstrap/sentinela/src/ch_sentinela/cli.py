@@ -57,24 +57,10 @@ FIXTURE_MISSAO_BOOT01: dict[str, Any] = {
     },
 }
 
-FIXTURE_PROJETO_DEMO: dict[str, Any] = {
-    "totalCount": 1,
-    "items": [
-        {
-            "content": {
-                "type": "Issue",
-                "repository": REPOSITORIO_CANONICO,
-                "number": 24,
-                "title": "BOOT-00: contratos do motor e primeiro ciclo supervisionado",
-                "url": f"https://github.com/{REPOSITORIO_CANONICO}/issues/24",
-            },
-            "labels": ["ch:workflow", "ch:agy", "esteira:bootstrap"],
-        }
-    ],
-}
-
-
-def comando_watch(args: argparse.Namespace) -> int:
+def comando_watch(
+    args: argparse.Namespace,
+    sentinela: Sentinela | None = None,
+) -> int:
     """Executa a observação pontual do GitHub."""
     print("=" * 70)
     print("C.H. DevFlow — Sentinela Python (Observação Pontual)")
@@ -82,43 +68,55 @@ def comando_watch(args: argparse.Namespace) -> int:
     print(f"Execução: {'ÚNICA (--once)' if args.once else 'ÚNICA (padrão D05)'}")
     print("=" * 70)
 
-    leitor = LeitorGitHub()
-    auditoria = Auditoria()
-    sentinela = Sentinela(leitor=leitor, auditoria=auditoria)
+    if sentinela is None:
+        leitor = LeitorGitHub()
+        auditoria = Auditoria()
+        sentinela = Sentinela(leitor=leitor, auditoria=auditoria)
 
-    # Se informado arquivo de snapshot offline, utiliza-o
-    snapshot = None
+    # Caso 1: Usuário solicitou explicitamente uma fixture (--fixture)
     if getattr(args, "fixture", None):
         caminho_fix = Path(args.fixture)
-        if caminho_fix.exists():
+        if not caminho_fix.exists():
+            print(f"\n[ERRO CRÍTICO] Arquivo de fixture '{args.fixture}' não encontrado.")
+            print("Operação abortada em modo fail-closed. Dados sintéticos não solicitados não serão utilizados.")
+            return 1
+
+        try:
             with open(caminho_fix, "r", encoding="utf-8") as f:
                 snapshot = json.load(f)
-            print(f"Carregando snapshot de: {caminho_fix}")
-        else:
-            print(f"Aviso: arquivo de fixture '{args.fixture}' não encontrado. Usando fixture embutida.")
-            snapshot = FIXTURE_PROJETO_DEMO
-    else:
-        # Se não há flag de fixture, tenta ao vivo ou fallback seguro para demo offline
-        try:
-            snapshot = None  # Tentará GitHub CLI
         except Exception as exc:
-            print(f"Consulta ao vivo indisponível ({exc}). Utilizando fotografia de demonstração.")
-            snapshot = FIXTURE_PROJETO_DEMO
+            print(f"\n[ERRO CRÍTICO] Falha ao ler ou decodificar fixture '{args.fixture}': {exc}")
+            print("Operação abortada em modo fail-closed.")
+            return 1
 
-    try:
-        eventos = sentinela.observar_uma_vez(snapshot_projeto=snapshot)
-    except Exception as exc:
-        # Fallback gracioso se não houver GitHub CLI autenticado no host
-        print(f"\n[AVISO] Consulta ao vivo falhou ({exc}).")
-        print("Executando em modo OFFLINE com snapshot de demonstração...")
-        eventos = sentinela.observar_uma_vez(snapshot_projeto=FIXTURE_PROJETO_DEMO)
+        if not isinstance(snapshot, dict) or "items" not in snapshot:
+            print(f"\n[ERRO CRÍTICO] Estrutura da fixture '{args.fixture}' inválida (esperado objeto com campo 'items').")
+            print("Operação abortada em modo fail-closed.")
+            return 1
+
+        print(f"Carregando snapshot de: {caminho_fix}")
+        try:
+            eventos = sentinela.observar_uma_vez(snapshot_projeto=snapshot, fonte_dados="FIXTURE_OFFLINE")
+        except Exception as exc:
+            print(f"\n[ERRO CRÍTICO] Falha no processamento da fixture: {exc}")
+            return 1
+
+    # Caso 2: Consulta real ao vivo ao GitHub (sem --fixture)
+    else:
+        print("Consultando estado autorizado ao vivo no GitHub (LIVE_GITHUB)...")
+        try:
+            eventos = sentinela.observar_uma_vez(snapshot_projeto=None, fonte_dados="LIVE_GITHUB")
+        except Exception as exc:
+            print(f"\n[FALHA NA CONSULTA AO VIVO / LIVE_GITHUB FAILED] Erro: {exc}")
+            print("Falha fechada (fail-closed): nenhuma tarefa sintética ou fixture de demonstração será carregada.")
+            return 1
 
     print(f"\nTarefas observadas: {len(eventos)}")
     for ev in eventos:
         print(f"  [{ev.tipo_evento}] Issue #{ev.numero_issue}: {ev.titulo}")
         print(f"     Detalhes: {ev.detalhes}")
 
-    print("\nObservação finalizada. Processo encerrado conforme Decisão D05.")
+    print("\nObservação finalizada com sucesso. Processo encerrado conforme Decisão D05.")
     return 0
 
 
@@ -289,13 +287,16 @@ def criar_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    sentinela: Sentinela | None = None,
+) -> int:
     """Ponto de entrada principal da CLI."""
     parser = criar_parser()
     args = parser.parse_args(argv)
 
     if args.comando == "watch":
-        return comando_watch(args)
+        return comando_watch(args, sentinela=sentinela)
     elif args.comando == "demo":
         return comando_demo(args)
     elif args.comando == "status":

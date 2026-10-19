@@ -9,17 +9,17 @@
 | **Escopo e autonomia** | `CH-1` (desenvolvimento local delimitado) com ensaios `CH-0` (testes offline e FakeWorker) |
 | **Ambiente** | Host Linux CachyOS, worktree `build_sentinela_python`, branch `agy/boot01-sentinela-lab` |
 | **Fonte** | `LOCAL_REPO`, `SNAPSHOT_OFFLINE`, `LIVE_GITHUB` (apenas leitura de Issue #24 e PR #25) |
-| **Data/hora** | 2026-10-19T20:05:00-03:00 |
-| **`run_id` / tentativa** | `run-boot01-lab-antigravity-01` (Tentativa 1) |
+| **Data/hora** | 2026-10-19T20:40:00-03:00 |
+| **`run_id` / tentativa** | `run-boot01-lab-antigravity-02` (Tentativa 2 — Correção AUD-01) |
 | **Baseline / branch** | SHA `d2a74426bfa1fab12aafb721c8dad60876f6f8ec` / branch `agy/boot01-sentinela-lab` |
-| **Resultado técnico** | `APROVADO_TECNICAMENTE` (delimitado ao escopo simulado offline e local) |
+| **Resultado técnico** | `APROVADO_TECNICAMENTE` (delimitado ao escopo simulado offline e local; AUD-01 corrigida) |
 | **Estado final** | `AGUARDANDO_PO` |
 
 ---
 
 ## 1. Identificação
 
-- **Missão canônica:** Construção autônoma da primeira versão funcional da Sentinela Python para o CHDevFlow Bootstrap Engine.
+- **Missão canônica:** Construção autônoma da primeira versão funcional da Sentinela Python para o CHDevFlow Bootstrap Engine e correção AUD-01.
 - **Executor:** Google Antigravity App v2.24.0, operando de forma autônoma sem delegação a Codex, outro AGY ou agentes externos.
 - **Fronteira operacional:** Worktree isolada em `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow-BOOT01/build_sentinela_python`, branch `agy/boot01-sentinela-lab`.
 - **Invariantes respeitados:** Decisões D01 a D07 (CachyOS, AGY prioritário no piloto futuro, custo adicional R$ 0,00, 1 tarefa ativa, 900s timeout, 1 retry pós-diagnóstico, disparo manual `--once` sem loops).
@@ -28,24 +28,23 @@
 
 ## 2. Resumo Executivo
 
-1. **Objetivo:** Construir o módulo completo da Sentinela Python (`apps/bootstrap/sentinela/`) com leitor GitHub seguro, contratos versionados, observador pontual, supervisor de estados, auditoria JSONL e `FakeWorker`.
-2. **Resultado:** 100% dos componentes e da árvore de arquivos obrigatória foram implementados e testados com sucesso (44 testes na nova suíte e 77 testes na suíte existente do repositório, totalizando 121 testes passando).
-3. **Bloqueios:** Nenhum bloqueio impeditivo no escopo local. O leitor ao vivo e a execução avançada mantêm falha fechada (*fail-closed*) em `AWAITING_AUTH` na ausência de autorização do PO.
+1. **Objetivo:** Construir o módulo completo da Sentinela Python (`apps/bootstrap/sentinela/`) e sanar o defeito bloqueador AUD-01 apontado na auditoria externa.
+2. **Resultado:** 100% dos componentes implementados e corrigidos. O `watch --once --dry-run` opera em modo estritamente *fail-closed*, com saída não-zero em caso de falha ao vivo ou fixture inexistente, eliminando qualquer fallback silencioso para dados fictícios.
+3. **Testes:** 50 testes unitários na suíte da Sentinela e 77 testes na suíte existente do repositório, totalizando 127 testes passando com 100% de sucesso.
 4. **Alcance:** Implementação em Python 3.12+ (executado no Python 3.14.8) utilizando exclusivamente a biblioteca padrão, com código didático integralmente redigido em português brasileiro (pt-BR).
-5. **Próxima ação:** Submeter esta entrega à revisão e homologação humana do Product Owner Hallan no estado `AGUARDANDO_PO`.
+5. **Próxima ação:** Submeter esta correção ao Draft PR #26 para reavaliação do supervisor e decisão do Product Owner Hallan no estado `AGUARDANDO_PO`.
 
 ---
 
 ## 3. Consultas e Atividades Realizadas
 
 - [x] Leitura e análise dos documentos canônicos: `README.md`, `AGENTS.md`, `docs/W2-A/01-ARQUITETURA.md` a `04-CRITERIOS-DE-ACEITE.md`, `scripts/ch_project_assist.py`, `scripts/ch_project_sync.py`, `scripts/ch_stage_evidence.py`.
-- [x] Consulta somente leitura da Issue #24 e do Draft PR #25 via GitHub CLI (`gh issue view 24`, `gh pr view 25`, `gh pr diff 25`).
-- [x] Consulta somente leitura da proposta do Control Center na branch `hallan/cc00-fundacao-control-center` (`git show ...`), sem modificar o branch e sem recriar o painel web.
-- [x] Criação da estrutura de diretórios e arquivos em `apps/bootstrap/sentinela/`.
-- [x] Implementação dos módulos Python: `config.py`, `security/policies.py`, `contracts.py`, `github_reader.py`, `checkpoint.py`, `audit.py`, `workers/fake.py`, `sentinel.py`, `supervisor.py`, `cli.py`, `__main__.py`, `__init__.py`.
-- [x] Construção das fixtures offline JSON em `tests/fixtures/`.
-- [x] Implementação e execução de 6 baterias de testes unitários offline em `tests/`.
-- [x] Elaboração da documentação completa: `README.md`, `AGENTS.md`, `pyproject.toml`, `.env.example`, `prompts/README.md`, `docs/PROJETO.md`, `docs/STATUS.md`, `docs/ARVORE_PROJETO.md`, `docs/GUIA_DE_ESTUDO.md` (com 3 exercícios práticos explicados), `docs/CH/DECISOES.md` e este relatório.
+- [x] Consulta somente leitura da Issue #24 e do Draft PR #25 via GitHub CLI.
+- [x] Leitura integral do parecer de auditoria independente `CH-REVIEW-BOOT01 / AUD-01` no PR #26.
+- [x] Reprodução e correção do bloqueador AUD-01 em `cli.py` (proibição de substituição silenciosa de fixtures, falha fechada com código 1 e mensagens explícitas `LIVE_GITHUB FAILED` e `ERRO CRÍTICO`).
+- [x] Criação de 6 testes de regressão em `tests/test_cli.py` cobrindo falhas ao vivo de `gh`, timeout, fixture ausente, fixture corrompida e sucesso auditado como `LIVE_GITHUB`.
+- [x] Execução de 50 testes na suíte da Sentinela e 77 na suíte pré-existente.
+- [x] Atualização da documentação (`STATUS.md`, `DECISOES.md` com ADR-BOOT01-05 e este relatório).
 
 ---
 
@@ -53,14 +52,14 @@
 
 | ID | Classe | Origem | Descrição da Evidência |
 |---|---|---|---|
-| **E01** | `OBSERVADO` | `LOCAL_REPO` | Branch confirmada: `agy/boot01-sentinela-lab` apontando para o baseline SHA `d2a74426bfa1fab12aafb721c8dad60876f6f8ec`. |
-| **E02** | `OBSERVADO` | `LOCAL_REPO` | Execução do compilador de sintaxe Python (`python3 -m py_compile`) com zero erros em todos os módulos. |
-| **E03** | `OBSERVADO` | `LOCAL_REPO` | Execução de `python3 -m unittest discover apps/bootstrap/sentinela/tests`: 44 testes executados e 44 aprovados (0 falhas, 0 erros). |
-| **E04** | `OBSERVADO` | `LOCAL_REPO` | Execução de `python3 -m unittest discover tests` (suíte raiz existente): 77 testes executados e 77 aprovados sem regressão. |
-| **E05** | `OBSERVADO` | `LOCAL_REPO` | Demonstração CLI via `ch-sentinela demo --fake-worker`: comprovação de parada em `AWAITING_AUTH` sem autorização, e avanço para `AWAITING_PO` com fixture simulada. |
-| **E06** | `OBSERVADO` | `LOCAL_REPO` | Arquivo de auditoria JSONL gerado em modo *append-only* com permissão `0o600` e segredos sanitizados. |
-| **E07** | `OBSERVADO` | `LOCAL_REPO` | Checkpoint local gravado atomicamente via `os.replace` contendo controle de concorrência e chave de idempotência. |
-| **E08** | `DECLARADO` | `LOCAL_REPO` | Zero chamadas a APIs pagas, zero agentes externos instanciados e zero alterações remotas efetuadas. Custo R$ 0,00. |
+| **E01** | `OBSERVADO` | `LOCAL_REPO` | Branch confirmada: `agy/boot01-sentinela-lab` apontando para a baseline SHA `d2a74426...`. |
+| **E02** | `OBSERVADO` | `LOCAL_REPO` | Compilação de sintaxe sem erros (`python3 -m py_compile`). |
+| **E03** | `OBSERVADO` | `LOCAL_REPO` | 50 testes unitários da Sentinela executados e aprovados com 100% de sucesso. |
+| **E04** | `OBSERVADO` | `LOCAL_REPO` | 77 testes do repositório raiz executados e aprovados sem regressões. |
+| **E05** | `OBSERVADO` | `LOCAL_REPO` | Invocação CLI `watch --once --dry-run` sem fixture em ambiente sem rede retornando código 1 com `LIVE_GITHUB FAILED`, sem gerar tarefas sintéticas. |
+| **E06** | `OBSERVADO` | `LOCAL_REPO` | Invocação CLI `watch --once --dry-run --fixture inexistente.json` retornando código 1 com `[ERRO CRÍTICO]`, sem fallback. |
+| **E07** | `OBSERVADO` | `LOCAL_REPO` | Checkpoint atômico e auditoria JSONL com permissão `0o600` e dados sanitizados. |
+| **E08** | `DECLARADO` | `LOCAL_REPO` | Zero chamadas a APIs pagas, zero agentes externos instanciados e custo verificado R$ 0,00. |
 
 ---
 
@@ -82,6 +81,7 @@
 | **T12** | Ausência de loop contínuo e encerramento estrito após consulta | `PASSOU` | Testado em `test_sentinel.py::test_observacao_unica_sucesso`. |
 | **T13** | Bloqueio de caminhos fora de escopo, fuga de diretório (*path traversal*), mundos e saves | `PASSOU` | Testado em `test_security.py::test_bloqueio_path_traversal` e `test_bloqueio_mundos_saves_e_segredos`. |
 | **T14** | Idempotência estrita na repetição de uma mesma missão e tentativa | `PASSOU` | Testado em `test_supervisor.py::test_idempotencia_na_repeticao_da_mesma_missao`. |
+| **T15** | Correção AUD-01: Proibição de fallback silencioso e fail-closed na CLI | `PASSOU` | Testado em `test_cli.py` (cenários de fixture inexistente, malformada, sem items, falha ao vivo e timeout). |
 
 ---
 

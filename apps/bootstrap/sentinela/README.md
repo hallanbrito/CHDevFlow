@@ -101,12 +101,12 @@ python3 -m ch_sentinela --help
 ```
 
 ### 4.2 Observação pontual (watch --once --dry-run)
-Executa uma única consulta ao GitHub (ou fallback offline caso não haja conexão), lista tarefas elegíveis e encerra imediatamente:
+Executa uma única consulta ao vivo ao GitHub (requer `gh` autenticado e falha fechado caso a consulta falhe):
 ```bash
 python3 -m ch_sentinela watch --once --dry-run
 ```
 
-Para executar informando um arquivo de snapshot offline:
+Para executar em modo offline, informe explicitamente um arquivo de snapshot com `--fixture`:
 ```bash
 python3 -m ch_sentinela watch --once --dry-run --fixture tests/fixtures/projeto_snapshot_valido.json
 ```

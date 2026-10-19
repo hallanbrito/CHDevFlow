@@ -45,8 +45,9 @@
   - Cobertura de cenários de sucesso, erro, timeout e cancelamento.
 - [x] **Interface CLI (`cli.py` e `__main__.py`):**
   - Comandos: `watch --once --dry-run`, `demo --fake-worker`, `status` e `report`.
+  - **Correção AUD-01 (Fail-Closed Estrito):** Remoção de qualquer substituição silenciosa de fixtures em caso de falha de consulta ao vivo ou arquivo inexistente. Erros reais ou de fixtures ausentes retornam código 1 e mensagem explícita (`LIVE_GITHUB FAILED` / `ERRO CRÍTICO`).
 - [x] **Testes Automatizados:**
-  - 44 testes unitários cobrindo todos os fluxos positivos e negativos offline.
+  - 50 testes unitários cobrindo todos os fluxos positivos, negativos e regressões AUD-01 offline.
 
 ---
 
