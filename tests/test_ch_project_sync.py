@@ -41,6 +41,47 @@ def payload(*items):
 
 
 class PlanningTests(unittest.TestCase):
+    def setUp(self):
+        # O teste offline não pode consultar o GitHub live.
+        self.stage_probe = mock.patch.object(
+            sync.ch_stage_evidence, "probe",
+            return_value={"status": "CLEAR", "references": []}
+        )
+        self.stage_probe.start()
+        self.addCleanup(self.stage_probe.stop)
+
+    def test_pr_activity_blocks_backlog_but_keeps_lane(self):
+        entry = item(8, labels=["ch:workflow", "ch:chatgpt"])
+        work = {"status": "WORK_FOUND", "references": [
+            {"kind": "PR", "number": 9, "merged_at": "2026-10-18T15:27:28Z"}
+        ]}
+        changes, notes = sync.build_plan(
+            payload(entry), REPO, lambda *_: "OPEN",
+            activity_reader=lambda *_: work
+        )
+        self.assertEqual([(x.field, x.value) for x in changes],
+                         [("Esteira", "ChatGPT")])
+        self.assertIn("ETAPA_PENDENTE_PO", notes[0])
+
+    def test_timeline_failure_blocks_backlog_but_not_lane(self):
+        def broken(*_):
+            raise RuntimeError("API offline")
+        changes, notes = sync.build_plan(
+            payload(item(19, labels=["ch:workflow", "ch:chatgpt"])),
+            REPO, lambda *_: "OPEN", activity_reader=broken
+        )
+        self.assertEqual([(x.field, x.value) for x in changes],
+                         [("Esteira", "ChatGPT")])
+        self.assertIn("indisponível", notes[0])
+
+    def test_clear_activity_allows_only_initial_backlog(self):
+        changes, notes = sync.build_plan(
+            payload(item(21)), REPO, lambda *_: "OPEN",
+            activity_reader=lambda *_: {"status": "CLEAR", "references": []}
+        )
+        self.assertEqual({x.field for x in changes}, {"Esteira", "Etapa CH"})
+        self.assertEqual(notes, [])
+
     def test_new_open_issue_fills_lane_and_backlog(self):
         states = []
         def read(repo, num):
@@ -153,6 +194,14 @@ class PlanningTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def setUp(self):
+        self.stage_probe = mock.patch.object(
+            sync.ch_stage_evidence, "probe",
+            return_value={"status": "CLEAR", "references": []}
+        )
+        self.stage_probe.start()
+        self.addCleanup(self.stage_probe.stop)
+
     @mock.patch.object(sync.shutil, "which", return_value="/usr/bin/gh")
     @mock.patch.object(sync, "gh")
     @mock.patch.object(sync, "issue_state", return_value="OPEN")

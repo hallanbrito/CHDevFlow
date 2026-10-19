@@ -16,6 +16,8 @@ import subprocess
 import sys
 from typing import Callable
 
+import ch_stage_evidence
+
 DEFAULT_OWNER = "hallanbrito"
 DEFAULT_REPO = "hallanbrito/CHDevFlow"
 DEFAULT_PROJECT = 2
@@ -99,7 +101,10 @@ def build_plan(
     repo: str,
     state_reader: Callable[[str, int], str],
     issue_filter: int | None = None,
+    activity_reader: Callable[[str, int], dict] | None = None,
 ) -> tuple[list[Change], list[str]]:
+    if activity_reader is None:
+        activity_reader = lambda repo, number: ch_stage_evidence.probe(repo, number, gh)
     items = payload.get("items")
     count = payload.get("totalCount")
     if not isinstance(items, list) or not isinstance(count, int):
@@ -171,7 +176,21 @@ def build_plan(
                 continue
             state = state_reader(repo, number)
             if state == "OPEN":
-                plan.append(Change(number, name, expected_url, "Etapa CH", "BACKLOG"))
+                # KSYNC-03.1: OPEN + Todo não significa tarefa nova.
+                # Falha de API ou PR/commit associado bloqueiam somente a ETAPA,
+                # nunca autorizam avançar ou retroceder qualquer etapa.
+                try:
+                    activity = activity_reader(repo, number)
+                    if activity.get("status") == "CLEAR":
+                        plan.append(Change(number, name, expected_url, "Etapa CH", "BACKLOG"))
+                    elif activity.get("status") == "WORK_FOUND":
+                        notes.append(f"#{number}: ETAPA_PENDENTE_PO: trabalho detectado: "
+                                     + ch_stage_evidence.format_refs(activity)
+                                     + "; não sugerir BACKLOG.")
+                    else:
+                        notes.append(f"#{number}: ETAPA_PENDENTE_PO: diagnóstico inconclusivo; preservar.")
+                except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired):
+                    notes.append(f"#{number}: ETAPA_PENDENTE_PO: consulta de histórico indisponível; preservar.")
             else:
                 notes.append(f"#{number}: Issue CLOSED; homologação requer decisão do PO.")
 

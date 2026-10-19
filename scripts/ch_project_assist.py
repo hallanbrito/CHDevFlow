@@ -51,9 +51,12 @@ def parse_numbers(raw):
     return sorted(numbers)
 
 
-def inspect(payload, selected=None, state_reader=None):
+def inspect(payload, selected=None, state_reader=None, activity_reader=None):
     """Inspeção pura exceto leitura de estados via callback; ignora CLOSED."""
     state_reader = state_reader or legacy.issue_state
+    activity_reader = activity_reader or (
+        lambda repo, num: legacy.ch_stage_evidence.probe(repo, num, legacy.gh)
+    )
     items, count = payload.get("items"), payload.get("totalCount")
     if not isinstance(items, list) or type(count) is not int or len(items) != count:
         raise ValueError("Project incompleto: items/totalCount inválidos")
@@ -106,8 +109,20 @@ def inspect(payload, selected=None, state_reader=None):
             changes.append({"number": n, "field": "Esteira", "value": lane,
                             "url": c["url"]})
         if current_stage is None:
-            changes.append({"number": n, "field": "Etapa CH", "value": "BACKLOG",
-                            "url": c["url"]})
+            # A coluna Todo não é uma evidência de ausência de trabalho.
+            try:
+                evidence = activity_reader(REPO, n)
+                if evidence.get("status") == "CLEAR":
+                    changes.append({"number": n, "field": "Etapa CH", "value": "BACKLOG",
+                                    "url": c["url"]})
+                elif evidence.get("status") == "WORK_FOUND":
+                    notes.append(f"ETAPA_PENDENTE_PO: #{n}: atividade vinculada: "
+                                 + legacy.ch_stage_evidence.format_refs(evidence)
+                                 + "; BACKLOG não sugerido")
+                else:
+                    notes.append(f"ETAPA_PENDENTE_PO: #{n}: histórico inconclusivo; preservar etapa")
+            except (RuntimeError, ValueError, OSError):
+                notes.append(f"ETAPA_PENDENTE_PO: #{n}: consulta de histórico falhou; preservar etapa")
     if chosen is not None and not chosen.issubset(found):
         raise ValueError("Uma ou mais Issues não estão neste Project/repositório")
     return sorted(changes, key=lambda x: (x["number"], x["field"])), notes, snapshots
@@ -115,8 +130,9 @@ def inspect(payload, selected=None, state_reader=None):
 
 def make_plan(payload, numbers, state_reader=None):
     changes, notes, snapshots = inspect(payload, numbers, state_reader)
-    if notes:
-        raise ValueError("Lote inseguro: " + "; ".join(notes))
+    blockers = [note for note in notes if not note.startswith("ETAPA_PENDENTE_PO:")]
+    if blockers:
+        raise ValueError("Lote inseguro: " + "; ".join(blockers))
     if not changes:
         raise ValueError("Lote sem alterações elegíveis")
     if len(changes) > MAX_FIELDS or {x["number"] for x in changes} != set(numbers):
@@ -191,7 +207,8 @@ def _selected_items(payload, issues):
 def _verify_state(payload, issues, expected, remaining, state_reader):
     """Revalida o lote inteiro, inclusive campos já alterados e não editáveis."""
     changes, notes, _ = inspect(payload, issues, state_reader)
-    if notes or changes != remaining:
+    blockers = [note for note in notes if not note.startswith("ETAPA_PENDENTE_PO:")]
+    if blockers or changes != remaining:
         raise ValueError("Mudanças pendentes divergentes ou conflito no Project")
     observed = _selected_items(payload, issues)
     for number, item in observed.items():
