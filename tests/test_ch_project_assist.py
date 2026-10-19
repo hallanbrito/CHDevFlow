@@ -103,7 +103,7 @@ class Planning(unittest.TestCase):
             side_effect=subprocess.TimeoutExpired(["gh", "project"], timeout=45)
         ):
             with contextlib.redirect_stderr(io.StringIO()) as stderr:
-                rc = app.main()
+                rc = app.main([])
         self.assertEqual(rc, 1)
         self.assertIn("BLOQUEADO:", stderr.getvalue())
 
