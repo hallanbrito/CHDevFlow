@@ -1,0 +1,13 @@
+{
+  "number": 24,
+  "title": "BOOT-00: contratos do motor e primeiro ciclo supervisionado",
+  "body": "Especificação CH-1 vinculada à arquitetura W2-A.",
+  "state": "OPEN",
+  "labels": ["ch:workflow", "ch:agy", "esteira:bootstrap"],
+  "url": "https://github.com/hallanbrito/CHDevFlow/issues/24",
+  "author": {
+    "login": "hallanbrito"
+  },
+  "updatedAt": "2026-10-19T18:00:00Z",
+  "comments": []
+}
