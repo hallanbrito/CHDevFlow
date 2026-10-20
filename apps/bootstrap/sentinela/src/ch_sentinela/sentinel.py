@@ -14,7 +14,7 @@ from typing import Any
 
 from ch_sentinela.audit import Auditoria
 from ch_sentinela.config import REPOSITORIO_CANONICO
-from ch_sentinela.github_reader import LeitorGitHub
+from ch_sentinela.github_reader import LeitorGitHub, validar_snapshot_projeto
 
 
 @dataclass(frozen=True)
@@ -68,7 +68,7 @@ class Sentinela:
         Returns:
             Lista de EventoSentinela produzidos durante a consulta.
         """
-        # 1. Obtenção do snapshot: via fixture offline ou via GitHub CLI
+        # 1. Obtenção e validação estrutural estrita do snapshot: via fixture offline ou via GitHub CLI
         if snapshot_projeto is not None:
             dados = snapshot_projeto
             origem = "FIXTURE_OFFLINE"
@@ -76,7 +76,9 @@ class Sentinela:
             dados = self.leitor.listar_itens_projeto()
             origem = fonte_dados
 
-        itens = dados.get("items", [])
+        validar_snapshot_projeto(dados)
+
+        itens = dados["items"]
         eventos_gerados: list[EventoSentinela] = []
         issues_vistas: set[int] = set()
 

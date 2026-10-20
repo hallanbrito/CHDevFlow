@@ -46,8 +46,9 @@
 - [x] **Interface CLI (`cli.py` e `__main__.py`):**
   - Comandos: `watch --once --dry-run`, `demo --fake-worker`, `status` e `report`.
   - **Correção AUD-01 (Fail-Closed Estrito):** Remoção de qualquer substituição silenciosa de fixtures em caso de falha de consulta ao vivo ou arquivo inexistente. Erros reais ou de fixtures ausentes retornam código 1 e mensagem explícita (`LIVE_GITHUB FAILED` / `ERRO CRÍTICO`).
+  - **Correção AUD-02 (Validação Estrutural Estrita de Snapshots):** Centralização da validação estrutural de fotografias do Project em `validar_snapshot_projeto`. Rejeição obrigatória e fail-closed de snapshots parciais, malformados ou com contagem divergente (`projeto_snapshot_incompleto.json`), impedindo falsas descobertas com código 0.
 - [x] **Testes Automatizados:**
-  - 50 testes unitários cobrindo todos os fluxos positivos, negativos e regressões AUD-01 offline.
+  - 67 testes unitários cobrindo todos os fluxos positivos, negativos, regressões AUD-01 e AUD-02 offline.
 
 ---
 

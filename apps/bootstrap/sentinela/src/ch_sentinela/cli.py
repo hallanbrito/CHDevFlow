@@ -25,7 +25,7 @@ from ch_sentinela.config import (
     obter_diretorio_dados,
 )
 from ch_sentinela.contracts import ContratoAutorizacao, ContratoMissao
-from ch_sentinela.github_reader import LeitorGitHub
+from ch_sentinela.github_reader import LeitorGitHub, validar_snapshot_projeto
 from ch_sentinela.sentinel import Sentinela
 from ch_sentinela.supervisor import Supervisor
 from ch_sentinela.workers.fake import FakeWorker
@@ -89,8 +89,10 @@ def comando_watch(
             print("Operação abortada em modo fail-closed.")
             return 1
 
-        if not isinstance(snapshot, dict) or "items" not in snapshot:
-            print(f"\n[ERRO CRÍTICO] Estrutura da fixture '{args.fixture}' inválida (esperado objeto com campo 'items').")
+        try:
+            validar_snapshot_projeto(snapshot)
+        except Exception as exc:
+            print(f"\n[ERRO CRÍTICO] Estrutura da fixture '{args.fixture}' inválida: {exc}")
             print("Operação abortada em modo fail-closed.")
             return 1
 

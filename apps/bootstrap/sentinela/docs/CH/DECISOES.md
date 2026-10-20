@@ -43,3 +43,13 @@ Este documento consolida as decisões vigentes de governança e arquitetura téc
 ### ADR-BOOT01-05: Proibição de Fallback Silencioso para Dados Sintéticos (AUD-01)
 - **Decisão:** O comando `watch --once --dry-run` não pode, sob nenhuma hipótese, substituir uma falha de consulta ao vivo (`LIVE_GITHUB`) por dados sintéticos ou fixtures embutidas. Falhas de rede, subprocesso ou autenticação devem interromper a execução com código de saída não-zero (código 1) e mensagem explícita de erro (`LIVE_GITHUB FAILED`). Da mesma forma, argumentos `--fixture` apontando para caminhos inexistentes ou malformados devem falhar fechados imediatamente.
 - **Motivo:** Auditoria independente AUD-01 (PR #26). Evitar que automações futuras ou operadores humanos confundam o sucesso de uma simulação interna com a leitura bem-sucedida do Project real no GitHub.
+
+### ADR-BOOT01-06: Validação Estrutural Estrita de Snapshots do GitHub Project (AUD-02)
+- **Decisão:** Todo snapshot de itens do GitHub Project consumido pela Sentinela (seja via leitura ao vivo ou fornecido via `--fixture`/parâmetro) deve passar por validação estrutural obrigatória e centralizada (`validar_snapshot_projeto`). A validação exige:
+  1. Estrutura como objeto JSON (`dict`);
+  2. Presença do campo `items` como lista (`list`);
+  3. Presença do campo `totalCount` como inteiro não-negativo (rejeitando booleanos, strings, floats e números negativos);
+  4. Consistência estrita entre o tamanho da lista `len(items)` e o valor de `totalCount`;
+  5. Limite superior `totalCount <= MAXIMO_ITEMS_PROJECT` (500).
+  Qualquer violação resulta em falha fechada imediata (*fail-closed*), levantando `LeitorGitHubErro`, retornando código de saída 1 na CLI, emitindo mensagem de erro clara, registrando 0 tarefas observadas e gerando 0 registros de sucesso falso na auditoria.
+- **Motivo:** Auditoria independente AUD-02 (Issue #27). Evitar que fotografias parciais, corrompidas ou malformadas de projetos (como a fixture `projeto_snapshot_incompleto.json`) sejam consumidas silenciosamente com código 0 e emitam falsas descobertas (`DISCOVERED`).

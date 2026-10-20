@@ -18,6 +18,7 @@ from ch_sentinela.github_reader import (
     LeitorGitHub,
     LeitorGitHubErro,
     executar_comando_gh,
+    validar_snapshot_projeto,
 )
 from ch_sentinela.security.policies import ViolacaoPoliticaSegurancaErro
 
@@ -102,6 +103,70 @@ class TestesLeitorGitHub(unittest.TestCase):
         with self.assertRaises(LeitorGitHubErro) as ctx:
             leitor.obter_issue(24)
         self.assertNotIn("ghp_1234567890", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_sucesso(self) -> None:
+        """AUD-02: Snapshot estruturalmente íntegro e consistente passa sem exceções."""
+        # Não deve levantar exceção
+        validar_snapshot_projeto(self.fixture_projeto)
+
+    def test_validar_snapshot_projeto_nao_dicionario(self) -> None:
+        """AUD-02: Snapshot que não seja dicionário levanta LeitorGitHubErro."""
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto(["item_na_lista"])
+        self.assertIn("esperado objeto JSON (dict)", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_sem_items(self) -> None:
+        """AUD-02: Snapshot sem chave 'items' levanta LeitorGitHubErro."""
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"totalCount": 0})
+        self.assertIn("campo 'items' ausente", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_items_nao_lista(self) -> None:
+        """AUD-02: Snapshot onde 'items' não é lista levanta LeitorGitHubErro."""
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"items": "não_é_lista", "totalCount": 1})
+        self.assertIn("campo 'items' deve ser uma lista", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_sem_totalcount(self) -> None:
+        """AUD-02: Snapshot sem chave 'totalCount' levanta LeitorGitHubErro."""
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"items": []})
+        self.assertIn("campo 'totalCount' ausente", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_totalcount_invalido(self) -> None:
+        """AUD-02: Snapshot com totalCount não-inteiro, booleano ou negativo levanta LeitorGitHubErro."""
+        # Booleano (em Python, isinstance(True, int) é True, mas deve ser rejeitado)
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"items": [{}], "totalCount": True})
+        self.assertIn("campo 'totalCount' deve ser um inteiro", str(ctx.exception))
+
+        # Float
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"items": [], "totalCount": 0.0})
+        self.assertIn("campo 'totalCount' deve ser um inteiro", str(ctx.exception))
+
+        # String
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"items": [], "totalCount": "0"})
+        self.assertIn("campo 'totalCount' deve ser um inteiro", str(ctx.exception))
+
+        # Negativo
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto({"items": [], "totalCount": -1})
+        self.assertIn("não pode ser negativo", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_contagem_divergente(self) -> None:
+        """AUD-02: Snapshot onde totalCount difere de len(items) levanta LeitorGitHubErro."""
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto(self.fixture_incompleto)
+        self.assertIn("Project incompleto", str(ctx.exception))
+
+    def test_validar_snapshot_projeto_excede_limite_maximo(self) -> None:
+        """AUD-02: Snapshot com totalCount superior ao limite MAXIMO_ITEMS_PROJECT levanta LeitorGitHubErro."""
+        snapshot_gigante = {"totalCount": 501, "items": [{}] * 501}
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            validar_snapshot_projeto(snapshot_gigante)
+        self.assertIn("excede limite seguro de leitura", str(ctx.exception))
 
 
 if __name__ == "__main__":

@@ -219,6 +219,61 @@ class TestesCLI(unittest.TestCase):
             self.assertGreater(len(eventos), 0)
             self.assertEqual(eventos[-1]["origem_dados"], "LIVE_GITHUB")
 
+    def test_cli_watch_fixture_incompleta_falha_fechada(self) -> None:
+        """AUD-02: Fixture incompleta (projeto_snapshot_incompleto.json) falha com código 1 e sem eventos."""
+        caminho_fix = Path(__file__).resolve().parent / "fixtures" / "projeto_snapshot_incompleto.json"
+        f = io.StringIO()
+        with redirect_stdout(f):
+            codigo = main(["watch", "--once", "--dry-run", "--fixture", str(caminho_fix)])
+        self.assertEqual(codigo, 1)
+        saida = f.getvalue()
+        self.assertIn("[ERRO CRÍTICO]", saida)
+        self.assertIn("Estrutura da fixture", saida)
+        self.assertIn("Project incompleto", saida)
+        self.assertNotIn("Tarefas observadas", saida)
+        self.assertNotIn("DISCOVERED", saida)
+
+    def test_cli_watch_fixture_sem_totalcount_falha_fechada(self) -> None:
+        """AUD-02: Fixture sem campo totalCount falha com código 1."""
+        caminho_sem_total = Path(self.temp_dir) / "fixture_sem_totalcount.json"
+        caminho_sem_total.write_text('{"items": []}', encoding="utf-8")
+
+        f = io.StringIO()
+        with redirect_stdout(f):
+            codigo = main(["watch", "--once", "--dry-run", "--fixture", str(caminho_sem_total)])
+        self.assertEqual(codigo, 1)
+        saida = f.getvalue()
+        self.assertIn("[ERRO CRÍTICO]", saida)
+        self.assertIn("campo 'totalCount' ausente", saida)
+        self.assertNotIn("Tarefas observadas", saida)
+
+    def test_cli_watch_fixture_totalcount_invalido_falha_fechada(self) -> None:
+        """AUD-02: Fixture com totalCount booleano ou string falha com código 1."""
+        caminho_total_invalido = Path(self.temp_dir) / "fixture_totalcount_invalido.json"
+        caminho_total_invalido.write_text('{"items": [], "totalCount": "zero"}', encoding="utf-8")
+
+        f = io.StringIO()
+        with redirect_stdout(f):
+            codigo = main(["watch", "--once", "--dry-run", "--fixture", str(caminho_total_invalido)])
+        self.assertEqual(codigo, 1)
+        saida = f.getvalue()
+        self.assertIn("[ERRO CRÍTICO]", saida)
+        self.assertIn("campo 'totalCount' deve ser um inteiro", saida)
+        self.assertNotIn("Tarefas observadas", saida)
+
+    def test_cli_watch_fixture_valida_sucesso(self) -> None:
+        """AUD-02: Fixture válida e consistente processa tarefas com sucesso e código 0."""
+        caminho_valido = Path(__file__).resolve().parent / "fixtures" / "projeto_snapshot_valido.json"
+        f = io.StringIO()
+        with redirect_stdout(f):
+            codigo = main(["watch", "--once", "--dry-run", "--fixture", str(caminho_valido)])
+        self.assertEqual(codigo, 0)
+        saida = f.getvalue()
+        self.assertIn("Tarefas observadas: 2", saida)
+        self.assertIn("Issue #24", saida)
+        self.assertIn("Issue #26", saida)
+        self.assertIn("Observação finalizada com sucesso", saida)
+
 
 if __name__ == "__main__":
     unittest.main()

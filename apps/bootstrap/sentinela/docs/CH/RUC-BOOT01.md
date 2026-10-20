@@ -9,17 +9,17 @@
 | **Escopo e autonomia** | `CH-1` (desenvolvimento local delimitado) com ensaios `CH-0` (testes offline e FakeWorker) |
 | **Ambiente** | Host Linux CachyOS, worktree `build_sentinela_python`, branch `agy/boot01-sentinela-lab` |
 | **Fonte** | `LOCAL_REPO`, `SNAPSHOT_OFFLINE`, `LIVE_GITHUB` (apenas leitura de Issue #24 e PR #25) |
-| **Data/hora** | 2026-10-19T20:40:00-03:00 |
-| **`run_id` / tentativa** | `run-boot01-lab-antigravity-02` (Tentativa 2 — Correção AUD-01) |
+| **Data/hora** | 2026-10-19T21:10:00-03:00 |
+| **`run_id` / tentativa** | `run-boot01-lab-antigravity-03` (Tentativa 3 — Correções AUD-01 e AUD-02) |
 | **Baseline / branch** | SHA `d2a74426bfa1fab12aafb721c8dad60876f6f8ec` / branch `agy/boot01-sentinela-lab` |
-| **Resultado técnico** | `APROVADO_TECNICAMENTE` (delimitado ao escopo simulado offline e local; AUD-01 corrigida) |
+| **Resultado técnico** | `APROVADO_TECNICAMENTE` (delimitado ao escopo simulado offline e local; AUD-01 e AUD-02 corrigidas) |
 | **Estado final** | `AGUARDANDO_PO` |
 
 ---
 
 ## 1. Identificação
 
-- **Missão canônica:** Construção autônoma da primeira versão funcional da Sentinela Python para o CHDevFlow Bootstrap Engine e correção AUD-01.
+- **Missão canônica:** Construção autônoma da primeira versão funcional da Sentinela Python para o CHDevFlow Bootstrap Engine e correções AUD-01 e AUD-02.
 - **Executor:** Google Antigravity App v2.24.0, operando de forma autônoma sem delegação a Codex, outro AGY ou agentes externos.
 - **Fronteira operacional:** Worktree isolada em `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow-BOOT01/build_sentinela_python`, branch `agy/boot01-sentinela-lab`.
 - **Invariantes respeitados:** Decisões D01 a D07 (CachyOS, AGY prioritário no piloto futuro, custo adicional R$ 0,00, 1 tarefa ativa, 900s timeout, 1 retry pós-diagnóstico, disparo manual `--once` sem loops).
@@ -28,23 +28,25 @@
 
 ## 2. Resumo Executivo
 
-1. **Objetivo:** Construir o módulo completo da Sentinela Python (`apps/bootstrap/sentinela/`) e sanar o defeito bloqueador AUD-01 apontado na auditoria externa.
-2. **Resultado:** 100% dos componentes implementados e corrigidos. O `watch --once --dry-run` opera em modo estritamente *fail-closed*, com saída não-zero em caso de falha ao vivo ou fixture inexistente, eliminando qualquer fallback silencioso para dados fictícios.
-3. **Testes:** 50 testes unitários na suíte da Sentinela e 77 testes na suíte existente do repositório, totalizando 127 testes passando com 100% de sucesso.
+1. **Objetivo:** Construir o módulo completo da Sentinela Python (`apps/bootstrap/sentinela/`), sanar o defeito bloqueador AUD-01 e implementar a correção formal AUD-02 autorizada pelo PO na Issue #27.
+2. **Resultado:** 100% dos componentes implementados e validados. O `watch --once --dry-run` opera em modo estritamente *fail-closed*, tanto em consultas ao vivo quanto com `--fixture`. A função centralizada `validar_snapshot_projeto` rejeita snapshots incompletos, malformados ou com divergência de contagem (`projeto_snapshot_incompleto.json`), retornando código 1 e 0 eventos `DISCOVERED`.
+3. **Testes:** 67 testes unitários na suíte da Sentinela e 77 testes na suíte existente do repositório, totalizando 144 testes passando com 100% de sucesso.
 4. **Alcance:** Implementação em Python 3.12+ (executado no Python 3.14.8) utilizando exclusivamente a biblioteca padrão, com código didático integralmente redigido em português brasileiro (pt-BR).
-5. **Próxima ação:** Submeter esta correção ao Draft PR #26 para reavaliação do supervisor e decisão do Product Owner Hallan no estado `AGUARDANDO_PO`.
+5. **Próxima ação:** Submeter esta correção ao Draft PR #26 para reavaliação do supervisor ChatGPT e decisão do Product Owner Hallan no estado `AGUARDANDO_PO`.
 
 ---
 
 ## 3. Consultas e Atividades Realizadas
 
 - [x] Leitura e análise dos documentos canônicos: `README.md`, `AGENTS.md`, `docs/W2-A/01-ARQUITETURA.md` a `04-CRITERIOS-DE-ACEITE.md`, `scripts/ch_project_assist.py`, `scripts/ch_project_sync.py`, `scripts/ch_stage_evidence.py`.
-- [x] Consulta somente leitura da Issue #24 e do Draft PR #25 via GitHub CLI.
-- [x] Leitura integral do parecer de auditoria independente `CH-REVIEW-BOOT01 / AUD-01` no PR #26.
+- [x] Consulta somente leitura da Issue #24, Issue #27 e do Draft PR #25 e PR #26 via GitHub CLI.
+- [x] Leitura integral do parecer de auditoria independente `CH-REVIEW-BOOT01 / AUD-01` no PR #26 e do parecer AUD-02 na Issue #27.
 - [x] Reprodução e correção do bloqueador AUD-01 em `cli.py` (proibição de substituição silenciosa de fixtures, falha fechada com código 1 e mensagens explícitas `LIVE_GITHUB FAILED` e `ERRO CRÍTICO`).
-- [x] Criação de 6 testes de regressão em `tests/test_cli.py` cobrindo falhas ao vivo de `gh`, timeout, fixture ausente, fixture corrompida e sucesso auditado como `LIVE_GITHUB`.
-- [x] Execução de 50 testes na suíte da Sentinela e 77 na suíte pré-existente.
-- [x] Atualização da documentação (`STATUS.md`, `DECISOES.md` com ADR-BOOT01-05 e este relatório).
+- [x] Implementação da correção AUD-02: criação da função `validar_snapshot_projeto` em `github_reader.py`, aplicada obrigatoriamente em `LeitorGitHub.listar_itens_projeto()`, `sentinel.py::observar_uma_vez` e `cli.py::comando_watch`.
+- [x] Criação de 17 novos testes de regressão (totalizando 67 testes no módulo da Sentinela) cobrindo snapshots incompletos (`projeto_snapshot_incompleto.json`), ausência de `totalCount`, tipos inválidos de `items`, divergência de contagem, limites e fixtures válidas.
+- [x] Execução de 67 testes na suíte da Sentinela e 77 na suíte pré-existente (144 testes no total).
+- [x] Validação de `git diff --check` entre baseline `d2a74426bfa1fab12aafb721c8dad60876f6f8ec` e HEAD.
+- [x] Atualização da documentação (`STATUS.md`, `DECISOES.md` com ADR-BOOT01-06 e este relatório).
 
 ---
 
@@ -54,12 +56,13 @@
 |---|---|---|---|
 | **E01** | `OBSERVADO` | `LOCAL_REPO` | Branch confirmada: `agy/boot01-sentinela-lab` apontando para a baseline SHA `d2a74426...`. |
 | **E02** | `OBSERVADO` | `LOCAL_REPO` | Compilação de sintaxe sem erros (`python3 -m py_compile`). |
-| **E03** | `OBSERVADO` | `LOCAL_REPO` | 50 testes unitários da Sentinela executados e aprovados com 100% de sucesso. |
+| **E03** | `OBSERVADO` | `LOCAL_REPO` | 67 testes unitários da Sentinela executados e aprovados com 100% de sucesso. |
 | **E04** | `OBSERVADO` | `LOCAL_REPO` | 77 testes do repositório raiz executados e aprovados sem regressões. |
 | **E05** | `OBSERVADO` | `LOCAL_REPO` | Invocação CLI `watch --once --dry-run` sem fixture em ambiente sem rede retornando código 1 com `LIVE_GITHUB FAILED`, sem gerar tarefas sintéticas. |
 | **E06** | `OBSERVADO` | `LOCAL_REPO` | Invocação CLI `watch --once --dry-run --fixture inexistente.json` retornando código 1 com `[ERRO CRÍTICO]`, sem fallback. |
 | **E07** | `OBSERVADO` | `LOCAL_REPO` | Checkpoint atômico e auditoria JSONL com permissão `0o600` e dados sanitizados. |
 | **E08** | `DECLARADO` | `LOCAL_REPO` | Zero chamadas a APIs pagas, zero agentes externos instanciados e custo verificado R$ 0,00. |
+| **E09** | `OBSERVADO` | `LOCAL_REPO` | Invocação CLI `watch --once --dry-run --fixture ...projeto_snapshot_incompleto.json` retornando código 1 com `[ERRO CRÍTICO]`, sem emitir eventos `DISCOVERED` nem auditoria falsa. |
 
 ---
 
@@ -82,6 +85,7 @@
 | **T13** | Bloqueio de caminhos fora de escopo, fuga de diretório (*path traversal*), mundos e saves | `PASSOU` | Testado em `test_security.py::test_bloqueio_path_traversal` e `test_bloqueio_mundos_saves_e_segredos`. |
 | **T14** | Idempotência estrita na repetição de uma mesma missão e tentativa | `PASSOU` | Testado em `test_supervisor.py::test_idempotencia_na_repeticao_da_mesma_missao`. |
 | **T15** | Correção AUD-01: Proibição de fallback silencioso e fail-closed na CLI | `PASSOU` | Testado em `test_cli.py` (cenários de fixture inexistente, malformada, sem items, falha ao vivo e timeout). |
+| **T16** | Correção AUD-02: Validação estrutural centralizada de snapshots do Project e fail-closed para snapshots incompletos | `PASSOU` | Testado em `test_github_reader.py` (8 testes), `test_sentinel.py` (5 testes) e `test_cli.py` (4 testes), cobrindo `projeto_snapshot_incompleto.json`, ausência de `totalCount`, tipos inválidos de `items`, booleanos/negativos, contagem divergente e fixtures válidas. |
 
 ---
 

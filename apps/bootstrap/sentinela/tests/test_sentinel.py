@@ -15,7 +15,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from ch_sentinela.audit import Auditoria
-from ch_sentinela.github_reader import LeitorGitHub
+from ch_sentinela.github_reader import LeitorGitHub, LeitorGitHubErro
 from ch_sentinela.sentinel import Sentinela
 
 
@@ -29,6 +29,8 @@ class TestesSentinela(unittest.TestCase):
             self.snapshot_valido = json.load(f)
         with open(fixtures_dir / "projeto_snapshot_duplicado.json", "r", encoding="utf-8") as f:
             self.snapshot_duplicado = json.load(f)
+        with open(fixtures_dir / "projeto_snapshot_incompleto.json", "r", encoding="utf-8") as f:
+            self.snapshot_incompleto = json.load(f)
 
     def test_observacao_unica_sucesso(self) -> None:
         """Garante que a Sentinela reconhece tarefas elegíveis e encerra a consulta."""
@@ -99,6 +101,65 @@ class TestesSentinela(unittest.TestCase):
         self.assertEqual(eventos[0].tipo_evento, "INVALID_IGNORED")
         self.assertEqual(eventos[1].tipo_evento, "INVALID_IGNORED")
         self.assertIn("URL", eventos[1].detalhes)
+
+    def test_rejeicao_snapshot_incompleto_falha_fechada(self) -> None:
+        """AUD-02: Snapshot incompleto (fixture com contagem divergente) levanta LeitorGitHubErro e gera 0 eventos."""
+        sentinela = Sentinela()
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            sentinela.observar_uma_vez(snapshot_projeto=self.snapshot_incompleto)
+        self.assertIn("Project incompleto", str(ctx.exception))
+
+    def test_rejeicao_snapshot_sem_totalcount(self) -> None:
+        """AUD-02: Snapshot sem 'totalCount' levanta LeitorGitHubErro sem emitir eventos."""
+        sentinela = Sentinela()
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            sentinela.observar_uma_vez(snapshot_projeto={"items": []})
+        self.assertIn("campo 'totalCount' ausente", str(ctx.exception))
+
+    def test_rejeicao_snapshot_items_tipo_invalido(self) -> None:
+        """AUD-02: Snapshot com 'items' não-lista levanta LeitorGitHubErro sem emitir eventos."""
+        sentinela = Sentinela()
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            sentinela.observar_uma_vez(snapshot_projeto={"totalCount": 0, "items": "invalido"})
+        self.assertIn("campo 'items' deve ser uma lista", str(ctx.exception))
+
+    def test_rejeicao_snapshot_totalcount_invalido(self) -> None:
+        """AUD-02: Snapshot com 'totalCount' booleano ou negativo levanta LeitorGitHubErro."""
+        sentinela = Sentinela()
+        with self.assertRaises(LeitorGitHubErro) as ctx:
+            sentinela.observar_uma_vez(snapshot_projeto={"totalCount": True, "items": [{}]})
+        self.assertIn("campo 'totalCount' deve ser um inteiro", str(ctx.exception))
+
+        with self.assertRaises(LeitorGitHubErro) as ctx_neg:
+            sentinela.observar_uma_vez(snapshot_projeto={"totalCount": -1, "items": []})
+        self.assertIn("não pode ser negativo", str(ctx_neg.exception))
+
+    def test_rejeicao_snapshot_contagem_divergente_sem_auditoria(self) -> None:
+        """AUD-02: Snapshot com divergência não gera nenhum evento na auditoria."""
+        from unittest.mock import MagicMock
+        auditoria_mock = MagicMock()
+        sentinela = Sentinela(auditoria=auditoria_mock)
+
+        snapshot_ruim = {
+            "totalCount": 2,
+            "items": [
+                {
+                    "content": {
+                        "type": "Issue",
+                        "repository": "hallanbrito/CHDevFlow",
+                        "number": 24,
+                        "title": "Apenas um item",
+                        "url": "https://github.com/hallanbrito/CHDevFlow/issues/24",
+                    },
+                    "labels": ["ch:workflow"],
+                }
+            ],
+        }
+        with self.assertRaises(LeitorGitHubErro):
+            sentinela.observar_uma_vez(snapshot_projeto=snapshot_ruim)
+
+        # Garante que nenhum evento de auditoria foi registrado
+        auditoria_mock.registrar_evento.assert_not_called()
 
 
 if __name__ == "__main__":

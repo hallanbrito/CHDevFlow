@@ -143,6 +143,60 @@ def executar_consulta_json(
     return dados
 
 
+def validar_snapshot_projeto(dados: Any) -> None:
+    """Valida a integridade estrutural e limites de um snapshot do GitHub Project.
+
+    Garante que o snapshot contenha um dicionário com:
+    - 'items': lista de itens
+    - 'totalCount': inteiro não-negativo exatamente igual a len(items)
+    - totalCount <= MAXIMO_ITEMS_PROJECT
+
+    Args:
+        dados: Objeto a ser validado como snapshot do Project.
+
+    Raises:
+        LeitorGitHubErro: Se a estrutura for inválida, incompleta ou violar limites operacionais.
+    """
+    if not isinstance(dados, dict):
+        raise LeitorGitHubErro(
+            f"Snapshot do Project inválido: esperado objeto JSON (dict), obtido {type(dados).__name__}."
+        )
+
+    if "items" not in dados:
+        raise LeitorGitHubErro("Snapshot do Project inválido: campo 'items' ausente.")
+
+    itens = dados["items"]
+    if not isinstance(itens, list):
+        raise LeitorGitHubErro(
+            f"Snapshot do Project inválido: campo 'items' deve ser uma lista, obtido {type(itens).__name__}."
+        )
+
+    if "totalCount" not in dados:
+        raise LeitorGitHubErro("Snapshot do Project inválido: campo 'totalCount' ausente.")
+
+    total_count = dados["totalCount"]
+    # Em Python, bool é subclasse de int. Rejeitar explicitamente bool.
+    if isinstance(total_count, bool) or not isinstance(total_count, int):
+        raise LeitorGitHubErro(
+            f"Snapshot do Project inválido: campo 'totalCount' deve ser um inteiro, obtido {type(total_count).__name__}."
+        )
+
+    if total_count < 0:
+        raise LeitorGitHubErro(
+            f"Snapshot do Project inválido: campo 'totalCount' não pode ser negativo ({total_count})."
+        )
+
+    if len(itens) != total_count:
+        raise LeitorGitHubErro(
+            f"Project incompleto: 'items' ({len(itens)}) difere de 'totalCount' ({total_count})."
+        )
+
+    if total_count > MAXIMO_ITEMS_PROJECT:
+        raise LeitorGitHubErro(
+            f"Project excede limite seguro de leitura: {total_count} > {MAXIMO_ITEMS_PROJECT}."
+        )
+
+
 class LeitorGitHub:
     """Interface de leitura restrita e somente-leitura para o GitHub."""
 
@@ -273,21 +327,5 @@ class LeitorGitHub:
             str(MAXIMO_ITEMS_PROJECT),
         ]
         dados = executar_consulta_json(args, executor_customizado=self._executor)
-
-        itens = dados.get("items")
-        total_count = dados.get("totalCount")
-
-        if not isinstance(itens, list) or not isinstance(total_count, int):
-            raise LeitorGitHubErro("Estrutura inválida no retorno do Project: 'items' ou 'totalCount' ausentes.")
-
-        if len(itens) != total_count:
-            raise LeitorGitHubErro(
-                f"Project incompleto: 'items' ({len(itens)}) difere de 'totalCount' ({total_count})."
-            )
-
-        if total_count > MAXIMO_ITEMS_PROJECT:
-            raise LeitorGitHubErro(
-                f"Project excede limite seguro de leitura: {total_count} > {MAXIMO_ITEMS_PROJECT}."
-            )
-
+        validar_snapshot_projeto(dados)
         return dados
