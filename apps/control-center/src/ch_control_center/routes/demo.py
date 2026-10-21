@@ -13,6 +13,7 @@ from ch_control_center.security import (
     sanitizar_caminho_redirecionamento,
     validar_csrf_token,
     validar_origem_local,
+    validar_requisicao_post_segura,
 )
 from ch_control_center.services.mission_service import MissionService
 
@@ -26,13 +27,19 @@ async def toggle_demo_mode(
 ) -> RedirectResponse:
     """Alterna entre o modo de demonstração offline e o modo ao vivo no GitHub.
 
-    Protegido contra CSRF e redirecionamento aberto (AUD-02).
+    Protegido contra CSRF com validação de Host, Origin/Referer e Token obrigatório (AUD-02.1).
     """
-    # 1. Validação estrita de origem local (AUD-02)
-    validar_origem_local(request)
-
     body_bytes = await request.body()
     parsed_body = urllib.parse.parse_qs(body_bytes.decode("utf-8", errors="ignore"))
+    csrf_token = (
+        parsed_body.get("csrf_token", [None])[0]
+        or request.headers.get("x-csrf-token")
+        or request.query_params.get("csrf_token")
+    )
+
+    # Validação estrita de segurança local e exigência incondicional de CSRF (AUD-02.1)
+    validar_requisicao_post_segura(request, csrf_token=csrf_token)
+
     modo_param = parsed_body.get("modo", [None])[0] or request.query_params.get("modo")
 
     modo_atual = mission_service.obter_modo_operacao()

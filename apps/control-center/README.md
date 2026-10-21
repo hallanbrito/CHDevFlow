@@ -26,7 +26,7 @@ Na presente fatia **CC-01**, o painel opera **estritamente em modo somente leitu
 4. **Central de Missões e Fatias W:** Tabela com busca textual instantânea, filtros por status e esteira (AGY, Codex, ChatGPT) e modal de inspeção detalhada.
 5. **Modo Estudante Didático (ADR-CC02-03):** Glossário contextual do Método C.H., diagrama explicativo dos 9 estados da máquina de governança e detalhamento das 5 invariantes inegociáveis.
 6. **Modo Demonstração Offline (RF-06):** Alternância transparente com um clique entre o snapshot de demonstração offline (`DEMO_OFFLINE`) e o GitHub Project #2 (`LIVE_GITHUB`), com banner de aviso explícito.
-7. **Suíte de Testes Automatizados (100% Offline):** 48 testes dedicados do Control Center cobrindo o motor DAG, serviços, fachada da Sentinela, cabeçalhos CSP, proteção CSRF e rotas somente leitura, complementando os 77 testes do repositório raiz e os 67 testes do motor da Sentinela (total de 192 testes com 100% de aprovação).
+7. **Suíte de Testes Automatizados (100% Offline):** 53 testes dedicados do Control Center cobrindo o motor DAG, serviços, fachada da Sentinela, cabeçalhos de CSP defensiva inicial/local, proteção CSRF com token obrigatório e rotas somente leitura, complementando os 77 testes do repositório raiz e os 67 testes do motor da Sentinela (total de 197 testes locais aprovados; 77 testes validados no GitHub Actions).
 
 ---
 
@@ -86,9 +86,9 @@ export PYTHONPATH="apps/control-center/src:apps/bootstrap/sentinela/src"
 .venv/bin/python -m pytest apps/control-center/tests apps/bootstrap/sentinela/tests tests -v
 ```
 
-> **Execução Local vs. Verificação em CI:**
-> - **Local:** Execução 100% offline via virtualenv local, utilizando clientes ASGI in-memory e fixtures em disco, com garantia absoluta de custo R$ 0,00 e sem dependência de conectividade externa.
-> - **CI (GitHub Actions):** Valida os mesmos 192 testes automatizados e regras de integridade (`git diff --check`) em contêiner isolado a cada envio ou abertura de Pull Request.
+> **Execução Local vs. Verificação em CI (AUD-06.1):**
+> - **Local (197 testes executados):** Execução 100% offline via virtualenv local cobrindo 53 testes do Control Center, 67 testes da Sentinela Python e 77 testes da suíte raiz (total de 197 testes com 100% de aprovação), com custo R$ 0,00 e sem dependência de rede.
+> - **CI / GitHub Actions (77 testes executados):** O workflow atual (`.github/workflows/w1-checks.yml`) executa os 77 testes históricos da raiz do repositório (`python -m unittest discover -s tests -v`), comprovadamente aprovados com sucesso. Os 53 testes do Control Center e os 67 testes da Sentinela ainda não foram integrados ao pipeline remoto do CI, permanecendo para expansão do workflow em fatias futuras.
 
 ---
 
@@ -109,10 +109,10 @@ apps/control-center/
 │   └── ch_control_center/
 │       ├── __init__.py
 │       ├── __main__.py                # CLI runner manual (D05)
-│       ├── app.py                     # Instância FastAPI e middlewares de segurança (CSP)
+│       ├── app.py                     # Instância FastAPI e middlewares de segurança (CSP defensiva inicial/local)
 │       ├── config.py                  # Parâmetros de rede (127.0.0.1 estrito) e caminhos
 │       ├── dependencies.py            # Injeção de dependências
-│       ├── security.py                # Validação de origem local (Origin/Referer) e sanitização de redirects (AUD-02)
+│       ├── security.py                # Validação de Host, Origin/Referer, Token CSRF obrigatório e redirect seguro (AUD-02.1)
 │       ├── adapters/
 │       │   └── sentinela_adapter.py   # SentinelFacade (ADR-CC02-01)
 │       ├── graph/

@@ -85,8 +85,9 @@
         </div>
 
         <div class="header-right">
-          <!-- Seletor de Perfil de Projeto (AUD-03) -->
+          <!-- Seletor de Perfil de Projeto (AUD-03 e AUD-02.1) -->
           <form action="/projetos/alternar" method="POST" style="display: inline-flex; align-items: center; gap: 0.4rem;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             <label for="select-projeto" style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">PROJETO:</label>
             <select id="select-projeto" name="project_key" onchange="this.form.submit()" style="padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem; font-weight: 600; cursor: pointer;">
               <option value="chdevflow" selected>CHDevFlow (Meta-Governança)</option>
@@ -94,8 +95,9 @@
             </select>
           </form>
 
-          <!-- Banner do Modo de Operação com Alternância -->
+          <!-- Banner do Modo de Operação com Alternância (AUD-02.1) -->
           <form action="/demo/alternar" method="POST" style="display: inline-flex;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
             {% if modo_operacao == 'DEMO_OFFLINE' %}
               <button type="submit" class="mode-banner demo btn-sm" title="Clique para alternar para modo ao vivo" style="border: none; cursor: pointer;">
                 <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #f59e0b;"></span>

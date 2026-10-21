@@ -55,10 +55,15 @@ class ASGIClient:
         path_only = parsed.path or "/"
         query_string = parsed.query.encode("utf-8")
 
-        asgi_headers = [(b"host", b"127.0.0.1:8000")]
+        header_map: dict[str, str] = {"host": "127.0.0.1:8000"}
         if headers:
             for k, v in headers.items():
-                asgi_headers.append((k.lower().encode("latin1"), v.encode("latin1")))
+                header_map[k.lower()] = v
+
+        asgi_headers = [
+            (k.encode("latin1"), v.encode("latin1"))
+            for k, v in header_map.items()
+        ]
 
         scope = {
             "type": "http",

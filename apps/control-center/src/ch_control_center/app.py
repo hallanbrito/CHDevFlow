@@ -19,6 +19,7 @@ from ch_control_center.routes.graph import router as graph_router
 from ch_control_center.routes.missions import router as missions_router
 from ch_control_center.routes.projects import router as projects_router
 from ch_control_center.routes.student import router as student_router
+from ch_control_center.security import validar_host_cabecalho
 
 
 def create_app() -> FastAPI:
@@ -31,12 +32,20 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    # Middleware de Segurança e Cabeçalhos Locais (Anti-clickjacking e CSP estrito)
+    # Middleware de Segurança e Cabeçalhos Locais (Anti-clickjacking e CSP defensiva inicial/local)
     @app.middleware("http")
     async def aplicar_cabecalhos_seguranca(
         request: Request,
         call_next: Callable[[Request], Response],
     ) -> Response:
+        try:
+            validar_host_cabecalho(request)
+        except Exception as exc:
+            from fastapi import HTTPException
+            if isinstance(exc, HTTPException):
+                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            raise
+
         response = await call_next(request)
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-Content-Type-Options"] = "nosniff"

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import pytest
 
+from ch_control_center.security import obter_csrf_token
+
 
 def test_rota_healthcheck(client) -> None:
     """Verifica resposta e cabeçalhos da rota de integridade /health."""
@@ -99,8 +101,8 @@ def test_api_glossario_estudante(client) -> None:
     assert "mission_digest" in ids
 
 
-def test_cabecalho_csp_presente_e_estrito_aud02(client) -> None:
-    """AUD-02: Comprova que a política Content-Security-Policy (CSP) está ativa e estrita."""
+def test_cabecalho_csp_presente_defensivo_inicial_aud02(client) -> None:
+    """AUD-02 / AUD-02.1: Comprova que a política Content-Security-Policy (CSP) defensiva inicial/local está ativa."""
     resp = client.get("/")
     assert resp.status_code == 200
     csp = resp.headers.get("content-security-policy", "")
@@ -111,12 +113,13 @@ def test_cabecalho_csp_presente_e_estrito_aud02(client) -> None:
 
 
 def test_alternar_modo_demo_via_post(client) -> None:
-    """Verifica alternância de modo de demonstração via POST com origem local válida (AUD-02)."""
+    """Verifica alternância de modo de demonstração via POST com origem local e token CSRF (AUD-02.1)."""
+    token = obter_csrf_token()
     headers_locais = {
         "Origin": "http://127.0.0.1:8000",
         "Referer": "http://127.0.0.1:8000/missoes",
     }
-    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_locais)
+    resp = client.post("/demo/alternar", data=f"modo=LIVE_GITHUB&csrf_token={token}", headers=headers_locais)
     assert resp.status_code == 303
     assert resp.headers.get("location") == "http://127.0.0.1:8000/missoes" or resp.headers.get("location") == "/missoes"
 
@@ -124,7 +127,7 @@ def test_alternar_modo_demo_via_post(client) -> None:
     assert status_resp.json()["modo_operacao"] == "LIVE_GITHUB"
 
     # Alterna de volta para demo
-    client.post("/demo/alternar", data="modo=DEMO_OFFLINE", headers=headers_locais)
+    client.post("/demo/alternar", data=f"modo=DEMO_OFFLINE&csrf_token={token}", headers=headers_locais)
     status_resp2 = client.get("/api/demo/status")
     assert status_resp2.json()["modo_operacao"] == "DEMO_OFFLINE"
 
@@ -132,42 +135,91 @@ def test_alternar_modo_demo_via_post(client) -> None:
 def test_bloqueio_post_com_origin_externo_aud02(client) -> None:
     """AUD-02: Rejeita POST originado de domínio externo (403 Forbidden)."""
     headers_maliciosos = {"Origin": "https://attacker.site"}
-    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_maliciosos)
+    resp = client.post("/demo/alternar", data=f"modo=LIVE_GITHUB&csrf_token={obter_csrf_token()}", headers=headers_maliciosos)
     assert resp.status_code == 403
 
 
 def test_bloqueio_post_com_referer_externo_aud02(client) -> None:
     """AUD-02: Rejeita POST cujo Referer aponta para domínio externo (403 Forbidden)."""
     headers_maliciosos = {"Referer": "https://phishing.site/fake-page"}
-    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_maliciosos)
+    resp = client.post("/demo/alternar", data=f"modo=LIVE_GITHUB&csrf_token={obter_csrf_token()}", headers=headers_maliciosos)
     assert resp.status_code == 403
 
 
 def test_bloqueio_post_sem_origem_nem_csrf_aud02(client) -> None:
-    """AUD-02: Rejeita POST sem nenhum cabeçalho de origem ou token CSRF (403 Forbidden)."""
+    """AUD-02 / AUD-02.1: Rejeita POST sem token CSRF (403 Forbidden)."""
     resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB")
+    assert resp.status_code == 403
+
+
+def test_post_origem_local_sem_token_retorna_403_aud021(client) -> None:
+    """AUD-02.1: Origem local sem token CSRF deve retornar 403 Forbidden."""
+    headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/"}
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_local)
+    assert resp.status_code == 403
+
+
+def test_post_origem_local_com_token_invalido_retorna_403_aud021(client) -> None:
+    """AUD-02.1: Origem local com token CSRF inválido deve retornar 403 Forbidden."""
+    headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/"}
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB&csrf_token=token_falso_invalido", headers=headers_local)
+    assert resp.status_code == 403
+
+
+def test_post_origem_local_com_token_valido_retorna_303_aud021(client) -> None:
+    """AUD-02.1: Origem local com token CSRF válido deve retornar 303 Redirect."""
+    token = obter_csrf_token()
+    headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/missoes"}
+    resp = client.post("/demo/alternar", data=f"modo=LIVE_GITHUB&csrf_token={token}", headers=headers_local)
+    assert resp.status_code == 303
+    assert "/missoes" in resp.headers.get("location", "")
+
+
+def test_host_externo_rejeitado_aud021(client) -> None:
+    """AUD-02.1: Host externo é rejeitado com 403 Forbidden."""
+    headers_externos = {"Host": "evil.com"}
+    resp = client.get("/", headers=headers_externos)
+    assert resp.status_code == 403
+
+    resp_post = client.post("/demo/alternar", data=f"csrf_token={obter_csrf_token()}", headers=headers_externos)
+    assert resp_post.status_code == 403
+
+
+def test_localhost_em_outra_porta_sem_token_retorna_403_aud021(client) -> None:
+    """AUD-02.1: Localhost em outra porta sem token deve retornar 403 Forbidden."""
+    headers_outra_porta = {
+        "Origin": "http://localhost:9000",
+        "Referer": "http://localhost:9000/",
+    }
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_outra_porta)
     assert resp.status_code == 403
 
 
 def test_redirecionamento_seguro_e_sanitizado_aud02(client) -> None:
     """AUD-02: Valida redirecionamento local e sanitização contra open-redirect."""
+    token = obter_csrf_token()
     headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/grafo"}
-    resp_valido = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_local)
+    resp_valido = client.post("/demo/alternar", data=f"modo=LIVE_GITHUB&csrf_token={token}", headers=headers_local)
     assert resp_valido.status_code == 303
     assert "/grafo" in resp_valido.headers.get("location", "")
 
     # Se referer for rota desconhecida, sanitiza seguramente para '/'
     headers_desconhecido = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/rota_inexistente_hacker"}
-    resp_sanitizado = client.post("/demo/alternar", data="modo=DEMO_OFFLINE", headers=headers_desconhecido)
+    resp_sanitizado = client.post("/demo/alternar", data=f"modo=DEMO_OFFLINE&csrf_token={token}", headers=headers_desconhecido)
     assert resp_sanitizado.status_code == 303
     assert resp_sanitizado.headers.get("location") == "/"
 
 
 def test_alternar_projeto_ativo_via_post_aud03(client) -> None:
     """AUD-03: Alternância para HallanCraft preserva CHDevFlow para evitar divergência de dados."""
+    token = obter_csrf_token()
     headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/"}
-    resp = client.post("/projetos/alternar", data="project_key=hallancraft", headers=headers_local)
+    resp = client.post("/projetos/alternar", data=f"project_key=hallancraft&csrf_token={token}", headers=headers_local)
     assert resp.status_code == 303
+
+    proj_resp = client.get("/api/projetos/ativo")
+    # Perfil ativo permanece CHDevFlow na CC-01
+    assert proj_resp.json()["project_key"] == "chdevflow"
 
     proj_resp = client.get("/api/projetos/ativo")
     # Perfil ativo permanece CHDevFlow na CC-01

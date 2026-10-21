@@ -9,11 +9,13 @@ from fastapi.templating import Jinja2Templates
 
 from ch_control_center.config import DIRETORIO_TEMPLATES
 from ch_control_center.dependencies import get_mission_service, get_project_service
+from ch_control_center.security import obter_csrf_token
 from ch_control_center.services.mission_service import MissionService
 from ch_control_center.services.project_service import ProjectService
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(DIRETORIO_TEMPLATES))
+templates.env.globals["csrf_token"] = obter_csrf_token()
 
 
 @router.get("/missoes", response_class=HTMLResponse)
