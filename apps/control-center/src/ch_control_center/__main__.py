@@ -26,9 +26,9 @@ def main() -> None:
     porta = obter_porta_configurada()
     modo = obter_modo_operacao()
 
-    # Salvaguarda Fail-Closed: se de alguma forma o host for 0.0.0.0, força 127.0.0.1
-    if host in ("0.0.0.0", "::", "all"):
-        print("⚠️ ALERTA DE SEGURANÇA: Tentativa de expor servidor na rede externa. Forçando 127.0.0.1.", file=sys.stderr)
+    # Salvaguarda Fail-Closed AUD-01: somente 127.0.0.1 é permitido
+    if host != HOST_PADRAO:
+        print(f"⚠️ ALERTA DE SEGURANÇA: Host '{host}' não permitido. Forçando {HOST_PADRAO}.", file=sys.stderr)
         host = HOST_PADRAO
 
     print("=" * 68)

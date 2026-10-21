@@ -1,7 +1,9 @@
 {
   "schema": "chdevflow.control-center.project-profile/0.1",
   "project_key": "hallancraft",
-  "display_name": "HallanCraft (Piloto de Produto)",
+  "display_name": "HallanCraft (PREPARATÓRIO — SEM TROCA DE DADOS)",
+  "status": "PREPARATORIO",
+  "data_ingestion_enabled": false,
   "repository": "hallanbrito/HallanCraft",
   "project_number": 2,
   "default_branch": "main",

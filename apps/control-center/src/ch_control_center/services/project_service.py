@@ -63,8 +63,20 @@ class ProjectService:
         )
 
     def alternar_perfil(self, project_key: str) -> dict[str, Any]:
-        """Alterna o perfil ativo no painel (CHDevFlow vs HallanCraft)."""
+        """Alterna o perfil ativo no painel.
+
+        Conformidade AUD-03:
+        - Na fatia CC-01, as fatias W e dados observados pertencem estritamente ao CHDevFlow.
+        - O perfil HallanCraft é preparatório ('PREPARATÓRIO — SEM TROCA DE DADOS') e sua
+          ingestão real de dados está reservada para fases futuras.
+        - Para impedir estritamente que a tela exiba 'HallanCraft' enquanto os dados pertencem
+          ao CHDevFlow, a tentativa de alternância não altera a fonte e preserva CHDevFlow.
+        """
         chave = project_key.lower().strip()
+        if chave == PERFIL_HALLANCRAFT:
+            self._perfil_ativo_key = PERFIL_CHDEVFLOW
+            return self.obter_perfil_ativo()
+
         if chave in self._perfis_cache:
             self._perfil_ativo_key = chave
         return self.obter_perfil_ativo()

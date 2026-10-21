@@ -9,6 +9,11 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from ch_control_center.config import MODO_DEMO_OFFLINE, MODO_LIVE_GITHUB
 from ch_control_center.dependencies import get_mission_service
+from ch_control_center.security import (
+    sanitizar_caminho_redirecionamento,
+    validar_csrf_token,
+    validar_origem_local,
+)
 from ch_control_center.services.mission_service import MissionService
 
 router = APIRouter()
@@ -19,7 +24,13 @@ async def toggle_demo_mode(
     request: Request,
     mission_service: MissionService = Depends(get_mission_service),
 ) -> RedirectResponse:
-    """Alterna entre o modo de demonstração offline e o modo ao vivo no GitHub."""
+    """Alterna entre o modo de demonstração offline e o modo ao vivo no GitHub.
+
+    Protegido contra CSRF e redirecionamento aberto (AUD-02).
+    """
+    # 1. Validação estrita de origem local (AUD-02)
+    validar_origem_local(request)
+
     body_bytes = await request.body()
     parsed_body = urllib.parse.parse_qs(body_bytes.decode("utf-8", errors="ignore"))
     modo_param = parsed_body.get("modo", [None])[0] or request.query_params.get("modo")
@@ -33,8 +44,9 @@ async def toggle_demo_mode(
 
     mission_service.alternar_modo_operacao(novo_modo)
 
-    referer = request.headers.get("referer", "/")
-    return RedirectResponse(url=referer, status_code=303)
+    # Redirecionamento restrito a rotas locais conhecidas (AUD-02)
+    destino = sanitizar_caminho_redirecionamento(request.headers.get("referer"))
+    return RedirectResponse(url=destino, status_code=303)
 
 
 @router.get("/api/demo/status", response_class=JSONResponse)

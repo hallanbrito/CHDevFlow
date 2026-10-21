@@ -29,6 +29,7 @@ class MissionService:
         self.facade = facade or SentinelFacade(caminho_fixture_demo=caminho_demo)
         self.dag_engine = dag_engine or DAGEngine()
         self._modo_operacao = obter_modo_operacao()
+        self.contador_leituras_snapshot: int = 0
 
     def obter_modo_operacao(self) -> str:
         """Retorna o modo de operação ativo (DEMO_OFFLINE ou LIVE_GITHUB)."""
@@ -44,9 +45,13 @@ class MissionService:
     def obter_snapshot_ativo(self) -> tuple[dict[str, Any], str]:
         """Obtém o snapshot de dados conforme o modo ativo.
 
+        Incrementa contador_leituras_snapshot para monitoramento e auditoria (AUD-05).
+
         Returns:
             Tupla (snapshot_dict, origem_dados_str).
         """
+        self.contador_leituras_snapshot += 1
+
         if self._modo_operacao == MODO_LIVE_GITHUB:
             try:
                 snapshot = self.facade.obter_snapshot_ao_vivo()
@@ -59,9 +64,8 @@ class MissionService:
         snapshot = self.facade.obter_snapshot_demo()
         return snapshot, MODO_DEMO_OFFLINE
 
-    def processar_tarefas_brutas(self) -> list[dict[str, Any]]:
-        """Lê o snapshot ativo e normaliza a lista de tarefas para processamento do grafo."""
-        snapshot, _ = self.obter_snapshot_ativo()
+    def normalizar_itens_snapshot(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        """Normaliza as tarefas a partir de um snapshot imutável em memória (AUD-05)."""
         itens = snapshot.get("items", [])
         tarefas_processadas: list[dict[str, Any]] = []
 
@@ -102,10 +106,66 @@ class MissionService:
 
         return tarefas_processadas
 
+    def processar_tarefas_brutas(self) -> list[dict[str, Any]]:
+        """Lê o snapshot ativo e normaliza a lista de tarefas para processamento do grafo."""
+        snapshot, _ = self.obter_snapshot_ativo()
+        return self.normalizar_itens_snapshot(snapshot)
+
+    def construir_visao_operacional_completa(
+        self,
+        snapshot: dict[str, Any] | None = None,
+        origem: str | None = None,
+    ) -> dict[str, Any]:
+        """Gera a visão consolidada a partir de uma ÚNICA leitura de snapshot (AUD-05).
+
+        Garante consistência atômica: grafo, lista de missões e contadores métricos
+        derivam exatamente do mesmo snapshot imutável.
+        """
+        if snapshot is None:
+            snapshot, modo = self.obter_snapshot_ativo()
+        else:
+            modo = origem or self._modo_operacao
+
+        tarefas = self.normalizar_itens_snapshot(snapshot)
+        grafo = self.dag_engine.construir_grafo(tarefas)
+
+        # Enriquecimento atômico das tarefas com o estado do grafo
+        missoes_enriquecidas: list[dict[str, Any]] = []
+        for t in tarefas:
+            task_id = t["id"]
+            no = grafo.nos.get(task_id)
+            missao = dict(t)
+            missao["status_grafo"] = no.status_grafo if no else "PENDENTE"
+            missao["motivo_bloqueio"] = no.motivo_bloqueio if no else None
+            missoes_enriquecidas.append(missao)
+
+        stats = {
+            "total_tarefas": grafo.total_tarefas,
+            "total_elegiveis": grafo.total_elegiveis,
+            "total_bloqueadas": grafo.total_bloqueadas,
+            "total_concluidas": grafo.total_concluidas,
+            "total_ciclos": len(grafo.ciclos_detectados),
+            "total_orfas": len(grafo.dependencias_desconhecidas),
+            "modo_operacao": modo,
+        }
+
+        return {
+            "snapshot": snapshot,
+            "modo_operacao": modo,
+            "tarefas": tarefas,
+            "grafo": grafo,
+            "stats": stats,
+            "missoes": missoes_enriquecidas,
+        }
+
+    def obter_contexto_dashboard(self) -> dict[str, Any]:
+        """Retorna o contexto completo do dashboard garantindo exatamente 1 leitura de snapshot (AUD-05)."""
+        return self.construir_visao_operacional_completa()
+
     def obter_grafo_dag(self) -> ResultadoGrafoDAG:
         """Gera e retorna o Grafo DAG de Dependências estruturado."""
-        tarefas = self.processar_tarefas_brutas()
-        return self.dag_engine.construir_grafo(tarefas)
+        visao = self.construir_visao_operacional_completa()
+        return visao["grafo"]
 
     def listar_missoes(
         self,
@@ -114,31 +174,23 @@ class MissionService:
         termo_busca: str | None = None,
     ) -> list[dict[str, Any]]:
         """Retorna a lista de missões enriquecidas com a classificação do grafo DAG."""
-        grafo = self.obter_grafo_dag()
-        tarefas = self.processar_tarefas_brutas()
+        visao = self.construir_visao_operacional_completa()
+        todas = visao["missoes"]
         resultado: list[dict[str, Any]] = []
 
-        for t in tarefas:
-            task_id = t["id"]
-            no = grafo.nos.get(task_id)
-
-            status_grafo = no.status_grafo if no else "PENDENTE"
-            motivo_bloqueio = no.motivo_bloqueio if no else None
-
+        for m in todas:
+            status_grafo = m["status_grafo"]
             # Filtros
             if filtro_status and filtro_status != "TODOS" and status_grafo != filtro_status:
                 continue
-            if filtro_esteira and filtro_esteira != "TODAS" and t["esteira"].upper() != filtro_esteira.upper():
+            if filtro_esteira and filtro_esteira != "TODAS" and m["esteira"].upper() != filtro_esteira.upper():
                 continue
             if termo_busca:
                 busca = termo_busca.lower()
-                if busca not in t["title"].lower() and busca not in task_id.lower():
+                if busca not in m["title"].lower() and busca not in m["id"].lower():
                     continue
 
-            missao = dict(t)
-            missao["status_grafo"] = status_grafo
-            missao["motivo_bloqueio"] = motivo_bloqueio
-            resultado.append(missao)
+            resultado.append(m)
 
         return resultado
 

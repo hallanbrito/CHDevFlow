@@ -35,24 +35,35 @@ DIRETORIO_TEMPLATES: Path = DIRETORIO_PACOTE / "templates"
 DIRETORIO_STATIC: Path = DIRETORIO_PACOTE / "static"
 DIRETORIO_FIXTURES: Path = DIRETORIO_MODULO_APP / "fixtures"
 
+# Intervalo válido de portas TCP (RFC 793)
+PORTA_MINIMA: int = 1
+PORTA_MAXIMA: int = 65535
+
 # Dados locais
 DIRETORIO_DADOS_PADRAO: Path = Path(os.getenv("CH_CC_DATA_DIR", ".ch_control_center"))
 
 
 def obter_host_configurado() -> str:
-    """Retorna o host configurado, garantindo estritamente que não seja 0.0.0.0."""
-    host = os.getenv("CH_CC_HOST", HOST_PADRAO)
-    if host in ("0.0.0.0", "::", "all"):
-        # Fail-closed de segurança: recusa exposição externa na rede
+    """Retorna exclusivamente '127.0.0.1' para vincular apenas na interface loopback local.
+
+    Conformidade RNF-01 e AUD-01: Qualquer outro endereço fornecido via ambiente
+    (ex: 0.0.0.0, 192.168.1.20, 10.0.0.5, 8.8.8.8, string vazia ou coringas)
+    é categoricamente recusado por fail-closed, forçando estritamente 127.0.0.1.
+    """
+    host = os.getenv("CH_CC_HOST", HOST_PADRAO).strip()
+    if host != HOST_PADRAO:
         return HOST_PADRAO
-    return host
+    return HOST_PADRAO
 
 
 def obter_porta_configurada() -> int:
-    """Retorna a porta configurada para o servidor web local."""
+    """Retorna a porta configurada garantindo o intervalo válido 1–65535 (padrão 8000)."""
     try:
-        return int(os.getenv("CH_CC_PORT", str(PORTA_PADRAO)))
-    except ValueError:
+        porta = int(os.getenv("CH_CC_PORT", str(PORTA_PADRAO)))
+        if PORTA_MINIMA <= porta <= PORTA_MAXIMA:
+            return porta
+        return PORTA_PADRAO
+    except (ValueError, TypeError):
         return PORTA_PADRAO
 
 

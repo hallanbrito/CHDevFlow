@@ -151,3 +151,53 @@ def test_grafo_misto_isolamento_de_anomalias(dag: DAGEngine) -> None:
     assert res.total_concluidas == 1
     assert res.total_elegiveis == 1
     assert res.total_bloqueadas == 3
+
+
+def test_regressao_aud04_sucessora_de_orfa_nao_e_falso_ciclo(dag: DAGEngine) -> None:
+    """AUD-04: A depende de X inexistente; B depende de A.
+
+    Garante que:
+    - A é marcada como BLOQUEADA_ORFA;
+    - B é marcada como BLOQUEADA_POR_DEPENDENCIA (e NÃO falso ciclo);
+    - ciclos_detectados é vazio ([]).
+    """
+    tarefas = [
+        {"id": "A", "title": "Tarefa A (Órfã)", "stage": "BACKLOG", "dependencies": ["X-INEXISTENTE"]},
+        {"id": "B", "title": "Tarefa B (Depende de A)", "stage": "BACKLOG", "dependencies": ["A"]},
+    ]
+    res = dag.construir_grafo(tarefas)
+
+    assert res.total_tarefas == 2
+    assert res.ciclos_detectados == []
+    assert res.nos["A"].status_grafo == STATUS_BLOQUEADA_ORFA
+    assert res.nos["B"].status_grafo == STATUS_BLOQUEADA_DEP
+    assert "A" in res.nos["B"].motivo_bloqueio
+
+
+def test_regressao_aud04_distincao_membro_de_ciclo_e_sucessora(dag: DAGEngine) -> None:
+    """AUD-04: Distingue membro real de ciclo de tarefa apenas bloqueada a jusante do ciclo.
+
+    C1 e C2 dependem mutuamente (ciclo).
+    D depende de C1 (a jusante do ciclo, sem fechar laço).
+
+    Garante que:
+    - C1 e C2 são BLOQUEADA_CICLO;
+    - D é BLOQUEADA_POR_DEPENDENCIA (não é membro de ciclo);
+    - O ciclo reportado contém estritamente os nós membros.
+    """
+    tarefas = [
+        {"id": "C1", "title": "Ciclo 1", "stage": "BACKLOG", "dependencies": ["C2"]},
+        {"id": "C2", "title": "Ciclo 2", "stage": "BACKLOG", "dependencies": ["C1"]},
+        {"id": "D", "title": "Dependente do Ciclo", "stage": "BACKLOG", "dependencies": ["C1"]},
+    ]
+    res = dag.construir_grafo(tarefas)
+
+    assert len(res.ciclos_detectados) == 1
+    membros = res.ciclos_detectados[0]
+    assert "C1" in membros and "C2" in membros
+    assert "D" not in membros
+
+    assert res.nos["C1"].status_grafo == STATUS_BLOQUEADA_CICLO
+    assert res.nos["C2"].status_grafo == STATUS_BLOQUEADA_CICLO
+    assert res.nos["D"].status_grafo == STATUS_BLOQUEADA_DEP
+    assert "C1" in res.nos["D"].motivo_bloqueio

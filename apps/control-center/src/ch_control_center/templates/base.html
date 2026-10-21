@@ -85,12 +85,12 @@
         </div>
 
         <div class="header-right">
-          <!-- Seletor de Perfil de Projeto -->
+          <!-- Seletor de Perfil de Projeto (AUD-03) -->
           <form action="/projetos/alternar" method="POST" style="display: inline-flex; align-items: center; gap: 0.4rem;">
             <label for="select-projeto" style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">PROJETO:</label>
             <select id="select-projeto" name="project_key" onchange="this.form.submit()" style="padding: 0.35rem 0.6rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem; font-weight: 600; cursor: pointer;">
-              <option value="chdevflow" {% if projeto_ativo.project_key == 'chdevflow' %}selected{% endif %}>CHDevFlow (Meta)</option>
-              <option value="hallancraft" {% if projeto_ativo.project_key == 'hallancraft' %}selected{% endif %}>HallanCraft (Piloto)</option>
+              <option value="chdevflow" selected>CHDevFlow (Meta-Governança)</option>
+              <option value="hallancraft" disabled title="Perfil preparatório: Ingestão de dados de jogo reservada para fases futuras (AUD-03)">HallanCraft (PREPARATÓRIO — SEM TROCA DE DADOS)</option>
             </select>
           </form>
 

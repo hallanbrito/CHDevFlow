@@ -99,31 +99,98 @@ def test_api_glossario_estudante(client) -> None:
     assert "mission_digest" in ids
 
 
+def test_cabecalho_csp_presente_e_estrito_aud02(client) -> None:
+    """AUD-02: Comprova que a política Content-Security-Policy (CSP) está ativa e estrita."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    csp = resp.headers.get("content-security-policy", "")
+    assert csp != "", "Cabeçalho Content-Security-Policy ausente"
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert "form-action 'self'" in csp
+
+
 def test_alternar_modo_demo_via_post(client) -> None:
-    """Verifica alternância de modo de demonstração via POST."""
-    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB")
+    """Verifica alternância de modo de demonstração via POST com origem local válida (AUD-02)."""
+    headers_locais = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+    }
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_locais)
     assert resp.status_code == 303
+    assert resp.headers.get("location") == "http://127.0.0.1:8000/missoes" or resp.headers.get("location") == "/missoes"
 
     status_resp = client.get("/api/demo/status")
     assert status_resp.json()["modo_operacao"] == "LIVE_GITHUB"
 
     # Alterna de volta para demo
-    client.post("/demo/alternar", data="modo=DEMO_OFFLINE")
+    client.post("/demo/alternar", data="modo=DEMO_OFFLINE", headers=headers_locais)
     status_resp2 = client.get("/api/demo/status")
     assert status_resp2.json()["modo_operacao"] == "DEMO_OFFLINE"
 
 
-def test_alternar_projeto_ativo_via_post(client) -> None:
-    """Verifica alternância de perfil de projeto via POST."""
-    resp = client.post("/projetos/alternar", data="project_key=hallancraft")
+def test_bloqueio_post_com_origin_externo_aud02(client) -> None:
+    """AUD-02: Rejeita POST originado de domínio externo (403 Forbidden)."""
+    headers_maliciosos = {"Origin": "https://attacker.site"}
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_maliciosos)
+    assert resp.status_code == 403
+
+
+def test_bloqueio_post_com_referer_externo_aud02(client) -> None:
+    """AUD-02: Rejeita POST cujo Referer aponta para domínio externo (403 Forbidden)."""
+    headers_maliciosos = {"Referer": "https://phishing.site/fake-page"}
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_maliciosos)
+    assert resp.status_code == 403
+
+
+def test_bloqueio_post_sem_origem_nem_csrf_aud02(client) -> None:
+    """AUD-02: Rejeita POST sem nenhum cabeçalho de origem ou token CSRF (403 Forbidden)."""
+    resp = client.post("/demo/alternar", data="modo=LIVE_GITHUB")
+    assert resp.status_code == 403
+
+
+def test_redirecionamento_seguro_e_sanitizado_aud02(client) -> None:
+    """AUD-02: Valida redirecionamento local e sanitização contra open-redirect."""
+    headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/grafo"}
+    resp_valido = client.post("/demo/alternar", data="modo=LIVE_GITHUB", headers=headers_local)
+    assert resp_valido.status_code == 303
+    assert "/grafo" in resp_valido.headers.get("location", "")
+
+    # Se referer for rota desconhecida, sanitiza seguramente para '/'
+    headers_desconhecido = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/rota_inexistente_hacker"}
+    resp_sanitizado = client.post("/demo/alternar", data="modo=DEMO_OFFLINE", headers=headers_desconhecido)
+    assert resp_sanitizado.status_code == 303
+    assert resp_sanitizado.headers.get("location") == "/"
+
+
+def test_alternar_projeto_ativo_via_post_aud03(client) -> None:
+    """AUD-03: Alternância para HallanCraft preserva CHDevFlow para evitar divergência de dados."""
+    headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/"}
+    resp = client.post("/projetos/alternar", data="project_key=hallancraft", headers=headers_local)
     assert resp.status_code == 303
 
     proj_resp = client.get("/api/projetos/ativo")
-    assert proj_resp.json()["project_key"] == "hallancraft"
+    # Perfil ativo permanece CHDevFlow na CC-01
+    assert proj_resp.json()["project_key"] == "chdevflow"
+
+
+def test_snapshot_consistente_contador_chamadas_aud05(client) -> None:
+    """AUD-05: Garante exatamente 1 leitura de snapshot por operação composta do dashboard."""
+    from ch_control_center.dependencies import get_mission_service
+
+    svc = get_mission_service()
+    antes = svc.contador_leituras_snapshot
+
+    resp = client.get("/")
+    assert resp.status_code == 200
+
+    depois = svc.contador_leituras_snapshot
+    assert depois - antes == 1, f"Esperado exatamente 1 leitura de snapshot, ocorreram {depois - antes}"
 
 
 def test_ausencia_de_rotas_mutativas_executivas(client) -> None:
     """Garante que não existem endpoints que disparem robôs ou modifiquem o código."""
+    headers_local = {"Origin": "http://127.0.0.1:8000", "Referer": "http://127.0.0.1:8000/"}
     for rota in ["/executar", "/api/dispatch", "/api/agentes/iniciar", "/admin/deploy"]:
-        resp = client.post(rota)
+        resp = client.post(rota, headers=headers_local)
         assert resp.status_code in (404, 405)

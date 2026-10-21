@@ -22,8 +22,10 @@ async def dashboard_view(
 ) -> HTMLResponse:
     """Exibe o dashboard de supervisão consolidado com métricas do grafo DAG."""
     try:
-        stats = mission_service.obter_resumo_estatisticas()
-        missoes = mission_service.listar_missoes()
+        # AUD-05: Única leitura atômica de snapshot para todo o contexto do dashboard
+        contexto_op = mission_service.obter_contexto_dashboard()
+        stats = contexto_op["stats"]
+        missoes = contexto_op["missoes"]
     except Exception as exc:
         # Modo fail-closed informativo em caso de falha de conexão remota no modo ao vivo
         stats = {

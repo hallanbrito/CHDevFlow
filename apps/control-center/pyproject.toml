@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ch-control-center"
-version = "0.1.0"
+version = "0.2.0"
 description = "Painel web local de supervisão e visualização do CHDevFlow Control Center (MVP v0.2 / CC-01)"
 readme = "README.md"
 requires-python = ">=3.12"

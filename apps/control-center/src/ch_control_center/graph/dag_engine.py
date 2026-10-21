@@ -176,6 +176,9 @@ class DAGEngine:
         if nos_nao_ordenados:
             ciclos_detectados = self._identificar_ciclos_dfs(nos, nos_nao_ordenados)
 
+        # AUD-04: Coleta estrita dos nós que efetivamente são membros de ciclos detectados
+        nos_em_ciclos: set[str] = {no_id for ciclo in ciclos_detectados for no_id in ciclo}
+
         # 6. Atualização final de status e motivos de bloqueio
         for task_id, no in nos.items():
             if no.status_grafo == STATUS_CONCLUIDA:
@@ -185,7 +188,7 @@ class DAGEngine:
                 no.status_grafo = STATUS_BLOQUEADA_ORFA
                 faltantes = ", ".join(dependencias_desconhecidas[task_id])
                 no.motivo_bloqueio = f"Dependência(s) ausente(s) ou não concluída(s): {faltantes}"
-            elif task_id in nos_nao_ordenados or any(task_id in ciclo for ciclo in ciclos_detectados):
+            elif task_id in nos_em_ciclos:
                 no.status_grafo = STATUS_BLOQUEADA_CICLO
                 no.motivo_bloqueio = "Ciclo de dependência circular detectado!"
             elif task_id in nos_elegiveis_iniciais:
