@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — CHDevFlow Control Center{% endblock %}
+{% block page_title %}Dashboard de Supervisão{% endblock %}
+
+{% block content %}
+<!-- Grid de Contadores Principais -->
+<div class="stats-grid">
+  <div class="stat-card">
+    <span class="stat-title">Total de Fatias W</span>
+    <span class="stat-value">{{ stats.total_tarefas }}</span>
+    <span class="stat-desc">Observadas no GitHub Project</span>
+  </div>
+
+  <div class="stat-card" style="border-left: 4px solid var(--status-elegivel);">
+    <span class="stat-title" style="color: var(--status-elegivel);">Elegíveis (Grafo)</span>
+    <span class="stat-value" style="color: var(--status-elegivel);">{{ stats.total_elegiveis }}</span>
+    <span class="stat-desc">Pré-requisitos concluídos</span>
+  </div>
+
+  <div class="stat-card" style="border-left: 4px solid var(--status-bloqueada);">
+    <span class="stat-title" style="color: var(--status-bloqueada);">Bloqueadas</span>
+    <span class="stat-value" style="color: var(--status-bloqueada);">{{ stats.total_bloqueadas }}</span>
+    <span class="stat-desc">Dependências pendentes</span>
+  </div>
+
+  <div class="stat-card" style="border-left: 4px solid var(--status-concluida);">
+    <span class="stat-title" style="color: var(--status-concluida);">Concluídas</span>
+    <span class="stat-value" style="color: var(--status-concluida);">{{ stats.total_concluidas }}</span>
+    <span class="stat-desc">Integradas na branch main</span>
+  </div>
+
+  <div class="stat-card" style="border-left: 4px solid {% if stats.total_ciclos > 0 %}var(--status-ciclo){% else %}var(--border-color){% endif %};">
+    <span class="stat-title" style="color: {% if stats.total_ciclos > 0 %}var(--status-ciclo){% else %}var(--text-muted){% endif %};">Ciclos Detectados</span>
+    <span class="stat-value" style="color: {% if stats.total_ciclos > 0 %}var(--status-ciclo){% else %}var(--text-muted){% endif %};">{{ stats.total_ciclos }}</span>
+    <span class="stat-desc">Anomalias de circularidade</span>
+  </div>
+
+  <div class="stat-card" style="border-left: 4px solid {% if stats.total_orfas > 0 %}var(--status-orfa){% else %}var(--border-color){% endif %};">
+    <span class="stat-title" style="color: {% if stats.total_orfas > 0 %}var(--status-orfa){% else %}var(--text-muted){% endif %};">Dependências Órfãs</span>
+    <span class="stat-value" style="color: {% if stats.total_orfas > 0 %}var(--status-orfa){% else %}var(--text-muted){% endif %};">{{ stats.total_orfas }}</span>
+    <span class="stat-desc">Tarefas não localizadas</span>
+  </div>
+</div>
+
+<!-- Pílula Didática do Modo Estudante (Destaque) -->
+<div class="student-hint-card">
+  <div class="student-hint-title">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="12" cy="12" r="10"></circle>
+      <line x1="12" y1="16" x2="12" y2="12"></line>
+      <line x1="12" y1="8" x2="12.01" y2="8"></line>
+    </svg>
+    Pílula Didática: O que significa uma tarefa ser "Elegível" no Grafo?
+  </div>
+  <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+    Estar <strong>Elegível</strong> no grafo significa apenas que todas as tarefas predecessoras foram concluídas com sucesso na branch <code>main</code> (grau de entrada zero).
+    <strong>Importante:</strong> Isso NÃO significa que a tarefa tem autorização para ser executada por robôs!
+    Pelo Método C.H., a execução de qualquer ferramenta exige o consentimento explícito e formal de Hallan através de um contrato de autorização assinado.
+  </p>
+  <a href="/estudante" class="btn btn-sm" style="display: inline-flex;">Explorar Glossário Completo →</a>
+</div>
+
+<!-- Tabela de Missões Recentes -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Fatias W Observadas (Central de Missões)</span>
+    <a href="/missoes" class="btn btn-sm">Ver Todas as Missões</a>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID / Issue</th>
+          <th>Título da Fatia W</th>
+          <th>Etapa CH</th>
+          <th>Esteira</th>
+          <th>Status no Grafo</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in missoes[:8] %}
+        <tr>
+          <td>
+            <strong>{{ m.id }}</strong>
+            {% if m.number %}
+              <span style="font-size: 0.75rem; color: var(--text-muted);">#{{ m.number }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <div style="font-weight: 500; color: var(--text-primary);">{{ m.title }}</div>
+            {% if m.motivo_bloqueio %}
+              <div style="font-size: 0.7rem; color: var(--status-ciclo); margin-top: 0.2rem;">
+                ⚠️ {{ m.motivo_bloqueio }}
+              </div>
+            {% endif %}
+          </td>
+          <td>
+            <span style="font-size: 0.75rem; font-weight: 600;">{{ m.stage }}</span>
+          </td>
+          <td>
+            <span style="font-size: 0.75rem; font-weight: 600;">{{ m.esteira }}</span>
+          </td>
+          <td>
+            {% if m.status_grafo == 'CONCLUIDA' %}
+              <span class="badge-status badge-concluida">✓ CONCLUÍDA</span>
+            {% elif m.status_grafo == 'ELEGIVEL' %}
+              <span class="badge-status badge-elegivel">● ELEGÍVEL</span>
+            {% elif m.status_grafo == 'BLOQUEADA_CICLO' %}
+              <span class="badge-status badge-ciclo">⛔ CICLO DETECTADO</span>
+            {% elif m.status_grafo == 'BLOQUEADA_ORFA' %}
+              <span class="badge-status badge-orfa">❓ DEP. AUSENTE</span>
+            {% else %}
+              <span class="badge-status badge-bloqueada">⏳ BLOQUEADA</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="/missoes?detalhe={{ m.id }}" class="btn btn-sm">Inspecionar</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

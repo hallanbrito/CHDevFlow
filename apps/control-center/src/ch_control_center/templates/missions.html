@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+
+{% block title %}Missões — CHDevFlow Control Center{% endblock %}
+{% block page_title %}Central de Missões e Fatias W{% endblock %}
+
+{% block content %}
+<!-- Barra de Filtros e Busca -->
+<div class="card" style="margin-bottom: 1.25rem; padding: 1rem;">
+  <form action="/missoes" method="GET" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+    <div style="flex: 1; min-width: 220px;">
+      <label for="busca" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">BUSCAR POR TÍTULO OU ID:</label>
+      <input type="text" id="busca" name="busca" value="{{ filtro_busca or '' }}" placeholder="Ex: W-01, Sentinela, Grafo..." style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;">
+    </div>
+
+    <div>
+      <label for="status" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">STATUS DO GRAFO:</label>
+      <select id="status" name="status" style="padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;">
+        <option value="TODOS" {% if filtro_status == 'TODOS' %}selected{% endif %}>Todos os Status</option>
+        <option value="ELEGIVEL" {% if filtro_status == 'ELEGIVEL' %}selected{% endif %}>Elegíveis (Desbloqueadas)</option>
+        <option value="BLOQUEADA_POR_DEPENDENCIA" {% if filtro_status == 'BLOQUEADA_POR_DEPENDENCIA' %}selected{% endif %}>Bloqueadas por Dependência</option>
+        <option value="BLOQUEADA_CICLO" {% if filtro_status == 'BLOQUEADA_CICLO' %}selected{% endif %}>Ciclos Detectados</option>
+        <option value="BLOQUEADA_ORFA" {% if filtro_status == 'BLOQUEADA_ORFA' %}selected{% endif %}>Dependências Órfãs</option>
+        <option value="CONCLUIDA" {% if filtro_status == 'CONCLUIDA' %}selected{% endif %}>Concluídas</option>
+      </select>
+    </div>
+
+    <div>
+      <label for="esteira" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">ESTEIRA:</label>
+      <select id="esteira" name="esteira" style="padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;">
+        <option value="TODAS" {% if filtro_esteira == 'TODAS' %}selected{% endif %}>Todas as Esteiras</option>
+        <option value="AGY" {% if filtro_esteira == 'AGY' %}selected{% endif %}>AGY (Visual / UX / Docs)</option>
+        <option value="CODEX" {% if filtro_esteira == 'CODEX' %}selected{% endif %}>Codex (Código / Testes)</option>
+        <option value="CHATGPT" {% if filtro_esteira == 'CHATGPT' %}selected{% endif %}>ChatGPT (Governança)</option>
+      </select>
+    </div>
+
+    <div style="display: flex; gap: 0.5rem;">
+      <button type="submit" class="btn btn-primary">Filtrar</button>
+      <a href="/missoes" class="btn">Limpar</a>
+    </div>
+  </form>
+</div>
+
+<!-- Tabela Completa de Missões -->
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Missões Encontradas ({{ missoes|length }})</span>
+    <span style="font-size: 0.75rem; color: var(--text-muted);">Origem: {{ modo_operacao }}</span>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>ID / Issue</th>
+          <th>Título e Escopo</th>
+          <th>Etapa CH</th>
+          <th>Esteira</th>
+          <th>Autonomia</th>
+          <th>Dependências</th>
+          <th>Status no Grafo</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in missoes %}
+        <tr>
+          <td>
+            <strong>{{ m.id }}</strong>
+            {% if m.number %}
+              <div style="font-size: 0.7rem; color: var(--text-muted);">Issue #{{ m.number }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <div style="font-weight: 600; color: var(--text-primary);">{{ m.title }}</div>
+            <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem;">
+              Repo: <code>{{ m.repository }}</code>
+            </div>
+            {% if m.motivo_bloqueio %}
+              <div style="font-size: 0.7rem; color: var(--status-ciclo); margin-top: 0.25rem;">
+                ⚠️ {{ m.motivo_bloqueio }}
+              </div>
+            {% endif %}
+          </td>
+          <td>
+            <span style="font-size: 0.75rem; font-weight: 600;">{{ m.stage }}</span>
+          </td>
+          <td>
+            <span style="font-size: 0.75rem; font-weight: 600;">{{ m.esteira }}</span>
+          </td>
+          <td>
+            <span style="font-size: 0.75rem; font-weight: 600;">{{ m.autonomia }}</span>
+          </td>
+          <td>
+            {% if m.dependencies %}
+              <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
+                {% for d in m.dependencies %}
+                  <span style="font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 4px; background: var(--bg-primary); border: 1px solid var(--border-color); font-weight: 600;">{{ d }}</span>
+                {% endfor %}
+              </div>
+            {% else %}
+              <span style="font-size: 0.7rem; color: var(--text-muted);">Nenhuma (Raiz)</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if m.status_grafo == 'CONCLUIDA' %}
+              <span class="badge-status badge-concluida">✓ CONCLUÍDA</span>
+            {% elif m.status_grafo == 'ELEGIVEL' %}
+              <span class="badge-status badge-elegivel">● ELEGÍVEL</span>
+            {% elif m.status_grafo == 'BLOQUEADA_CICLO' %}
+              <span class="badge-status badge-ciclo">⛔ CICLO DETECTADO</span>
+            {% elif m.status_grafo == 'BLOQUEADA_ORFA' %}
+              <span class="badge-status badge-orfa">❓ DEP. AUSENTE</span>
+            {% else %}
+              <span class="badge-status badge-bloqueada">⏳ BLOQUEADA</span>
+            {% endif %}
+          </td>
+          <td>
+            <button type="button" class="btn btn-sm" onclick="abrirModal('modal-{{ loop.index }}')">Inspecionar</button>
+
+            <!-- Modal de Detalhes da Missão -->
+            <div id="modal-{{ loop.index }}" class="modal-overlay">
+              <div class="modal-content">
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
+                  <div>
+                    <h3 style="font-size: 1.1rem; font-weight: 700;">{{ m.id }}: {{ m.title }}</h3>
+                    <span style="font-size: 0.75rem; color: var(--text-muted);">Etapa CH: {{ m.stage }} • Esteira: {{ m.esteira }} • Autonomia: {{ m.autonomia }}</span>
+                  </div>
+                  <button type="button" class="btn btn-sm" onclick="fecharModal('modal-{{ loop.index }}')">✕</button>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 0.75rem; font-size: 0.85rem;">
+                  <div>
+                    <strong>Status no Grafo:</strong>
+                    {% if m.status_grafo == 'CONCLUIDA' %}
+                      <span class="badge-status badge-concluida">CONCLUÍDA</span>
+                    {% elif m.status_grafo == 'ELEGIVEL' %}
+                      <span class="badge-status badge-elegivel">ELEGÍVEL (SEM BLOQUEIOS)</span>
+                    {% elif m.status_grafo == 'BLOQUEADA_CICLO' %}
+                      <span class="badge-status badge-ciclo">CICLO DETECTADO</span>
+                    {% elif m.status_grafo == 'BLOQUEADA_ORFA' %}
+                      <span class="badge-status badge-orfa">DEPENDÊNCIA AUSENTE</span>
+                    {% else %}
+                      <span class="badge-status badge-bloqueada">BLOQUEADA POR DEPENDÊNCIA</span>
+                    {% endif %}
+                  </div>
+
+                  {% if m.motivo_bloqueio %}
+                  <div style="background-color: var(--status-ciclo-bg); border-left: 4px solid var(--status-ciclo); padding: 0.75rem; border-radius: 4px; color: var(--text-primary);">
+                    <strong>Motivo do Bloqueio:</strong> {{ m.motivo_bloqueio }}
+                  </div>
+                  {% endif %}
+
+                  <div>
+                    <strong>Repositório Alvo:</strong> <code>{{ m.repository }}</code>
+                  </div>
+
+                  {% if m.number %}
+                  <div>
+                    <strong>Link Canônico GitHub:</strong> <a href="{{ m.url }}" target="_blank" style="color: #2563eb;">Issue #{{ m.number }} (Abrir no GitHub)</a>
+                  </div>
+                  {% endif %}
+
+                  <div>
+                    <strong>Dependências Diretas:</strong>
+                    {% if m.dependencies %}
+                      <ul style="margin-left: 1.5rem; margin-top: 0.25rem;">
+                        {% for dep in m.dependencies %}
+                          <li><code>{{ dep }}</code></li>
+                        {% endfor %}
+                      </ul>
+                    {% else %}
+                      <span>Nenhuma dependência declarada (Nó Raiz).</span>
+                    {% endif %}
+                  </div>
+
+                  <div style="background-color: var(--bg-primary); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); margin-top: 0.5rem;">
+                    <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Aviso de Governança CH-1 (Somente Leitura):</div>
+                    <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.2rem;">
+                      Na fatia CC-01, este painel opera exclusivamente em modo leitura. Nenhum botão de despacho ou execução está disponível até a homologação da fatia CC-02 pelo PO.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

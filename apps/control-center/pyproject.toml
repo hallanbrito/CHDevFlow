@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ch-control-center"
+version = "0.1.0"
+description = "Painel web local de supervisão e visualização do CHDevFlow Control Center (MVP v0.2 / CC-01)"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Hallan (Product Owner)" },
+    { name = "Google Antigravity (AGY)" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.28.0",
+    "jinja2>=3.1.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+ch-control-center = "ch_control_center.__main__:main"
