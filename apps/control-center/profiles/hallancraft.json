@@ -1,0 +1,18 @@
+{
+  "schema": "chdevflow.control-center.project-profile/0.1",
+  "project_key": "hallancraft",
+  "display_name": "HallanCraft (PREPARATÓRIO — SEM TROCA DE DADOS)",
+  "status": "PREPARATORIO",
+  "data_ingestion_enabled": false,
+  "repository": "hallanbrito/HallanCraft",
+  "project_number": 2,
+  "default_branch": "main",
+  "autonomy_level": "CH-0",
+  "description": "Piloto de produto do servidor Minecraft. Proteção inegociável de saves e produção (Decisão D04).",
+  "security_policy": {
+    "prohibited_patterns": ["**/worlds/**", "**/saves/**", "**/.env*", "**/server.properties", "**/secrets/**"],
+    "allowed_paths_default": ["docs/**"],
+    "enforce_zero_cost": true,
+    "max_duration_seconds": 900
+  }
+}

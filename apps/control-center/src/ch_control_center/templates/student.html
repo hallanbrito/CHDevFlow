@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+
+{% block title %}Modo Estudante Didático — CHDevFlow Control Center{% endblock %}
+{% block page_title %}Modo Estudante Didático (Método C.H. & Governança){% endblock %}
+
+{% block content %}
+<!-- Banner Introdutório do Modo Estudante -->
+<div class="card" style="margin-bottom: 1.5rem; border-left: 4px solid var(--accent-color);">
+  <div class="card-header">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+      </svg>
+      <div>
+        <h2 style="font-size: 1.15rem; font-weight: 600; margin: 0;">Aprenda a Arquitetura por Trás do Control Center</h2>
+        <span style="font-size: 0.8rem; color: var(--text-muted);">
+          Conformidade com ADR-BOOT01-01 e aprovação formal do PO na ADR-CC02-03
+        </span>
+      </div>
+    </div>
+  </div>
+  <div style="padding: 1rem 1.25rem; font-size: 0.9rem; color: var(--text-secondary); line-height: 1.6;">
+    <p style="margin-bottom: 0.5rem;">
+      O <strong>Modo Estudante</strong> foi desenhado para que desenvolvedores, estudantes e auditores compreendam
+      exatamente como o <strong>Método C.H.</strong> combina autonomia de agentes de inteligência artificial com
+      governança humana rigorosa, segurança criptográfica e isolamento local.
+    </p>
+    <p style="margin: 0;">
+      Nesta página, você encontra a explicação didática dos estados da máquina de governança, o glossário dos principais
+      termos da metodologia e as cinco invariantes que protegem o computador do desenvolvedor e garantem custo zero em APIs.
+    </p>
+  </div>
+</div>
+
+<!-- Seção: Ciclo de Vida da Máquina de Estados -->
+<div class="card" style="margin-bottom: 1.5rem;">
+  <div class="card-header">
+    <span class="card-title">1. Ciclo de Vida dos Estados da Máquina de Governança</span>
+    <span class="badge" style="background: rgba(13, 148, 136, 0.15); color: var(--status-elegivel);">Auditoria e Rastreabilidade</span>
+  </div>
+  <div style="padding: 1rem 1.25rem;">
+    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+      Cada Fatia W passa por estados estritos e verificáveis. Se qualquer validação falhar, o sistema entra em
+      <code>BLOCKED</code> (princípio Fail-Closed).
+    </p>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem;">
+      {% for estado, info in estados_maquina.items() %}
+      <div style="border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; background: var(--bg-surface);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+          <span class="badge" style="background: var(--bg-primary); border: 1px solid var(--border-color); font-size: 0.75rem;">
+            {{ estado }}
+          </span>
+          <span style="font-size: 0.75rem; color: var(--accent-color); font-weight: 600;">Etapa Segura</span>
+        </div>
+        <div style="font-weight: 600; color: var(--text-primary); font-size: 0.95rem; margin-bottom: 0.4rem;">
+          {{ info.titulo }}
+        </div>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.5rem; line-height: 1.4;">
+          <strong>O que significa:</strong> {{ info.o_que_significa }}
+        </p>
+        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.4rem;">
+          <strong>Ação do Sistema:</strong> {{ info.acao_do_sistema }}
+        </p>
+        <div style="font-size: 0.75rem; color: var(--status-concluida); background: rgba(34, 197, 94, 0.1); padding: 0.35rem 0.6rem; border-radius: 4px;">
+          🛡️ <strong>Por que é seguro:</strong> {{ info.por_que_seguro }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- Seção: As 5 Invariantes Canônicas -->
+<div class="card" style="margin-bottom: 1.5rem;">
+  <div class="card-header">
+    <span class="card-title">2. As 5 Invariantes Canônicas do Método C.H.</span>
+    <span class="badge" style="background: rgba(239, 68, 68, 0.15); color: var(--status-ciclo);">Regras Inegociáveis</span>
+  </div>
+  <div style="padding: 1rem 1.25rem;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
+      <div style="border-left: 3px solid var(--status-ciclo); padding-left: 0.75rem;">
+        <h4 style="font-size: 0.9rem; margin-bottom: 0.3rem; color: var(--text-primary);">1. Fail-Closed Estrito</h4>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
+          Qualquer anomalia, ciclo, dependência órfã, token ausente ou arquivo inválido bloqueia a operação imediatamente. O sistema nunca adivinha intenções humanas.
+        </p>
+        <span style="font-size: 0.7rem; color: var(--text-muted);">Decisão D06</span>
+      </div>
+
+      <div style="border-left: 3px solid var(--accent-color); padding-left: 0.75rem;">
+        <h4 style="font-size: 0.9rem; margin-bottom: 0.3rem; color: var(--text-primary);">2. Custo R$ 0,00</h4>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
+          O Control Center e a Sentinela executam localmente no CachyOS. Zero consumo de APIs de IA comerciais faturáveis nesta etapa.
+        </p>
+        <span style="font-size: 0.7rem; color: var(--text-muted);">Decisão D01</span>
+      </div>
+
+      <div style="border-left: 3px solid var(--status-elegivel); padding-left: 0.75rem;">
+        <h4 style="font-size: 0.9rem; margin-bottom: 0.3rem; color: var(--text-primary);">3. Isolamento via Worktree</h4>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
+          Nenhum código é desenvolvido diretamente na branch <code>main</code>. Cada fatia roda em diretório e branch próprios e limpos.
+        </p>
+        <span style="font-size: 0.7rem; color: var(--text-muted);">Decisão D07</span>
+      </div>
+
+      <div style="border-left: 3px solid var(--status-orfa); padding-left: 0.75rem;">
+        <h4 style="font-size: 0.9rem; margin-bottom: 0.3rem; color: var(--text-primary);">4. Concorrência Máxima = 1</h4>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
+          Apenas uma tarefa pode executar no host físico por vez. Evita contenção de memória, conflitos de portas e condições de corrida.
+        </p>
+        <span style="font-size: 0.7rem; color: var(--text-muted);">Decisão D06</span>
+      </div>
+
+      <div style="border-left: 3px solid #8b5cf6; padding-left: 0.75rem;">
+        <h4 style="font-size: 0.9rem; margin-bottom: 0.3rem; color: var(--text-primary);">5. Portão do Product Owner</h4>
+        <p style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.4;">
+          Agentes de IA jamais se autoaprovam. A execução real exige consentimento externo verificável do PO vinculado ao digest SHA-256.
+        </p>
+        <span style="font-size: 0.7rem; color: var(--text-muted);">ADR-CC02-02</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Seção: Glossário Técnico Didático -->
+<div class="card">
+  <div class="card-header">
+    <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+      <div>
+        <span class="card-title">3. Glossário Contextual do Método C.H.</span>
+        <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: 0.5rem;">
+          ({{ termos|length }} conceitos fundamentais documentados)
+        </span>
+      </div>
+    </div>
+  </div>
+  <div style="padding: 1.25rem;">
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.25rem;">
+      {% for termo_id, termo in termos.items() %}
+      <div class="glossary-card" style="border: 1px solid var(--border-color); border-radius: 8px; padding: 1.25rem; background: var(--bg-surface);">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.5rem;">
+          <h3 style="font-size: 1rem; font-weight: 600; color: var(--text-primary); margin: 0;">
+            {{ termo.termo }}
+          </h3>
+          <span class="badge" style="font-size: 0.7rem; background: rgba(59, 130, 246, 0.15); color: var(--accent-color);">
+            {{ termo.categoria }}
+          </span>
+        </div>
+
+        <div style="font-size: 0.85rem; font-weight: 500; color: var(--accent-color); margin-bottom: 0.75rem;">
+          "{{ termo.resumo_curto }}"
+        </div>
+
+        <div style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 0.75rem;">
+          {{ termo.explicacao_didatica }}
+        </div>
+
+        <div style="background: var(--bg-primary); padding: 0.6rem 0.75rem; border-radius: 6px; font-size: 0.8rem; color: var(--text-primary); margin-bottom: 0.75rem; border-left: 3px solid var(--border-color);">
+          <strong>Exemplo prático:</strong> {{ termo.exemplo_pratico }}
+        </div>
+
+        <div style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.35rem;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+          <strong>Referência canônica:</strong> {{ termo.regra_ou_adr }}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

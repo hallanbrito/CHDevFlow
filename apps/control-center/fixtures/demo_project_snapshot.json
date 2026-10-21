@@ -1,0 +1,203 @@
+{
+  "totalCount": 11,
+  "items": [
+    {
+      "id": "item-w00",
+      "content": {
+        "type": "Issue",
+        "title": "W0 — Kit Fundação do Repositório",
+        "number": 1,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/1",
+        "labels": ["ch:workflow", "ch:chatgpt"]
+      },
+      "status": "Done",
+      "etapa_ch": "HOMOLOGADA",
+      "esteira": "ChatGPT",
+      "executor": "chatgpt",
+      "prioridade": "Alta",
+      "autonomia": "CH-1",
+      "dependencies": []
+    },
+    {
+      "id": "item-w01",
+      "content": {
+        "type": "Issue",
+        "title": "W1 — Provisionamento do Kanban GitHub Project #2",
+        "number": 2,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/2",
+        "labels": ["ch:workflow", "ch:codex"]
+      },
+      "status": "Done",
+      "etapa_ch": "HOMOLOGADA",
+      "esteira": "Codex",
+      "executor": "codex",
+      "prioridade": "Alta",
+      "autonomia": "CH-2",
+      "dependencies": ["item-w00"]
+    },
+    {
+      "id": "item-w02a",
+      "content": {
+        "type": "Issue",
+        "title": "W2-A — Especificação do Despachante Assistido e Contratos",
+        "number": 8,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/8",
+        "labels": ["ch:workflow", "ch:chatgpt"]
+      },
+      "status": "Done",
+      "etapa_ch": "HOMOLOGADA",
+      "esteira": "ChatGPT",
+      "executor": "chatgpt",
+      "prioridade": "Alta",
+      "autonomia": "CH-1",
+      "dependencies": ["item-w01"]
+    },
+    {
+      "id": "item-boot01",
+      "content": {
+        "type": "Issue",
+        "title": "BOOT-01 — Sentinela Python Bootstrap Engine (AUD-01 e AUD-02)",
+        "number": 24,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/24",
+        "labels": ["ch:workflow", "ch:agy"]
+      },
+      "status": "Done",
+      "etapa_ch": "HOMOLOGADA",
+      "esteira": "AGY",
+      "executor": "agy",
+      "prioridade": "Crítica",
+      "autonomia": "CH-1",
+      "dependencies": ["item-w02a"]
+    },
+    {
+      "id": "item-cc002",
+      "content": {
+        "type": "Issue",
+        "title": "CC-00.2 — Evolução Arquitetural do MVP Control Center v0.2",
+        "number": 28,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/28",
+        "labels": ["ch:workflow", "ch:agy"]
+      },
+      "status": "Done",
+      "etapa_ch": "HOMOLOGADA",
+      "esteira": "AGY",
+      "executor": "agy",
+      "prioridade": "Alta",
+      "autonomia": "CH-1",
+      "dependencies": ["item-boot01"]
+    },
+    {
+      "id": "item-cc01",
+      "content": {
+        "type": "Issue",
+        "title": "CC-01 — Fundação e Primeira Interface Funcional Somente Leitura",
+        "number": 29,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/29",
+        "labels": ["ch:workflow", "ch:agy"]
+      },
+      "status": "In Progress",
+      "etapa_ch": "EM_EXECUCAO",
+      "esteira": "AGY",
+      "executor": "agy",
+      "prioridade": "Alta",
+      "autonomia": "CH-2",
+      "dependencies": ["item-cc002"]
+    },
+    {
+      "id": "item-cc02",
+      "content": {
+        "type": "Issue",
+        "title": "CC-02 — Central de Validação, Prévia e Portão de Autorização do PO",
+        "number": 30,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/30",
+        "labels": ["ch:workflow", "ch:agy"]
+      },
+      "status": "Todo",
+      "etapa_ch": "PRONTA",
+      "esteira": "AGY",
+      "executor": "agy",
+      "prioridade": "Média",
+      "autonomia": "CH-2",
+      "dependencies": ["item-cc01"]
+    },
+    {
+      "id": "item-cc03",
+      "content": {
+        "type": "Issue",
+        "title": "CC-03 — Diagnóstico de Ambiente e Compatibilidade do Host CachyOS",
+        "number": 31,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/31",
+        "labels": ["ch:workflow", "ch:codex"]
+      },
+      "status": "Backlog",
+      "etapa_ch": "BACKLOG",
+      "esteira": "Codex",
+      "executor": "codex",
+      "prioridade": "Média",
+      "autonomia": "CH-1",
+      "dependencies": ["item-cc02"]
+    },
+    {
+      "id": "item-ciclo-a",
+      "content": {
+        "type": "Issue",
+        "title": "DEMO-CICLO-A — Demonstração Didática de Dependência Circular A",
+        "number": 901,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/901",
+        "labels": ["ch:workflow", "ch:demo"]
+      },
+      "status": "Blocked",
+      "etapa_ch": "PRONTA",
+      "esteira": "AGY",
+      "executor": "agy",
+      "prioridade": "Baixa",
+      "autonomia": "CH-1",
+      "dependencies": ["item-ciclo-b"]
+    },
+    {
+      "id": "item-ciclo-b",
+      "content": {
+        "type": "Issue",
+        "title": "DEMO-CICLO-B — Demonstração Didática de Dependência Circular B",
+        "number": 902,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/902",
+        "labels": ["ch:workflow", "ch:demo"]
+      },
+      "status": "Blocked",
+      "etapa_ch": "PRONTA",
+      "esteira": "AGY",
+      "executor": "agy",
+      "prioridade": "Baixa",
+      "autonomia": "CH-1",
+      "dependencies": ["item-ciclo-a"]
+    },
+    {
+      "id": "item-orfa",
+      "content": {
+        "type": "Issue",
+        "title": "DEMO-ORFA — Demonstração de Dependência Desconhecida / Órfã",
+        "number": 903,
+        "repository": "hallanbrito/CHDevFlow",
+        "url": "https://github.com/hallanbrito/CHDevFlow/issues/903",
+        "labels": ["ch:workflow", "ch:demo"]
+      },
+      "status": "Blocked",
+      "etapa_ch": "PRONTA",
+      "esteira": "Codex",
+      "executor": "codex",
+      "prioridade": "Baixa",
+      "autonomia": "CH-1",
+      "dependencies": ["item-inexistente-999"]
+    }
+  ]
+}
