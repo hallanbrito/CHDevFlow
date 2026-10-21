@@ -1,15 +1,15 @@
 # Relatório Unificado de Conclusão — RUC/1.0
 
-**Projeto:** CHDevFlow  
-**Missão:** CC-01-IMPL — Implementação do Control Center (Primeira Interface Funcional)  
-**Data:** 21/10/2026  
-**Product Owner:** Hallan  
-**Executor:** Google Antigravity (AGY)  
-**Branch de Trabalho:** `hallan/cc01-fundacao-somente-leitura`  
-**Worktree Isolada:** `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow Control Center/cc01_fundacao_somente_leitura`  
-**Commit SHA:** `63de99d6b93c73b9b6b5cd001985ba578665e73b`  
-**Branch `main`:** Preservada e intacta (`60b849b`) no repositório canônico  
-**Custo Total de IA:** R$ 0,00 (Zero consumo de APIs pagas — Decisão D01)  
+**Projeto:** CHDevFlow
+**Missão:** CC-01-IMPL — Implementação do Control Center (Primeira Interface Funcional)
+**Data:** 21/10/2026
+**Product Owner:** Hallan
+**Executor:** Google Antigravity (AGY)
+**Branch de Trabalho:** `hallan/cc01-fundacao-somente-leitura`
+**Worktree Isolada:** `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow Control Center/cc01_fundacao_somente_leitura`
+**Commit SHA:** `63de99d6b93c73b9b6b5cd001985ba578665e73b`
+**Branch `main`:** Preservada e intacta (`60b849b`) no repositório canônico
+**Custo Total de IA:** R$ 0,00 (Zero consumo de APIs pagas — Decisão D01)
 **Estado Final:** `AGUARDANDO_PO — Homologação Funcional`
 
 ---
@@ -179,15 +179,15 @@ scripts/
 
 ## 5. Salvaguardas Canônicas e Invariantes Verificadas
 
-1. **Decisão D01 (Custo R$ 0,00):**  
+1. **Decisão D01 (Custo R$ 0,00):**
    Nenhum token faturável foi emitido ou consumido. Todo o processamento foi executado de forma 100% local com algoritmos matemáticos e bibliotecas offline.
-2. **Decisão D05 (Inicialização Manual e Sem Polling Contínuo):**  
+2. **Decisão D05 (Inicialização Manual e Sem Polling Contínuo):**
    O Control Center só é executado quando disparado explicitamente pelo PO. Não existem daemons em segundo plano, nem rotinas de polling contínuo consumindo recursos do host ou rate limit da API do GitHub.
-3. **Decisão D06 (Princípio Fail-Closed e Concorrência Máxima = 1):**  
+3. **Decisão D06 (Princípio Fail-Closed e Concorrência Máxima = 1):**
    O motor DAG não tenta adivinhar dados incompletos; qualquer ciclo ou ausência de dependência bloqueia a tarefa com aviso visual claro.
-4. **Decisão D07 (Isolamento em Worktree):**  
+4. **Decisão D07 (Isolamento em Worktree):**
    O repositório principal em `/home/hallan/Projetos/CHDevFlow` permaneceu intacto na branch `main`. Todo o código reside na worktree dedicada.
-5. **Restrição RNF-01 (Segurança de Rede Local 127.0.0.1):**  
+5. **Restrição RNF-01 (Segurança de Rede Local 127.0.0.1):**
    O arquivo `config.py` e o entrypoint `__main__.py` recusam explicitamente qualquer vinculação a `0.0.0.0` ou interfaces de rede externa, impondo loopback estrito. Adicionalmente, cabeçalhos HTTP defensivos (`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `X-Governanca-Modo: SOMENTE_LEITURA`) foram embutidos em todas as respostas.
 
 ---

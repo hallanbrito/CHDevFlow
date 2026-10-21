@@ -8,7 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
 function inicializarTema() {
   const temaSalvo = localStorage.getItem("ch_cc_theme");
   const prefereEscuro = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  
+
   if (temaSalvo === "dark" || (!temaSalvo && prefereEscuro)) {
     document.documentElement.classList.add("dark");
   } else {

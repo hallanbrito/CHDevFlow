@@ -217,4 +217,3 @@ def obter_termo_por_id(termo_id: str) -> dict[str, Any] | None:
 def obter_explicacao_estado(estado: str) -> dict[str, str] | None:
     """Retorna as informações didáticas sobre um estado da máquina de governança."""
     return EXPLICACOES_ESTADOS_MAQUINA.get(estado.upper().strip())
-

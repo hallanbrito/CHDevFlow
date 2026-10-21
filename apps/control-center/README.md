@@ -1,6 +1,6 @@
 # CHDevFlow Control Center — MVP v0.2 (Fatia CC-01)
 
-> **Primeira Interface Funcional de Supervisão e Governança de IA (Modo Somente Leitura)**  
+> **Primeira Interface Funcional de Supervisão e Governança de IA (Modo Somente Leitura)**
 > **Conformidade Canônica:** Decisões D01, D05, D06, D07, RFC-CH-DEVFLOW-001, ADR-CC02-01, ADR-CC02-02, ADR-CC02-03.
 
 ---
