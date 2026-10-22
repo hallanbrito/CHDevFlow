@@ -39,13 +39,13 @@
   <div class="stat-card" style="border-left: 4px solid var(--status-bloqueada);">
     <span class="stat-title" style="color: var(--status-bloqueada);">Bloqueadas</span>
     <span class="stat-value" style="color: var(--status-bloqueada);">{{ stats.total_bloqueadas }}</span>
-    <span class="stat-desc">Dependências pendentes</span>
+    <span class="stat-desc">Dependências ou dados insuficientes</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid var(--status-concluida);">
     <span class="stat-title" style="color: var(--status-concluida);">Concluídas</span>
     <span class="stat-value" style="color: var(--status-concluida);">{{ stats.total_concluidas }}</span>
-    <span class="stat-desc">Integradas na branch main</span>
+    <span class="stat-desc">Etapa de conclusão observada</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid {% if stats.total_ciclos > 0 %}var(--status-ciclo){% else %}var(--border-color){% endif %};">

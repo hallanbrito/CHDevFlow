@@ -27,6 +27,15 @@ Nenhum snapshot privado ou credencial do notebook foi copiado.
 
 - DECLARADO PELO PO: consulta local retornou 17 itens / 0 missões; nomes das
   chaves nativas foram apresentados na conversa.
+- RETESTE VISUAL DO PO no head `14d7ed0`: as capturas
+  `Captura_de_tela_20261022_103101.png` e `Captura_de_tela_20261022_103232.png`
+  mostram LIVE_GITHUB com 17 missões reconhecidas, zero itens fora do filtro,
+  12 com etapa de conclusão observada e 5 bloqueadas por dados insuficientes.
+  O aviso de dependências não informadas permanece nas 17 missões.
+- A captura `image(20261022-133315).png` revelou etiquetas saindo dos cartões
+  do grafo devido aos IDs nativos longos. Ajustados quebra de linha, limites
+  de largura e alinhamento dos cartões; legendas dos contadores agora dizem
+  "Etapa de conclusão observada" e "Dependências ou dados insuficientes".
 - OBSERVADO LOCALMENTE: o normalizador da baseline retorna 0 para os 17 itens
   sintéticos; o corrigido retorna 17, sem modificar o snapshot.
 - Testes locais: **212 aprovados** (68 do painel, 67 da Sentinela, 77 da raiz),
@@ -36,6 +45,10 @@ Nenhum snapshot privado ou credencial do notebook foi copiado.
   dependências inválidas, bloqueios propagados, etapa homologada observada,
   renderização/filtros, erro sanitizado com HTTP 503, projeto vazio legítimo
   e renderização dos 11 cartões da demonstração.
+- Após o ajuste de CSS/legendas: os 68 testes do painel passaram novamente.
+  A tentativa de verificação visual automatizada não pôde ser concluída:
+  o download do Chromium retornou um arquivo inválido. HTML com IDs longos
+  foi renderizado via ASGI, mas não equivale a uma captura de navegador.
 - O CI existente executa somente os testes da raiz. Os testes novos foram
   executados localmente; nenhuma alteração de workflow foi realizada.
 
@@ -58,14 +71,13 @@ Nenhum snapshot privado ou credencial do notebook foi copiado.
 
 ## 6. Limitações e riscos
 
-O reteste com os dados reais dos 17 itens no notebook permanece pendente.
-Reconhecer 17 no caso sintético não garante que todos os itens reais satisfaçam
-o filtro canônico. O Project nativo observado não oferece `dependencies`:
+O reteste real confirmou que os 17 itens observados satisfazem o filtro
+canônico e carregam na listagem/dashboard. O Project observado não oferece `dependencies`:
 o grafo real fica explicitamente parcial até existir uma fonte estruturada
 validada. Resolver essa fonte é trabalho posterior; não ler referências
 genéricas no corpo da Issue como se fossem contratos de dependência.
-Não foi produzida captura de navegador nem alegada validação visual da correção;
-as rotas HTML/JSON foram verificadas offline e o PO fará o reteste visual.
+O reteste do ajuste de layout no navegador do PO permanece pendente; o registro
+das capturas recebidas acima se refere ao head anterior ao ajuste de layout.
 
 ## 7. Segurança, custo e exclusões
 
@@ -87,7 +99,7 @@ e iniciar novamente; nenhum dado remoto precisa ser restaurado.
 
 ## 9. Estado e decisões do PO
 
-Preparado para revisão e reteste em branch isolada / Draft PR. Sem merge.
-Reteste real e decisão de integração são gates posteriores. Não declarar
+Preparado para revisão em branch isolada / Draft PR #31. Sem merge.
+Leitura real confirmada nas capturas do teste acompanhado; reteste de layout e decisão de integração pendentes. Não declarar
 o modo ao vivo integralmente homologado enquanto faltarem o reteste e uma
 fonte verificada das dependências.
