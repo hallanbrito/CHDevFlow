@@ -23,6 +23,7 @@ class NoGrafo:
     esteira: str                 # Codex, AGY, ChatGPT, PO
     autonomia: str               # CH-0, CH-1, CH-2
     dependencias: list[str]      # Lista de IDs das quais esta tarefa depende
+    pendencias_dados: list[str] = field(default_factory=list) # Informações ainda não verificadas
     dependentes: list[str] = field(default_factory=list) # Tarefas que dependem desta
     grau_entrada: int = 0        # Número de dependências não concluídas
     status_grafo: str = "PENDENTE" # ELEGIVEL, BLOQUEADA_POR_DEPENDENCIA, BLOQUEADA_CICLO, BLOQUEADA_ORFA, CONCLUIDA
@@ -73,6 +74,7 @@ STATUS_CONCLUIDA: str = "CONCLUIDA"
 STATUS_BLOQUEADA_DEP: str = "BLOQUEADA_POR_DEPENDENCIA"
 STATUS_BLOQUEADA_CICLO: str = "BLOQUEADA_CICLO"
 STATUS_BLOQUEADA_ORFA: str = "BLOQUEADA_ORFA"
+STATUS_BLOQUEADA_DADOS: str = "BLOQUEADA_DADOS"
 
 ETAPAS_CONCLUIDAS: tuple[str, ...] = ("INTEGRADA", "HOMOLOGADA", "DONE", "CLOSED", "PROD_OK")
 
@@ -116,9 +118,14 @@ class DAGEngine:
                 esteira=esteira,
                 autonomia=autonomia,
                 dependencias=deps,
+                pendencias_dados=list(item.get("pendencias_dados", [])),
             )
+            # Preserva a etapa concluída explicitamente observada no Project.
+            # Dados incompletos continuam sinalizados, mas não reescrevem essa etapa.
             if etapa in ETAPAS_CONCLUIDAS:
                 no.status_grafo = "CONCLUIDA"
+            elif no.pendencias_dados:
+                no.status_grafo = STATUS_BLOQUEADA_DADOS
 
             nos[task_id] = no
 
@@ -151,7 +158,7 @@ class DAGEngine:
         graus_trabalho = {k: v.grau_entrada for k, v in nos.items() if v.status_grafo != STATUS_CONCLUIDA}
         fila_kahn: deque[str] = deque([
             k for k, grau in graus_trabalho.items()
-            if grau == 0 and not dependencias_desconhecidas.get(k)
+            if grau == 0 and not dependencias_desconhecidas.get(k) and not nos[k].pendencias_dados
         ])
         nos_elegiveis_iniciais: set[str] = set(fila_kahn)
 
@@ -166,7 +173,11 @@ class DAGEngine:
             for dependente_id in nos[atual_id].dependentes:
                 if dependente_id in graus_trabalho:
                     graus_trabalho[dependente_id] -= 1
-                    if graus_trabalho[dependente_id] == 0 and not dependencias_desconhecidas.get(dependente_id):
+                    if (
+                        graus_trabalho[dependente_id] == 0
+                        and not dependencias_desconhecidas.get(dependente_id)
+                        and not nos[dependente_id].pendencias_dados
+                    ):
                         fila_kahn.append(dependente_id)
 
         # 5. Classificação dos nós que não puderam ser ordenados (Ciclos)
@@ -184,7 +195,10 @@ class DAGEngine:
             if no.status_grafo == STATUS_CONCLUIDA:
                 continue
 
-            if dependencias_desconhecidas.get(task_id):
+            if no.pendencias_dados:
+                no.status_grafo = STATUS_BLOQUEADA_DADOS
+                no.motivo_bloqueio = "Dados insuficientes: " + "; ".join(no.pendencias_dados)
+            elif dependencias_desconhecidas.get(task_id):
                 no.status_grafo = STATUS_BLOQUEADA_ORFA
                 faltantes = ", ".join(dependencias_desconhecidas[task_id])
                 no.motivo_bloqueio = f"Dependência(s) ausente(s) ou não concluída(s): {faltantes}"

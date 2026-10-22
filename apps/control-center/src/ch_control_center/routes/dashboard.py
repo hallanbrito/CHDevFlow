@@ -23,23 +23,17 @@ async def dashboard_view(
     project_service: ProjectService = Depends(get_project_service),
 ) -> HTMLResponse:
     """Exibe o dashboard de supervisão consolidado com métricas do grafo DAG."""
+    erro_leitura = None
     try:
         # AUD-05: Única leitura atômica de snapshot para todo o contexto do dashboard
         contexto_op = mission_service.obter_contexto_dashboard()
         stats = contexto_op["stats"]
         missoes = contexto_op["missoes"]
     except Exception as exc:
-        # Modo fail-closed informativo em caso de falha de conexão remota no modo ao vivo
-        stats = {
-            "total_tarefas": 0,
-            "total_elegiveis": 0,
-            "total_bloqueadas": 0,
-            "total_concluidas": 0,
-            "total_ciclos": 0,
-            "total_orfas": 0,
-            "modo_operacao": mission_service.obter_modo_operacao(),
-            "erro": str(exc),
-        }
+        # Não apresentar falha como projeto vazio. Sanitizar antes de renderizar;
+        # o autoescape do Jinja protege também contra HTML vindo de mensagens.
+        erro_leitura = mission_service.facade.sanitizar(str(exc))
+        stats = {}
         missoes = []
 
     contexto = {
@@ -48,5 +42,9 @@ async def dashboard_view(
         "modo_operacao": mission_service.obter_modo_operacao(),
         "stats": stats,
         "missoes": missoes,
+        "erro_leitura": erro_leitura,
     }
-    return templates.TemplateResponse(request=request, name="dashboard.html", context=contexto)
+    return templates.TemplateResponse(
+        request=request, name="dashboard.html", context=contexto,
+        status_code=503 if erro_leitura else 200,
+    )

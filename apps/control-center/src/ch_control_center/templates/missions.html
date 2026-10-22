@@ -18,6 +18,7 @@
         <option value="TODOS" {% if filtro_status == 'TODOS' %}selected{% endif %}>Todos os Status</option>
         <option value="ELEGIVEL" {% if filtro_status == 'ELEGIVEL' %}selected{% endif %}>Elegíveis (Desbloqueadas)</option>
         <option value="BLOQUEADA_POR_DEPENDENCIA" {% if filtro_status == 'BLOQUEADA_POR_DEPENDENCIA' %}selected{% endif %}>Bloqueadas por Dependência</option>
+        <option value="BLOQUEADA_DADOS" {% if filtro_status == 'BLOQUEADA_DADOS' %}selected{% endif %}>Dados insuficientes</option>
         <option value="BLOQUEADA_CICLO" {% if filtro_status == 'BLOQUEADA_CICLO' %}selected{% endif %}>Ciclos Detectados</option>
         <option value="BLOQUEADA_ORFA" {% if filtro_status == 'BLOQUEADA_ORFA' %}selected{% endif %}>Dependências Órfãs</option>
         <option value="CONCLUIDA" {% if filtro_status == 'CONCLUIDA' %}selected{% endif %}>Concluídas</option>
@@ -92,7 +93,9 @@
             <span style="font-size: 0.75rem; font-weight: 600;">{{ m.autonomia }}</span>
           </td>
           <td>
-            {% if m.dependencies %}
+            {% if not m.dependencies_informadas %}
+              <span>Não informadas</span>
+            {% elif m.dependencies %}
               <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
                 {% for d in m.dependencies %}
                   <span style="font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 4px; background: var(--bg-primary); border: 1px solid var(--border-color); font-weight: 600;">{{ d }}</span>
@@ -107,6 +110,8 @@
               <span class="badge-status badge-concluida">✓ CONCLUÍDA</span>
             {% elif m.status_grafo == 'ELEGIVEL' %}
               <span class="badge-status badge-elegivel">● ELEGÍVEL</span>
+            {% elif m.status_grafo == 'BLOQUEADA_DADOS' %}
+              <span class="badge-status badge-bloqueada">Dados insuficientes</span>
             {% elif m.status_grafo == 'BLOQUEADA_CICLO' %}
               <span class="badge-status badge-ciclo">⛔ CICLO DETECTADO</span>
             {% elif m.status_grafo == 'BLOQUEADA_ORFA' %}
@@ -136,6 +141,8 @@
                       <span class="badge-status badge-concluida">CONCLUÍDA</span>
                     {% elif m.status_grafo == 'ELEGIVEL' %}
                       <span class="badge-status badge-elegivel">ELEGÍVEL (SEM BLOQUEIOS)</span>
+                    {% elif m.status_grafo == 'BLOQUEADA_DADOS' %}
+                      <span class="badge-status badge-bloqueada">Dados insuficientes</span>
                     {% elif m.status_grafo == 'BLOQUEADA_CICLO' %}
                       <span class="badge-status badge-ciclo">CICLO DETECTADO</span>
                     {% elif m.status_grafo == 'BLOQUEADA_ORFA' %}
@@ -163,7 +170,9 @@
 
                   <div>
                     <strong>Dependências Diretas:</strong>
-                    {% if m.dependencies %}
+                    {% if not m.dependencies_informadas %}
+                      <span>Dependências não informadas ou inválidas; grafo não verificado.</span>
+                    {% elif m.dependencies %}
                       <ul style="margin-left: 1.5rem; margin-top: 0.25rem;">
                         {% for dep in m.dependencies %}
                           <li><code>{{ dep }}</code></li>

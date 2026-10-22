@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ch_sentinela.config import REPOSITORIO_CANONICO
+
 from ch_control_center.adapters.sentinela_adapter import SentinelFacade, SentinelaAdapterErro
 from ch_control_center.config import (
     DIRETORIO_FIXTURES,
@@ -73,12 +75,23 @@ class MissionService:
             if not isinstance(item, dict):
                 continue
 
-            content = item.get("content", {})
-            labels = content.get("labels", []) if isinstance(content, dict) else []
+            content = item.get("content")
+            if not isinstance(content, dict) or content.get("type") != "Issue":
+                continue
+            if content.get("repository") != REPOSITORIO_CANONICO:
+                continue
 
-            # Filtra itens com etiqueta de fluxo
-            is_workflow = any("ch:workflow" in str(lbl).lower() for lbl in labels) or "dependencies" in item
-            if not is_workflow:
+            # gh entrega labels na raiz; a fixture legada usa content.labels.
+            # Uma etiqueta parecida ou um campo dependencies não autorizam inclusão.
+            labels = item.get("labels", content.get("labels", []))
+            if not isinstance(labels, list):
+                continue
+            nomes = {
+                nome.strip().lower()
+                for label in labels
+                if isinstance(nome := label.get("name") if isinstance(label, dict) else label, str)
+            }
+            if "ch:workflow" not in nomes:
                 continue
 
             item_id = str(item.get("id") or f"W-{content.get('number', '0')}")
@@ -86,10 +99,27 @@ class MissionService:
             numero = content.get("number")
             repo = content.get("repository", "hallanbrito/CHDevFlow")
             url = content.get("url", "#")
-            stage = item.get("etapa_ch") or item.get("status") or "BACKLOG"
-            esteira = item.get("esteira") or item.get("executor") or "AGY"
-            autonomia = item.get("autonomia") or "CH-1"
-            deps = item.get("dependencies", [])
+            # Nomes nativos do Project têm espaços. Campos ausentes permanecem
+            # desconhecidos: Status=Done não equivale a homologação pelo PO.
+            stage = item.get("etapa CH") or item.get("etapa_ch")
+            esteira = item.get("esteira") or item.get("executor")
+            autonomia = item.get("autonomia CH") or item.get("autonomia")
+            pendencias_dados = []
+            valores = []
+            for nome, valor in (("Etapa CH", stage), ("Esteira", esteira), ("Autonomia CH", autonomia)):
+                if not isinstance(valor, str) or not valor.strip():
+                    pendencias_dados.append(f"{nome} não informada")
+                    valor = "NAO_INFORMADA"
+                valores.append(valor.strip())
+            stage, esteira, autonomia = valores
+
+            deps_raw = item.get("dependencies")
+            deps_informadas = isinstance(deps_raw, list) and all(
+                isinstance(dep, str) and bool(dep.strip()) for dep in deps_raw
+            )
+            deps = [dep.strip() for dep in deps_raw] if deps_informadas else []
+            if not deps_informadas:
+                pendencias_dados.append("Dependências não informadas ou inválidas")
 
             tarefas_processadas.append({
                 "id": item_id,
@@ -101,6 +131,8 @@ class MissionService:
                 "repository": repo,
                 "url": url,
                 "dependencies": deps,
+                "dependencies_informadas": deps_informadas,
+                "pendencias_dados": pendencias_dados,
                 "raw_item": item,
             })
 
@@ -147,6 +179,9 @@ class MissionService:
             "total_ciclos": len(grafo.ciclos_detectados),
             "total_orfas": len(grafo.dependencias_desconhecidas),
             "modo_operacao": modo,
+            "total_recebidos": len(snapshot.get("items", [])),
+            "total_ignorados": len(snapshot.get("items", [])) - len(tarefas),
+            "total_dados_insuficientes": sum(bool(t["pendencias_dados"]) for t in tarefas),
         }
 
         return {
