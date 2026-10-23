@@ -62,7 +62,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         self.assertTrue(dest1.exists())
         self.assertIn("RUC/1.0", content1)
         self.assertIn("NÃO_VERIFICADO", content1)
-        self.assertIn("AGUARDANDO_PO", content1)
+        self.assertNotIn("AGUARDANDO_PO", content1)
 
         # 2. Com evidência de verify gerada
         manifest = create_manifest_data("RucApp")

@@ -20,6 +20,7 @@ if _SENTINELA_SRC.is_dir() and str(_SENTINELA_SRC) not in sys.path:
     sys.path.insert(0, str(_SENTINELA_SRC))
 
 from chdevflow.cli import main as cli_main
+from chdevflow.core.config import load_manifest
 from chdevflow.core.watch import WatchSecurityError, run_watch
 
 
@@ -46,12 +47,12 @@ class TestCli06WatchAndE2E(unittest.TestCase):
 
     def test_e2e_full_cycle(self) -> None:
         """
-        Ensaio E2E temporário definido no épico CLI-06:
-        1. ch new exemplo --frontend react
+        Ensaio E2E temporário definido no épico CLI-06 e auditoria AUD-CLI:
+        1. ch new exemplo --frontend react (sem package.json -> check local executável ch status)
         2. ch doctor
         3. ch status
-        4. ch verify com check local inofensivo
-        5. ch ruc
+        4. ch verify com check local inofensivo -> exigência code_ver == 0 e PASS real
+        5. ch ruc -> reflete PASS real e APROVADO_TECNICAMENTE
         6. ch watch --once --dry-run
         """
         base = Path(self.test_dir)
@@ -62,12 +63,18 @@ class TestCli06WatchAndE2E(unittest.TestCase):
         exemplo_dir = base / "exemplo"
         self.assertTrue((exemplo_dir / "chdevflow.yaml").exists())
         self.assertTrue((exemplo_dir / "AGENTS.md").exists())
+        self.assertTrue((exemplo_dir / ".gitignore").exists())
+
+        # Garante que npm test NÃO foi configurado sem package.json
+        manifest = load_manifest(exemplo_dir / "chdevflow.yaml")
+        commands = manifest["verification"]["commands"]
+        self.assertNotIn("npm test", commands)
+        self.assertIn("ch status", commands)
 
         # 2. ch doctor
         buf_doc = io.StringIO()
         with patch("sys.stdout", buf_doc):
             code_doc = cli_main(["doctor", "--path", str(exemplo_dir)])
-        # No ambiente local com Git instalado e Node/npm detectados, doctor deve ser saudável
         self.assertEqual(code_doc, 0)
         self.assertIn("CHDevFlow Doctor", buf_doc.getvalue())
 
@@ -78,13 +85,12 @@ class TestCli06WatchAndE2E(unittest.TestCase):
         self.assertEqual(code_st, 0)
         self.assertIn("CHDevFlow — Estado do Projeto: exemplo", buf_st.getvalue())
 
-        # 4. ch verify com check local inofensivo
-        # Manifesto gerado já possui verificação configurada
+        # 4. ch verify com check local inofensivo (ch status)
         buf_ver = io.StringIO()
         with patch("sys.stdout", buf_ver):
             code_ver = cli_main(["verify", "--path", str(exemplo_dir)])
-        # Check pode ser PASS ou NOT_RUN dependendo dos comandos padrão
-        self.assertIn("CHDevFlow Verify", buf_ver.getvalue())
+        self.assertEqual(code_ver, 0)
+        self.assertIn("PASS", buf_ver.getvalue())
 
         # 5. ch ruc
         buf_ruc = io.StringIO()
@@ -93,7 +99,10 @@ class TestCli06WatchAndE2E(unittest.TestCase):
         self.assertEqual(code_ruc, 0)
         ruc_file = exemplo_dir / "docs" / "CH" / "RELATORIO-UNIVERSAL-CH-ULTIMO.md"
         self.assertTrue(ruc_file.exists())
-        self.assertIn("RUC/1.0", ruc_file.read_text(encoding="utf-8"))
+        ruc_text = ruc_file.read_text(encoding="utf-8")
+        self.assertIn("RUC/1.0", ruc_text)
+        self.assertIn("APROVADO_TECNICAMENTE", ruc_text)
+        self.assertIn("PASS", ruc_text)
 
         # 6. ch watch --once --dry-run
         with patch("ch_sentinela.cli.comando_watch", return_value=0):

@@ -113,10 +113,10 @@ class TestCli03DoctorAndAdapters(unittest.TestCase):
         manifest = create_manifest_data("DotnetProject", backend="dotnet", frontend="angular")
         save_manifest(target / "chdevflow.yaml", manifest)
 
-        # Simula dotnet instalado e ng ausente
+        # Simula dotnet instalado com versão requerida 10 e ng ausente
         with patch("shutil.which") as mock_which, \
              patch("chdevflow.adapters.generic.safe_run_command", return_value=(0, "git version 2.44.0", "")), \
-             patch("chdevflow.adapters.dotnet.safe_run_command", return_value=(0, "9.0.100", "")), \
+             patch("chdevflow.adapters.dotnet.safe_run_command", return_value=(0, "10.0.100", "")), \
              patch("chdevflow.adapters.node.safe_run_command", return_value=(0, "v20.0.0", "")):
             def custom_which(name: str):
                 if name in ("git", "dotnet", "node", "npm"):

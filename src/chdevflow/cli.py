@@ -431,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("  • Modo local      : Validações concluídas. Use '--remote' para abrir Draft PR.")
             print("  • Nota de segurança: Nunca realiza merge. Homologação reservada ao PO.")
             print("=" * 60)
-            return 0
+            return 0 if sub["state"] == "AGUARDANDO_PO" else 1
         except Exception as exc:
             print(f"Erro em 'ch submit': {exc}", file=sys.stderr)
             return 1

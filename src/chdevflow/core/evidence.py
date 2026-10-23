@@ -17,14 +17,26 @@ from chdevflow.adapters.base import sanitize_output
 from chdevflow.core.config import load_manifest, ManifestError
 from chdevflow.core.status import check_git_status
 
-FORBIDDEN_MUTABLE_REMOTE = [
-    r"\bgit\s+push\b",
-    r"\bgit\s+merge\b",
-    r"\bgit\s+rebase\b",
-    r"\bnpm\s+publish\b",
-    r"\bmvn\s+deploy\b",
-    r"\bdocker\s+push\b",
-    r"\bcurl\s+.*-X\s*(POST|PUT|DELETE|PATCH)\b",
+# Padrões bloqueados de mutação remota e publicação indevida
+FORBIDDEN_MUTABLE_PATTERNS = [
+    # Git push, merge, rebase (mesmo com flags como -C, --git-dir, etc.)
+    r"\bgit\b.*?\b(push|merge|rebase)\b",
+    # GitHub CLI para mutação remota (PRs, Issues, Releases, Repos)
+    r"\bgh\b.*?\b(pr|issue|release|repo)\b.*?\b(create|edit|close|merge|delete)\b",
+    # curl com payload ou métodos mutáveis (compatível com -d, --data, etc.)
+    r"\bcurl\b.*?(\s|^)(-(?:d|F)\b|--(?:data|data-raw|data-binary|data-urlencode|form)\b|-X\s*(?:POST|PUT|DELETE|PATCH)\b)",
+    # wget com envio de dados
+    r"\bwget\b.*?(\s|^)(--(?:post-data|post-file)\b|--method\s*=\s*(?:POST|PUT|DELETE|PATCH)\b)",
+    # Publicação em registries de pacotes
+    r"\bnpm\b.*?\b(publish|unpublish|deprecate)\b",
+    r"\byarn\b.*?\bpublish\b",
+    r"\bpnpm\b.*?\bpublish\b",
+    r"\bmvn\b.*?\b(deploy|release:perform)\b",
+    r"\bgradle\b.*?\b(publish|uploadArchives)\b",
+    r"\bdocker\b.*?\bpush\b",
+    r"\bpodman\b.*?\bpush\b",
+    r"\bpip\b.*?\bupload\b",
+    r"\btwine\b.*?\bupload\b",
 ]
 
 
@@ -68,16 +80,17 @@ class VerificationEvidence:
 
 def validate_command_safety(cmd_str: str) -> None:
     """Impede execução de comandos mutáveis remotos ou perigosos durante verificação."""
-    for pattern in FORBIDDEN_MUTABLE_REMOTE:
+    for pattern in FORBIDDEN_MUTABLE_PATTERNS:
         if re.search(pattern, cmd_str, re.IGNORECASE):
             raise VerificationSecurityError(
-                f"Comando remoto mutável proibido em 'ch verify': '{cmd_str}'"
+                f"Comando remoto mutável proibido em 'ch verify': '{sanitize_output(cmd_str)}'"
             )
 
 
 def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> CommandResult:
     """Executa um único comando capturando stdout/stderr sanitizados e tempo de execução."""
     validate_command_safety(cmd_str)
+    sanitized_cmd = sanitize_output(cmd_str)
 
     start_time = time.perf_counter()
     try:
@@ -97,7 +110,7 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
         state = "PASS" if proc.returncode == 0 else "FAIL"
 
         return CommandResult(
-            command=cmd_str,
+            command=sanitized_cmd,
             state=state,
             exit_code=proc.returncode,
             duration_seconds=duration,
@@ -107,7 +120,7 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
     except subprocess.TimeoutExpired:
         duration = round(time.perf_counter() - start_time, 3)
         return CommandResult(
-            command=cmd_str,
+            command=sanitized_cmd,
             state="TIMEOUT",
             exit_code=-1,
             duration_seconds=duration,
@@ -117,7 +130,7 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
     except FileNotFoundError:
         duration = round(time.perf_counter() - start_time, 3)
         return CommandResult(
-            command=cmd_str,
+            command=sanitized_cmd,
             state="FAIL",
             exit_code=-2,
             duration_seconds=duration,
@@ -127,7 +140,7 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
     except Exception as exc:
         duration = round(time.perf_counter() - start_time, 3)
         return CommandResult(
-            command=cmd_str,
+            command=sanitized_cmd,
             state="FAIL",
             exit_code=-3,
             duration_seconds=duration,
@@ -217,7 +230,7 @@ def run_verification(
     for i, cmd in enumerate(commands_to_run):
         if has_failure and fail_fast:
             results.append(CommandResult(
-                command=cmd,
+                command=sanitize_output(cmd),
                 state="SKIPPED",
                 exit_code=None,
                 duration_seconds=0.0,

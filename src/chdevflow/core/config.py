@@ -26,7 +26,7 @@ class ManifestError(ValueError):
     pass
 
 
-class ManifestSecurityError(SecurityError if "SecurityError" in globals() else PermissionError):
+class ManifestSecurityError(PermissionError):
     """Erro em caso de detecção de segredo ou credencial no manifesto."""
     pass
 
@@ -101,8 +101,6 @@ def parse_yaml_text(content: str) -> dict[str, Any]:
             val = val.strip()
 
             if not val:
-                # Pode ser início de lista ou início de dict
-                # Verificar próxima linha não vazia
                 next_is_list = False
                 for future in lines[line_num:]:
                     s_fut = future.strip()
@@ -233,43 +231,58 @@ def create_manifest_data(
     backend: str = "none",
     frontend: str = "none",
     database: str = "none",
+    project_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Gera estrutura padrão do manifesto v1 com intenção de stack registrada."""
+    """
+    Gera estrutura padrão do manifesto v1 com intenção de stack registrada.
+    Para projetos que registram apenas intenção sem arquivos de build reais (ex.: package.json),
+    configura um check local executável (ch status), impedindo falhas falsas em ch verify.
+    """
     backend_val = backend.strip().lower()
     frontend_val = frontend.strip().lower()
     database_val = database.strip().lower()
 
     verification_commands: list[str] = []
 
+    # Verifica se existem arquivos reais de build no diretório do projeto
+    has_package_json = bool(project_dir and (project_dir / "package.json").is_file())
+    has_dotnet_proj = bool(project_dir and (list(project_dir.glob("*.csproj")) or list(project_dir.glob("*.sln"))))
+    has_maven_pom = bool(project_dir and (project_dir / "pom.xml").is_file())
+
     stack_data: dict[str, Any] = {}
     if backend_val != "none":
         stack_data["backend"] = {"type": backend_val}
         if backend_val == "dotnet":
             stack_data["backend"]["version"] = "10"
-            verification_commands.extend(["dotnet build", "dotnet test"])
+            if has_dotnet_proj:
+                verification_commands.extend(["dotnet build", "dotnet test"])
         elif backend_val == "python":
             stack_data["backend"]["version"] = "3.12"
-            verification_commands.append("python -m unittest")
+            if project_dir and (project_dir / "tests").is_dir():
+                verification_commands.append("python -m unittest")
         elif backend_val == "java":
             stack_data["backend"]["version"] = "21"
-            verification_commands.append("mvn test")
+            if has_maven_pom:
+                verification_commands.append("mvn test")
 
     if frontend_val != "none":
         stack_data["frontend"] = {"type": frontend_val}
         if frontend_val == "angular":
             stack_data["frontend"]["version"] = "22"
-            verification_commands.append("npm test")
+            if has_package_json:
+                verification_commands.append("npm test")
         elif frontend_val == "react":
             stack_data["frontend"]["version"] = "19"
-            verification_commands.append("npm test")
+            if has_package_json:
+                verification_commands.append("npm test")
 
     if database_val != "none":
         stack_data["database"] = {
             "type": "postgresql" if database_val in ("postgres", "postgresql") else database_val
         }
 
+    # Se não houver arquivos de build reais, define verificação local executável com base na governança C.H.
     if not verification_commands:
-        # Check inofensivo padrão quando nenhuma stack específica é requerida
         verification_commands = ["ch status"]
 
     manifest = {

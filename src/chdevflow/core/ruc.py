@@ -52,46 +52,88 @@ def generate_ruc_text(
 ) -> str:
     """
     Gera o texto do RUC v1.0 a partir de evidências reais observadas no Git e em .ch/evidence.
-    Campos sem prova documental são marcados rigorosamente como NÃO_VERIFICADO.
-    Nunca inventa aprovação humana.
+    Compara estritamente branch e SHA da evidência com o estado atual.
+    Evidência antiga/divergente vira NÃO_VERIFICADO.
+    FAIL permanece estritamente BLOQUEADO, nunca AGUARDANDO_PO.
     """
     target = project_path.resolve()
     git_info = check_git_status(target)
-    evidence = get_latest_evidence(target)
+    raw_evidence = get_latest_evidence(target)
     mod_files = get_modified_files(target)
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    proj_name = evidence.get("project_name") if evidence else target.name
-    branch = git_info["branch"] or "NÃO_VERIFICADO"
-    sha = git_info["commit_sha"] or "NÃO_VERIFICADO"
-    title_str = mission_title or f"Missão em {branch}"
+    proj_name = raw_evidence.get("project_name") if raw_evidence else target.name
+    cur_branch = git_info["branch"] or "NÃO_VERIFICADO"
+    cur_sha = git_info["commit_sha"] or "NÃO_VERIFICADO"
+    title_str = mission_title or f"Missão em {cur_branch}"
 
-    ev_state = evidence.get("overall_state") if evidence else "NÃO_VERIFICADO"
+    # Validação de divergência de evidência em relação ao estado atual
+    evidence_valid = False
+    evidence_divergence_msg: str | None = None
+
+    if raw_evidence:
+        ev_branch = raw_evidence.get("branch")
+        ev_sha = raw_evidence.get("commit_sha")
+
+        # Se Git estiver ativo, branch e SHA precisam ser consistentes com a evidência
+        if git_info["is_git"]:
+            # Se a branch for diferente ou se o SHA divergiu (e não era 'sem commits')
+            if ev_branch != cur_branch:
+                evidence_divergence_msg = f"Branch divergente: evidência gerada em '{ev_branch}' vs atual '{cur_branch}'"
+            elif ev_sha and cur_sha and ev_sha != "sem commits" and cur_sha != "sem commits" and ev_sha != cur_sha:
+                evidence_divergence_msg = f"Commit SHA divergente: evidência gerada no commit '{ev_sha}' vs atual '{cur_sha}'"
+            else:
+                evidence_valid = True
+        else:
+            evidence_valid = True
+    else:
+        evidence_divergence_msg = "Nenhum arquivo de evidência localizado em .ch/evidence/"
+
+    if evidence_valid and raw_evidence:
+        ev_state = raw_evidence.get("overall_state", "NÃO_VERIFICADO")
+    else:
+        ev_state = "NÃO_VERIFICADO"
+
     if ev_state == "PASS":
         parecer = "APROVADO_TECNICAMENTE (Checks locais passaram; aguardando homologação PO)"
+        estado_final = "AGUARDANDO_PO"
     elif ev_state == "FAIL":
         parecer = "BLOQUEADO (Falha nos checks de verificação)"
+        estado_final = "BLOQUEADO"
     else:
-        parecer = "PARCIAL (Checks pendentes ou não executados)"
+        parecer = "PARCIAL (Verificação não executada ou evidência divergente)"
+        estado_final = "NÃO_VERIFICADO"
 
     # Formata tabela de testes
     tests_rows: list[str] = []
-    if evidence and evidence.get("commands"):
-        for i, cmd in enumerate(evidence["commands"], start=1):
+    if evidence_valid and raw_evidence and raw_evidence.get("commands"):
+        for i, cmd in enumerate(raw_evidence["commands"], start=1):
             st = cmd.get("state", "NÃO_VERIFICADO")
             dur = cmd.get("duration_seconds", 0.0)
             c_name = cmd.get("command", "desconhecido")
             tests_rows.append(f"| T0{i} | Execução do comando `{c_name}` | {st} | Duração: {dur}s, exit code: {cmd.get('exit_code')} |")
     else:
-        tests_rows.append("| T01 | Verificação de projeto | NÃO_VERIFICADO | Nenhuma evidência recente encontrada em `.ch/evidence/` |")
+        motivo = evidence_divergence_msg or "Evidência ausente ou divergente"
+        tests_rows.append(f"| T01 | Verificação de projeto | NÃO_VERIFICADO | {motivo} |")
 
     tests_block = "\n".join(tests_rows)
     files_block = ", ".join(f"`{f}`" for f in mod_files) if mod_files else "Nenhum arquivo modificado na árvore de trabalho"
 
+    # Seção 3 com atividades realmente comprovadas
+    atividades: list[str] = [
+        "| A01 | Inspeção estática de manifesto e integridade do Git | Concluído com sucesso |"
+    ]
+    if evidence_valid and raw_evidence:
+        atividades.append(f"| A02 | Execução de suíte de verificação local (`ch verify`) | {ev_state} |")
+    else:
+        atividades.append(f"| A02 | Verificação de integridade documental | {ev_state} ({evidence_divergence_msg}) |")
+
+    atividades_block = "\n".join(atividades)
+
     return f"""# RELATÓRIO UNIVERSAL C.H. — {executor} — {title_str}
 
-> **Protocolo:** `RUC/1.0`  
-> **Natureza:** Documento técnico comprobatório gerado por CLI. **Não substitui decisão humana do PO.**  
+> **Protocolo:** `RUC/1.0`
+> **Natureza:** Documento técnico comprobatório gerado por CLI. **Não substitui decisão humana do PO.**
 > **Fonte primária:** Repositório local e evidências estruturadas de verificação.
 
 ## 1. Identificação da missão
@@ -105,22 +147,20 @@ def generate_ruc_text(
 | Ambiente | Local / Sandbox Linux |
 | Fonte da consulta | LOCAL_REPO |
 | Horário da geração | `{now_iso}` |
-| Baseline SHA | `{sha}` |
-| Branch de trabalho | `{branch}` |
+| Baseline SHA | `{cur_sha}` |
+| Branch de trabalho | `{cur_branch}` |
 | Parecer técnico preliminar | `{parecer}` |
 
 ## 2. Resumo executivo
 
 **Parecer:** {parecer}.
-O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os arquivos foram inspecionados sem exposição de segredos ou credenciais. Nenhuma mutação foi realizada na branch principal (`main`). A entrega técnica encontra-se pronta para revisão do PO.
+O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os arquivos foram inspecionados sem exposição de segredos ou credenciais. Nenhuma mutação foi realizada na branch principal (`main`). A entrega técnica encontra-se em estado {estado_final}.
 
 ## 3. Consultas e atividades realizadas
 
 | ID | Ação de fato executada | Resultado |
 |---|---|---|
-| A01 | Leitura de manifesto e árvore do Git | Concluído com sucesso |
-| A02 | Diagnóstico de pré-requisitos (`ch doctor`) | Executado consultivamente |
-| A03 | Suíte de verificação (`ch verify`) | {ev_state} |
+{atividades_block}
 
 **Fora do escopo:** Merge automático, alteração de regras da branch `main`, publicação de pacotes externos e execução de daemons permanentes.
 
@@ -129,10 +169,10 @@ O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os ar
 | ID | Fato e classe | Fonte / limite |
 |---|---|---|
 | E01 | Estado geral da verificação: `{ev_state}` | Arquivo de evidência estruturada em `.ch/evidence` |
-| E02 | SHA de commit: `{sha}` | Git local (`rev-parse HEAD`) |
+| E02 | SHA de commit: `{cur_sha}` | Git local (`rev-parse HEAD`) |
 | E03 | Arquivos alterados rastreados: {len(mod_files)} | Git local (`status --porcelain`) |
 
-**Limites de verificação:** A saída gerada por este relatório atesta apenas conformidade técnica e sintática local. Decisões estratégicas de negócio pertencem exclusivamente ao PO.
+**Limites de verificação:** A saída gerada por este relatório atesta apenas conformidade técnica e sintática local comprovada. Decisões estratégicas de negócio pertencem exclusivamente ao PO.
 
 ## 5. Verificações e resultados
 
@@ -150,14 +190,14 @@ O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os ar
 ## 7. Alterações realizadas
 
 - **Arquivos modificados:** {files_block}
-- **Credenciais expostas:** Nenhuma credencial observada na árvore ou nos logs.
-- **Custo adicional verificado:** R$ 0,00 declarados.
+- **Credenciais expostas:** Inspeção estática de manifesto e sanitização de stdout/stderr de comandos de verificação aplicadas. Auditoria independente de repositório requerida.
+- **Custo adicional verificado:** R$ 0,00 declarado pelo executor.
 - **Deploy / merge:** NÃO EXECUTADO (Reservado à decisão humana).
 
 ## 8. Recomendação técnica e próximo passo
 
-**Parecer final:** {parecer}.  
-**Estado da entrega:** `AGUARDANDO_PO` para auditoria independente e homologação.
+**Parecer final:** {parecer}.
+**Estado da entrega:** `{estado_final}` para auditoria independente e homologação.
 """
 
 

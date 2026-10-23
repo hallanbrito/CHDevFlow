@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from chdevflow.core.config import create_manifest_data, save_manifest
 from chdevflow.core.init import run_init
@@ -17,6 +18,44 @@ PRESETS: dict[str, dict[str, str]] = {
     "fullstack-dotnet": {"backend": "dotnet", "frontend": "react", "database": "postgres"},
 }
 
+DEFAULT_GITIGNORE_CONTENT = """.ch/evidence/
+__pycache__/
+*.py[cod]
+.venv/
+"""
+
+
+def validate_project_name(name: str) -> str:
+    """Valida o nome do projeto contra injeções de path traversal, caminhos absolutos e caracteres inválidos."""
+    clean = name.strip()
+    if not clean:
+        raise ValueError("O nome do projeto não pode ser vazio.")
+
+    # Impede caminhos absolutos, navegação para diretório pai e separadores de path
+    if Path(clean).is_absolute() or ".." in clean or "/" in clean or "\\" in clean:
+        raise ValueError(
+            f"Nome de projeto inválido: '{name}'. Não são permitidos caminhos absolutos, '..' ou separadores de diretório."
+        )
+
+    if not re.match(r"^[a-zA-Z0-9_\-]+$", clean):
+        raise ValueError(
+            f"Nome de projeto inválido: '{name}'. Utilize apenas caracteres alfanuméricos, hífen ou sublinhado."
+        )
+
+    return clean
+
+
+def ensure_project_gitignore(project_dir: Path) -> None:
+    """Garante que .gitignore exista e contenha a exclusão de .ch/evidence/."""
+    gitignore_file = project_dir / ".gitignore"
+    if not gitignore_file.exists():
+        gitignore_file.write_text(DEFAULT_GITIGNORE_CONTENT, encoding="utf-8")
+    else:
+        content = gitignore_file.read_text(encoding="utf-8")
+        if ".ch/evidence" not in content and ".ch/" not in content:
+            new_content = content.rstrip() + "\n.ch/evidence/\n"
+            gitignore_file.write_text(new_content, encoding="utf-8")
+
 
 def create_project(
     name: str,
@@ -29,12 +68,10 @@ def create_project(
 ) -> Path:
     """
     Cria a estrutura de um novo projeto governado pelo CHDevFlow.
-    Gera manifesto chdevflow.yaml, fundação documental C.H. e árvore inicial.
+    Gera manifesto chdevflow.yaml, fundação documental C.H., .gitignore defensivo e árvore inicial.
     Falha fechado se o diretório já existir e não estiver vazio.
     """
-    clean_name = name.strip()
-    if not clean_name:
-        raise ValueError("O nome do projeto não pode ser vazio.")
+    clean_name = validate_project_name(name)
 
     # Aplica preset se fornecido
     if preset:
@@ -76,17 +113,21 @@ def create_project(
     # 1. Fundação documental C.H.
     run_init(destination=target, profile=profile, apply=True)
 
-    # 2. Manifesto chdevflow.yaml
+    # 2. .gitignore com proteção de .ch/evidence/
+    ensure_project_gitignore(target)
+
+    # 3. Manifesto chdevflow.yaml
     manifest_data = create_manifest_data(
         project_name=clean_name,
         backend=b_val,
         frontend=f_val,
         database=d_val,
+        project_dir=target,
     )
     manifest_path = target / "chdevflow.yaml"
     save_manifest(manifest_path, manifest_data)
 
-    # 3. Árvore do projeto
+    # 4. Árvore do projeto
     generate_tree(target)
 
     return target
