@@ -8,6 +8,7 @@ import sys
 
 from chdevflow import __version__
 from chdevflow.core.doctor import render_doctor_human, run_doctor
+from chdevflow.core.evidence import render_evidence_human, run_verification
 from chdevflow.core.init import run_init
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.status import get_project_status, render_status_human
@@ -137,6 +138,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exporta o diagnóstico em formato JSON estruturado.",
     )
 
+    # Subcomando: verify
+    parser_verify = subparsers.add_parser(
+        "verify",
+        help="Executa verificações definidas no manifesto e persiste evidências auditáveis.",
+    )
+    parser_verify.add_argument(
+        "--path",
+        type=Path,
+        default=Path.cwd(),
+        help="Diretório do projeto (padrão: diretório atual).",
+    )
+    parser_verify.add_argument(
+        "--json",
+        action="store_true",
+        help="Exporta a evidência em formato JSON estruturado.",
+    )
+    parser_verify.add_argument(
+        "--no-fail-fast",
+        action="store_false",
+        dest="fail_fast",
+        default=True,
+        help="Continua a execução dos checks subsequentes mesmo após falha.",
+    )
+
     # Subcomando: tree
     parser_tree = subparsers.add_parser(
         "tree",
@@ -211,6 +236,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if report["healthy"] else 1
         except Exception as exc:
             print(f"Erro em 'ch doctor': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "verify":
+        try:
+            ev = run_verification(args.path, fail_fast=args.fail_fast)
+            if args.json:
+                print(json.dumps(ev.to_dict(), indent=2, ensure_ascii=False))
+            else:
+                print(render_evidence_human(ev))
+            return 0 if ev.overall_state == "PASS" else 1
+        except Exception as exc:
+            print(f"Erro em 'ch verify': {exc}", file=sys.stderr)
             return 1
 
     if args.command == "tree":
