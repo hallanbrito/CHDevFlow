@@ -16,6 +16,7 @@ from chdevflow.core.ruc import generate_ruc
 from chdevflow.core.status import get_project_status, render_status_human
 from chdevflow.core.submit import validate_and_submit
 from chdevflow.core.tree import generate as generate_tree
+from chdevflow.core.watch import run_watch
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -266,6 +267,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Ignora verificação prévia (uso restrito e documentado).",
     )
 
+    # Subcomando: watch
+    parser_watch = subparsers.add_parser(
+        "watch",
+        help="Executa a observação pontual da Sentinela Python (estritamente --once conforme Decisão D05).",
+    )
+    parser_watch.add_argument(
+        "--once",
+        action="store_true",
+        default=False,
+        help="Execução pontual única (obrigatório na v0.1).",
+    )
+    parser_watch.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Modo somente leitura / observação.",
+    )
+    parser_watch.add_argument(
+        "--fixture",
+        type=str,
+        default=None,
+        help="Caminho opcional para fixture JSON de snapshot.",
+    )
+
     # Subcomando: tree
     parser_tree = subparsers.add_parser(
         "tree",
@@ -409,6 +434,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except Exception as exc:
             print(f"Erro em 'ch submit': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "watch":
+        try:
+            return run_watch(once=args.once, dry_run=args.dry_run, fixture=args.fixture)
+        except Exception as exc:
+            print(f"Erro em 'ch watch': {exc}", file=sys.stderr)
             return 1
 
     if args.command == "tree":
