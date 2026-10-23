@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 
+from chdevflow.core.config import load_manifest
 from chdevflow.core.status import check_git_status
 
 
@@ -55,6 +56,7 @@ def generate_ruc_text(
     Compara estritamente branch e SHA da evidência com o estado atual.
     Evidência antiga/divergente vira NÃO_VERIFICADO.
     FAIL permanece estritamente BLOQUEADO, nunca AGUARDANDO_PO.
+    Registra unicamente fatos observados; limites não auditados são marcados como NÃO_VERIFICADO.
     """
     target = project_path.resolve()
     git_info = check_git_status(target)
@@ -66,6 +68,18 @@ def generate_ruc_text(
     cur_branch = git_info["branch"] or "NÃO_VERIFICADO"
     cur_sha = git_info["commit_sha"] or "NÃO_VERIFICADO"
     title_str = mission_title or f"Missão em {cur_branch}"
+
+    # Validação estática de manifesto
+    manifest_path = target / "chdevflow.yaml"
+    manifest_loaded = False
+    manifest_status_msg = "Manifesto ausente (NÃO_VERIFICADO)"
+    if manifest_path.is_file():
+        try:
+            load_manifest(manifest_path)
+            manifest_loaded = True
+            manifest_status_msg = "Manifesto 'chdevflow.yaml' carregado e validado"
+        except Exception as exc:
+            manifest_status_msg = f"Falha na validação do manifesto: {exc}"
 
     # Validação de divergência de evidência em relação ao estado atual
     evidence_valid = False
@@ -118,15 +132,24 @@ def generate_ruc_text(
 
     tests_block = "\n".join(tests_rows)
     files_block = ", ".join(f"`{f}`" for f in mod_files) if mod_files else "Nenhum arquivo modificado na árvore de trabalho"
+    git_worktree_desc = "limpa" if not git_info["is_dirty"] else f"dirty ({len(mod_files)} arquivo(s) modificado(s))"
 
     # Seção 3 com atividades realmente comprovadas
-    atividades: list[str] = [
-        "| A01 | Inspeção estática de manifesto e integridade do Git | Concluído com sucesso |"
-    ]
-    if evidence_valid and raw_evidence:
-        atividades.append(f"| A02 | Execução de suíte de verificação local (`ch verify`) | {ev_state} |")
+    atividades: list[str] = []
+    if manifest_loaded:
+        atividades.append("| A01 | Carregamento e validação sintática do manifesto `chdevflow.yaml` | Concluído com sucesso |")
     else:
-        atividades.append(f"| A02 | Verificação de integridade documental | {ev_state} ({evidence_divergence_msg}) |")
+        atividades.append(f"| A01 | Validação de manifesto `chdevflow.yaml` | NÃO_VERIFICADO ({manifest_status_msg}) |")
+
+    if git_info["is_git"]:
+        atividades.append(f"| A02 | Inspeção do estado do repositório Git local | Concluído (branch: `{cur_branch}`, SHA: `{cur_sha}`) |")
+    else:
+        atividades.append("| A02 | Inspeção do repositório Git | NÃO_VERIFICADO (Diretório não é repositório Git) |")
+
+    if evidence_valid and raw_evidence:
+        atividades.append(f"| A03 | Execução de suíte de verificação local (`ch verify`) | {ev_state} |")
+    else:
+        atividades.append(f"| A03 | Execução de suíte de verificação local | {ev_state} ({evidence_divergence_msg}) |")
 
     atividades_block = "\n".join(atividades)
 
@@ -154,7 +177,10 @@ def generate_ruc_text(
 ## 2. Resumo executivo
 
 **Parecer:** {parecer}.
-O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os arquivos foram inspecionados sem exposição de segredos ou credenciais. Nenhuma mutação foi realizada na branch principal (`main`). A entrega técnica encontra-se em estado {estado_final}.
+Documento estruturado emitido pelo CHDevFlow CLI a partir do estado observado no repositório local e das evidências registradas em `.ch/evidence`.
+- **Git observado:** Branch `{cur_branch}`, Commit SHA `{cur_sha}`, Árvore de trabalho {git_worktree_desc}.
+- **Verificação local:** {ev_state} (Evidências em `.ch/evidence/`).
+- **Estado técnico:** `{estado_final}` (aguardando homologação e auditoria independente).
 
 ## 3. Consultas e atividades realizadas
 
@@ -171,8 +197,14 @@ O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os ar
 | E01 | Estado geral da verificação: `{ev_state}` | Arquivo de evidência estruturada em `.ch/evidence` |
 | E02 | SHA de commit: `{cur_sha}` | Git local (`rev-parse HEAD`) |
 | E03 | Arquivos alterados rastreados: {len(mod_files)} | Git local (`status --porcelain`) |
+| E04 | Manifesto local: `{manifest_status_msg}` | Arquivo `chdevflow.yaml` |
 
-**Limites de verificação:** A saída gerada por este relatório atesta apenas conformidade técnica e sintática local comprovada. Decisões estratégicas de negócio pertencem exclusivamente ao PO.
+**Limites e fatos explicitamente NÃO_VERIFICADOS:**
+- Ausência de mutação na branch remota `main`: NÃO_VERIFICADO (inspeção restrita ao ambiente local e à branch ativa de trabalho).
+- Ausência de exposição de credenciais em todo o histórico do Git: NÃO_VERIFICADO (aplica-se apenas validação do manifesto e mascaramento de saída dos comandos de verificação).
+- Inspeção estática de código-fonte de negócio: NÃO_VERIFICADO (atesta apenas comandos e exit codes configurados).
+- Custos adicionais em nuvem: NÃO_VERIFICADO (R$ 0,00 declarado pelo executor; sem medição remota).
+- Homologação de negócio: NÃO_VERIFICADO (pertence exclusivamente à decisão humana do PO).
 
 ## 5. Verificações e resultados
 
@@ -190,7 +222,8 @@ O ciclo local foi executado pelo CHDevFlow CLI com captura de evidências. Os ar
 ## 7. Alterações realizadas
 
 - **Arquivos modificados:** {files_block}
-- **Credenciais expostas:** Inspeção estática de manifesto e sanitização de stdout/stderr de comandos de verificação aplicadas. Auditoria independente de repositório requerida.
+- **Status do manifesto:** {manifest_status_msg}
+- **Sanitização de comandos:** Saídas stdout/stderr e comandos de verificação submetidos a filtros de mascaramento de segredos.
 - **Custo adicional verificado:** R$ 0,00 declarado pelo executor.
 - **Deploy / merge:** NÃO EXECUTADO (Reservado à decisão humana).
 

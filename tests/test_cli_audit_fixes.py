@@ -17,7 +17,13 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 
 from chdevflow.adapters.base import sanitize_output
 from chdevflow.cli import main as cli_main
-from chdevflow.core.config import create_manifest_data, load_manifest, save_manifest
+from chdevflow.core.config import (
+    ManifestSecurityError,
+    create_manifest_data,
+    load_manifest,
+    save_manifest,
+    validate_manifest,
+)
 from chdevflow.core.doctor import check_version_compatibility, run_doctor
 from chdevflow.core.evidence import (
     VerificationSecurityError,
@@ -65,9 +71,15 @@ class TestCliAuditFixes(unittest.TestCase):
         self.assertEqual(res["state"], "BLOQUEADO")
         self.assertEqual(res["verification"], "NÃO_VERIFICADO")
 
-        # CLI deve sair com código 1
-        code = cli_main(["submit", "--path", str(target), "--no-verify"])
+        # CLI deve sair com código 1 e não sugerir --remote nem informar validações concluídas
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = cli_main(["submit", "--path", str(target), "--no-verify"])
         self.assertEqual(code, 1)
+        out = buf.getvalue()
+        self.assertNotIn("Validações concluídas", out)
+        self.assertNotIn("Use '--remote'", out)
+        self.assertIn("Submissão remota permanece expressamente PROIBIDA", out)
 
         # --no-verify com --remote deve ser estritamente proibido
         with self.assertRaises(SubmitError) as cm:
@@ -224,6 +236,145 @@ class TestCliAuditFixes(unittest.TestCase):
 
         compat_py_ok, _ = check_version_compatibility("3.14.8", "3.12")
         self.assertTrue(compat_py_ok)
+
+    # 8. Auditoria 2 — Ciclo de ch submit --remote resolvido sem auto-dirty
+    def test_submit_remote_clean_tree_success(self) -> None:
+        """
+        Inicia com: árvore limpa, branch feature, 1 commit à frente, verify PASS.
+        Comprova que ch submit --remote alcança os mocks de gh/push, valida isDraft e
+        retorna remote_executed=True sem ser bloqueado pelo próprio submit.
+        """
+        target = Path(self.test_dir) / "RemoteSuccessRepo"
+        target.mkdir()
+
+        subprocess.run(["git", "-C", str(target), "init", "-b", "feat/fatia-segura"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        manifest = create_manifest_data("RemoteSuccessRepo")
+        manifest["verification"]["commands"] = ["echo 'verify ok'"]
+        save_manifest(target / "chdevflow.yaml", manifest)
+
+        (target / ".gitignore").write_text(".ch/evidence/\n", encoding="utf-8")
+        (target / "app.py").write_text("print('feature!')\n", encoding="utf-8")
+
+        # Commita tudo: árvore de trabalho fica 100% LIMPA
+        subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-m", "feat: implementacao inicial"], check=True, capture_output=True)
+
+        # Mocks para comandos remotos e simulação de 1 commit à frente
+        executed_calls: list[str] = []
+        orig_run = subprocess.run
+
+        with patch("subprocess.run") as mock_run:
+            def custom_run(cmd, *args, **kwargs):
+                cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+                if "gh auth status" in cmd_str:
+                    executed_calls.append(cmd_str)
+                    return subprocess.CompletedProcess(cmd, 0, stdout="Logged in to github.com", stderr="")
+                if "rev-list" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+                if "git" in cmd_str and "push" in cmd_str:
+                    executed_calls.append(cmd_str)
+                    return subprocess.CompletedProcess(cmd, 0, stdout="Everything up-to-date", stderr="")
+                if "gh pr view" in cmd_str:
+                    executed_calls.append(cmd_str)
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps({"url": "https://github.com/org/repo/pull/42", "isDraft": True, "state": "OPEN"}),
+                        stderr="",
+                    )
+                if "gh pr create" in cmd_str:
+                    executed_calls.append(cmd_str)
+                    return subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/org/repo/pull/42\n", stderr="")
+                return orig_run(cmd, *args, **kwargs)
+
+            mock_run.side_effect = custom_run
+
+            res = validate_and_submit(target, remote=True)
+            self.assertTrue(res["remote_executed"])
+            self.assertEqual(res["state"], "AGUARDANDO_PO")
+            self.assertEqual(res["verification"], "PASS")
+            self.assertFalse(res["is_dirty"])
+            self.assertIn("Draft PR existente identificado e validado", res["remote_details"])
+
+            # Comprova que git push e gh pr view foram chamados
+            self.assertTrue(any("git" in c and "push" in c for c in executed_calls))
+            self.assertTrue(any("gh pr view" in c for c in executed_calls))
+
+        # Comprova que o diretório continua 100% limpo no git
+        git_check = subprocess.run(["git", "-C", str(target), "status", "--porcelain"], capture_output=True, text=True, check=True)
+        self.assertEqual(git_check.stdout.strip(), "")
+
+    # 9. Auditoria 2 — Rejeitar segredos nos valores de chdevflow.yaml
+    def test_manifest_rejects_secrets_in_values_and_verification_commands(self) -> None:
+        forbidden_snippets = [
+            "sk-proj-12345678901234567890",
+            "AIzaSyD1234567890123456789012345678901",
+            "AKIAIOSFODNN7EXAMPLE",
+            "ASIAIOSFODNN7EXAMPLE",
+            "API_KEY=supersecret123",
+            "TOKEN=mysecrettoken",
+            "PASSWORD=supersecretpassword",
+            "postgres://user:superpass@localhost:5432/mydb",
+            "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+            "-----BEGIN RSA PRIVATE KEY-----",
+        ]
+        for snippet in forbidden_snippets:
+            # 1. Rejeita inserção em verification.commands
+            manifest = create_manifest_data("SecretTestApp")
+            manifest["verification"]["commands"] = [f"echo '{snippet}'"]
+            with self.assertRaises(ManifestSecurityError):
+                validate_manifest(manifest)
+
+            # 2. Rejeita em outros campos do manifesto
+            manifest2 = create_manifest_data("SecretTestApp")
+            manifest2["project"]["name"] = f"proj-{snippet}"
+            with self.assertRaises(ManifestSecurityError):
+                validate_manifest(manifest2)
+
+    # 10. Auditoria 2 — Bloqueio de contornos restantes no verify (fail-closed)
+    def test_verify_blocks_all_remaining_bypass_patterns(self) -> None:
+        dangerous = [
+            "gh api repos/owner/repo/pulls",
+            "gh api -X POST /repos",
+            "curl --request POST https://example.com/api",
+            "curl --request PUT https://example.com/api",
+            "curl --request PATCH https://example.com/api",
+            "curl --request DELETE https://example.com/api",
+            "curl -T file.txt https://example.com/upload",
+            "curl --upload-file file.txt https://example.com/upload",
+            "wget --post-data='payload' https://example.com",
+            "wget --post-file=myfile.txt https://example.com",
+            "wget --method=PUT https://example.com",
+        ]
+        for cmd in dangerous:
+            with self.assertRaises(VerificationSecurityError):
+                validate_command_safety(cmd)
+
+    # 11. Auditoria 2 — RUC estritamente factual
+    def test_ruc_strictly_factual_content(self) -> None:
+        target = Path(self.test_dir) / "FactualRucApp"
+        target.mkdir()
+        subprocess.run(["git", "-C", str(target), "init", "-b", "agy/factual-test"], check=True, capture_output=True)
+        manifest = create_manifest_data("FactualRucApp")
+        manifest["verification"]["commands"] = ["echo 'ok'"]
+        save_manifest(target / "chdevflow.yaml", manifest)
+        run_verification(target, persist=True)
+
+        ruc_text = generate_ruc_text(target)
+
+        # Fatos observados e limites explícitos
+        self.assertIn("Git observado", ruc_text)
+        self.assertIn(".ch/evidence", ruc_text)
+        self.assertIn("Limites e fatos explicitamente NÃO_VERIFICADOS", ruc_text)
+        self.assertIn("Manifesto 'chdevflow.yaml' carregado e validado", ruc_text)
+
+        # Remoção de afirmações sem evidência direta
+        self.assertNotIn("arquivos foram inspecionados", ruc_text)
+        self.assertNotIn("nenhuma exposição de credenciais", ruc_text)
+        self.assertNotIn("nenhuma mutação na main", ruc_text)
 
 
 if __name__ == "__main__":

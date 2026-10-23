@@ -18,8 +18,8 @@ A partir da versão v0.1 (Épico #32), o CHDevFlow pode ser instalado localmente
 Requer Python >= 3.10 e [uv](https://astral.sh/uv):
 
 ```bash
-# Instalação local isolada em modo editável
-uv tool install --editable .
+# Instalação local isolada em modo editável (garanta ~/.local/bin no PATH)
+uv tool install --editable . --force
 
 # Ou no ambiente Python corrente
 pip install -e .
@@ -31,6 +31,17 @@ Verifique a instalação:
 ch --version
 ch --help
 ```
+
+### Ambiente de Testes e Autossuficiência
+
+Para executar a suíte completa de testes unitários e ensaios E2E:
+
+```bash
+python3 -m unittest discover -s tests -p "test_*.py"
+python3 -m unittest discover -s apps/bootstrap/sentinela/tests -p "test_*.py"
+```
+
+O executor de testes e a verificação E2E são autossuficientes: caso o comando `ch` não esteja disponível no PATH do ambiente, a resolução ocorre internamente via módulo Python (`python3 -m chdevflow.cli`).
 
 ---
 

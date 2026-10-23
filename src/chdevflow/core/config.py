@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 FORBIDDEN_SECRET_KEYS = {
@@ -19,6 +20,26 @@ FORBIDDEN_SECRET_KEYS = {
     "db_password",
     "bearer",
 }
+
+FORBIDDEN_SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # 1. sk-* e chaves de provedores de IA
+    (re.compile(r"\bsk-[a-zA-Z0-9_\-]{16,}\b"), "Chave de provedor de IA (sk-*)"),
+    (re.compile(r"\bAIza[0-9A-Za-z\-_]{25,}\b"), "Chave de API Google (AIza...)"),
+    # 2. AWS keys
+    (re.compile(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b"), "Chave de acesso AWS (AKIA/ASIA)"),
+    (re.compile(r"(?i)(aws_secret_access_key|aws_secret_key)\s*[:=]\s*[A-Za-z0-9/+=]{20,}"), "Secret key AWS"),
+    # 3. API_KEY=valor, TOKEN=valor, PASSWORD=valor, PASSWD=valor, SECRET=valor
+    (re.compile(r"(?i)\b(api_key|token|password|passwd|secret)\s*[:=]\s*['\"]?[^\s'\"]{3,}"), "Atribuição de segredo/token"),
+    # 4. Connection strings com usuário/senha
+    (re.compile(r"(?i)\b[a-zA-Z0-9\+\-]+://[^/\s:@]+:[^/\s:@]+@[^/\s]+"), "Connection string com credenciais"),
+    (re.compile(r"(?i)(Password|pwd)\s*=\s*[^;]+;"), "Connection string com Password/pwd"),
+    # 5. Bearer tokens e chaves privadas
+    (re.compile(r"(?i)\bbearer\s+[a-zA-Z0-9_\-\.]{10,}"), "Bearer token"),
+    (re.compile(r"(?i)begin\s+(?:rsa\s+|dsa\s+|ec\s+|openssh\s+)?private\s+key"), "Chave privada PEM/SSH"),
+    (re.compile(r"\b(ssh-rsa|ssh-ed25519)\s+[A-Za-z0-9+/]{40,}"), "Chave SSH"),
+    # 6. Tokens GitHub
+    (re.compile(r"\b(gho_|ghp_|ghu_|ghs_|ghr_|github_pat_)[a-zA-Z0-9_]{10,}\b"), "Token do GitHub"),
+]
 
 
 class ManifestError(ValueError):
@@ -47,11 +68,11 @@ def _check_no_secrets(data: Any, path: str = "") -> None:
         for i, item in enumerate(data):
             _check_no_secrets(item, f"{path}[{i}]")
     elif isinstance(data, str):
-        lower_val = data.lower()
-        if lower_val.startswith("bearer ") or "ssh-rsa" in lower_val or "begin private key" in lower_val:
-            raise ManifestSecurityError(
-                f"Valor suspeito de credencial/chave privada no manifesto em '{path}'"
-            )
+        for pattern, desc in FORBIDDEN_SECRET_PATTERNS:
+            if pattern.search(data):
+                raise ManifestSecurityError(
+                    f"Valor suspeito de segredo ou credencial ({desc}) no manifesto em '{path}'"
+                )
 
 
 def parse_yaml_text(content: str) -> dict[str, Any]:

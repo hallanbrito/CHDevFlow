@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 
 from chdevflow.core.evidence import run_verification
-from chdevflow.core.ruc import generate_ruc
+from chdevflow.core.ruc import generate_ruc, generate_ruc_text
 from chdevflow.core.status import check_git_status
 
 
@@ -30,7 +30,9 @@ def validate_and_submit(
     """
     Valida a entrega da fatia e prepara o ciclo para revisão humana (AGUARDANDO_PO).
     Nunca realiza merge. Bloqueia submissão na branch main e em casos de verify falho/ignorado.
-    Exige que alterações e RUC estejam commitados para submissão remota com push.
+    No modo local, gera o arquivo RUC em docs/CH/ para revisão.
+    No modo remoto, valida árvore limpa e não reescreve arquivos para evitar árvore dirty,
+    incluindo o RUC diretamente no Draft PR.
     """
     target = (project_path or Path.cwd()).resolve()
     git_info = check_git_status(target)
@@ -46,7 +48,14 @@ def validate_and_submit(
             "Trabalhe sempre em uma branch de fatia dedicada (ex.: agy/..., ch/...)."
         )
 
-    # 2. Validação de alterações e commits à frente
+    # 2. Gate estrito de submissão remota sem verificação
+    if remote and skip_verify:
+        raise SubmitError(
+            "Operação remota proibida: submissão remota exige obrigatoriamente verificação com estado PASS. "
+            "O modo --no-verify permanece BLOQUEADO."
+        )
+
+    # 3. Validação de alterações e commits à frente
     is_dirty = git_info["is_dirty"]
 
     rev_cmd = subprocess.run(
@@ -67,11 +76,24 @@ def validate_and_submit(
     if rev_cmd.returncode == 0 and rev_cmd.stdout.strip().isdigit():
         commits_ahead = int(rev_cmd.stdout.strip())
 
-    if not is_dirty and commits_ahead == 0:
-        raise SubmitError(
-            "Operação bloqueada: Nenhuma alteração detectada para submeter "
-            "(árvore de trabalho limpa e zero commits à frente da branch base)."
-        )
+    # Se for remoto, a árvore precisa estar LIMPA de alterações não commitadas
+    if remote:
+        if is_dirty:
+            raise SubmitError(
+                "Operação remota bloqueada: Existem alterações não commitadas na árvore de trabalho (árvore dirty). "
+                "Commite todas as alterações antes de submeter com '--remote'."
+            )
+        if commits_ahead == 0:
+            raise SubmitError(
+                "Operação remota bloqueada: Nenhum commit à frente da branch base para enviar ao repositório remoto."
+            )
+    else:
+        # Modo local: precisa de alguma alteração (dirty ou commit à frente)
+        if not is_dirty and commits_ahead == 0:
+            raise SubmitError(
+                "Operação bloqueada: Nenhuma alteração detectada para submeter "
+                "(árvore de trabalho limpa e zero commits à frente da branch base)."
+            )
 
     # 3. Verificação prévia
     if skip_verify:
@@ -92,27 +114,19 @@ def validate_and_submit(
             )
         delivery_state = "AGUARDANDO_PO"
 
-    # 4. Geração do RUC
-    ruc_path, _ = generate_ruc(
-        target,
-        mission_title=title or f"Fatia em {current_branch}",
-    )
-
-    # Re-checa is_dirty após gerar o RUC
-    git_info_after = check_git_status(target)
-    is_dirty = git_info_after["is_dirty"]
-
-    # 5. Operação remota: exige árvore limpa de alterações não commitadas
+    # 4. Modo Remoto vs Modo Local
     if remote:
-        if is_dirty:
+        # Garante que a execução do verify não deixou a árvore dirty
+        git_info_after_verify = check_git_status(target)
+        if git_info_after_verify["is_dirty"]:
             raise SubmitError(
-                "Operação remota bloqueada: Existem alterações não commitadas na árvore de trabalho (árvore dirty). "
-                "Commite todas as alterações e o RUC gerado antes de submeter com '--remote'."
+                "Operação remota bloqueada: A execução dos checks de verificação gerou arquivos não commitados."
             )
-        if commits_ahead == 0:
-            raise SubmitError(
-                "Operação remota bloqueada: Nenhum commit à frente da branch base para enviar ao repositório remoto."
-            )
+
+        # Não gravamos arquivo novo em disco para não sujar a árvore antes do push
+        ruc_disk_path = target / "docs" / "CH" / "RELATORIO-UNIVERSAL-CH-ULTIMO.md"
+        ruc_text = generate_ruc_text(target, mission_title=title or f"Fatia em {current_branch}")
+        ruc_ref = str(ruc_disk_path) if ruc_disk_path.is_file() else "RUC gerado em memória para submissão"
 
         gh_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=False)
         if gh_check.returncode != 0:
@@ -138,7 +152,7 @@ def validate_and_submit(
         )
 
         pr_title = title or f"Fatia: {current_branch}"
-        pr_body = body or f"Submissão da fatia sob governança C.H.\n\nEstado: AGUARDANDO_PO.\nRUC gerado em `{ruc_path.name}`."
+        pr_body = body or f"Submissão da fatia sob governança C.H.\n\nEstado: AGUARDANDO_PO.\n\n## RUC da Submissão\n\n{ruc_text}"
         remote_details = ""
 
         if view_pr.returncode == 0:
@@ -186,18 +200,25 @@ def validate_and_submit(
 
         return {
             "branch": current_branch,
-            "is_dirty": is_dirty,
+            "is_dirty": False,
             "commits_ahead": commits_ahead,
             "verification": verify_state,
-            "ruc_file": str(ruc_path),
+            "ruc_file": ruc_ref,
             "state": delivery_state,
             "remote_executed": True,
             "remote_details": remote_details,
         }
 
+    # Modo Local: gera o RUC no disco para revisão humana
+    ruc_path, _ = generate_ruc(
+        target,
+        mission_title=title or f"Fatia em {current_branch}",
+    )
+    git_info_after = check_git_status(target)
+
     return {
         "branch": current_branch,
-        "is_dirty": is_dirty,
+        "is_dirty": git_info_after["is_dirty"],
         "commits_ahead": commits_ahead,
         "verification": verify_state,
         "ruc_file": str(ruc_path),

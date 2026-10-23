@@ -8,7 +8,9 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
+import sys
 import time
 import uuid
 
@@ -17,17 +19,17 @@ from chdevflow.adapters.base import sanitize_output
 from chdevflow.core.config import load_manifest, ManifestError
 from chdevflow.core.status import check_git_status
 
-# Padrões bloqueados de mutação remota e publicação indevida
+# Padrões bloqueados de mutação remota, tráfego de rede não autorizado e publicação indevida
 FORBIDDEN_MUTABLE_PATTERNS = [
-    # Git push, merge, rebase (mesmo com flags como -C, --git-dir, etc.)
+    # Git mutações remotas ou de branch (mesmo com flags como -C, --git-dir, etc.)
     r"\bgit\b.*?\b(push|merge|rebase)\b",
-    # GitHub CLI para mutação remota (PRs, Issues, Releases, Repos)
-    r"\bgh\b.*?\b(pr|issue|release|repo)\b.*?\b(create|edit|close|merge|delete)\b",
-    # curl com payload ou métodos mutáveis (compatível com -d, --data, etc.)
-    r"\bcurl\b.*?(\s|^)(-(?:d|F)\b|--(?:data|data-raw|data-binary|data-urlencode|form)\b|-X\s*(?:POST|PUT|DELETE|PATCH)\b)",
-    # wget com envio de dados
-    r"\bwget\b.*?(\s|^)(--(?:post-data|post-file)\b|--method\s*=\s*(?:POST|PUT|DELETE|PATCH)\b)",
-    # Publicação em registries de pacotes
+    # Bloqueio integral de clientes de rede/CLI externa em 'ch verify' (fail-closed)
+    r"\bgh\b",
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\bhttpie\b",
+    r"\bhttp\b\s+.*?https?://",
+    # Publicação em registries de pacotes e imagens
     r"\bnpm\b.*?\b(publish|unpublish|deprecate)\b",
     r"\byarn\b.*?\bpublish\b",
     r"\bpnpm\b.*?\bpublish\b",
@@ -92,10 +94,18 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
     validate_command_safety(cmd_str)
     sanitized_cmd = sanitize_output(cmd_str)
 
+    # Se o comando iniciar com 'ch ' ou for 'ch', e o executável não estiver no PATH,
+    # resolve autossuficientemente via sys.executable -m chdevflow.cli
+    run_cmd = cmd_str
+    stripped = cmd_str.strip()
+    if (stripped == "ch" or stripped.startswith("ch ")) and shutil.which("ch") is None:
+        sub_arg = stripped[2:].strip()
+        run_cmd = f'"{sys.executable}" -m chdevflow.cli {sub_arg}' if sub_arg else f'"{sys.executable}" -m chdevflow.cli'
+
     start_time = time.perf_counter()
     try:
         proc = subprocess.run(
-            cmd_str,
+            run_cmd,
             shell=True,
             cwd=str(cwd),
             stdout=subprocess.PIPE,

@@ -427,6 +427,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  • Estado final    : {sub['state']}")
             if sub["remote_executed"]:
                 print(f"  • Remoto (GitHub) : {sub['remote_details']}")
+            elif sub["state"] == "BLOQUEADO":
+                print("  • Modo local      : Submissão em estado BLOQUEADO (verificação ignorada ou falha).")
+                print("  • Restrição       : Submissão remota permanece expressamente PROIBIDA sem verificação PASS.")
             else:
                 print("  • Modo local      : Validações concluídas. Use '--remote' para abrir Draft PR.")
             print("  • Nota de segurança: Nunca realiza merge. Homologação reservada ao PO.")
