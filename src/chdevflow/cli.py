@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from chdevflow import __version__
+from chdevflow.core.doctor import render_doctor_human, run_doctor
 from chdevflow.core.init import run_init
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.status import get_project_status, render_status_human
@@ -119,6 +120,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exporta o status em formato JSON estruturado.",
     )
 
+    # Subcomando: doctor
+    parser_doctor = subparsers.add_parser(
+        "doctor",
+        help="Diagnostica ferramentas e pré-requisitos locais das stacks sem alterar o sistema.",
+    )
+    parser_doctor.add_argument(
+        "--path",
+        type=Path,
+        default=Path.cwd(),
+        help="Diretório do projeto (padrão: diretório atual).",
+    )
+    parser_doctor.add_argument(
+        "--json",
+        action="store_true",
+        help="Exporta o diagnóstico em formato JSON estruturado.",
+    )
+
     # Subcomando: tree
     parser_tree = subparsers.add_parser(
         "tree",
@@ -181,6 +199,18 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except Exception as exc:
             print(f"Erro em 'ch status': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "doctor":
+        try:
+            report = run_doctor(args.path)
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                print(render_doctor_human(report))
+            return 0 if report["healthy"] else 1
+        except Exception as exc:
+            print(f"Erro em 'ch doctor': {exc}", file=sys.stderr)
             return 1
 
     if args.command == "tree":
