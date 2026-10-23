@@ -10,8 +10,11 @@ from chdevflow import __version__
 from chdevflow.core.doctor import render_doctor_human, run_doctor
 from chdevflow.core.evidence import render_evidence_human, run_verification
 from chdevflow.core.init import run_init
+from chdevflow.core.mission import create_mission
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
+from chdevflow.core.ruc import generate_ruc
 from chdevflow.core.status import get_project_status, render_status_human
+from chdevflow.core.submit import validate_and_submit
 from chdevflow.core.tree import generate as generate_tree
 
 
@@ -162,6 +165,107 @@ def build_parser() -> argparse.ArgumentParser:
         help="Continua a execução dos checks subsequentes mesmo após falha.",
     )
 
+    # Subcomando: mission
+    parser_mission = subparsers.add_parser(
+        "mission",
+        help="Gerencia e cria Fatias W locais sob governança C.H.",
+    )
+    mission_subs = parser_mission.add_subparsers(
+        title="ações",
+        dest="mission_action",
+        metavar="<ação>",
+    )
+    parser_mission_new = mission_subs.add_parser(
+        "new",
+        help="Gera uma nova Fatia W a partir de modelo.",
+    )
+    parser_mission_new.add_argument(
+        "title",
+        type=str,
+        help="Título da fatia/missão.",
+    )
+    parser_mission_new.add_argument(
+        "--path",
+        type=Path,
+        default=Path.cwd(),
+        help="Diretório do projeto (padrão: diretório atual).",
+    )
+    parser_mission_new.add_argument(
+        "--executor",
+        type=str,
+        default="AGY",
+        help="Executor da missão (ex.: AGY, Codex).",
+    )
+    parser_mission_new.add_argument(
+        "--autonomy",
+        choices=["CH-0", "CH-1", "CH-2", "CH-3"],
+        default="CH-2",
+        help="Nível de autonomia proposto.",
+    )
+    parser_mission_new.add_argument(
+        "--remote",
+        action="store_true",
+        help="Cria também uma Issue no GitHub via 'gh' (requer gh autenticado).",
+    )
+
+    # Subcomando: ruc
+    parser_ruc = subparsers.add_parser(
+        "ruc",
+        help="Gera o Relatório Universal C.H. (RUC/1.0) auditável a partir de evidências.",
+    )
+    parser_ruc.add_argument(
+        "--path",
+        type=Path,
+        default=Path.cwd(),
+        help="Diretório do projeto (padrão: diretório atual).",
+    )
+    parser_ruc.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Caminho de saída para gravação do RUC (padrão: docs/CH/RELATORIO-UNIVERSAL-CH-ULTIMO.md).",
+    )
+    parser_ruc.add_argument(
+        "--title",
+        type=str,
+        default=None,
+        help="Título ou contexto da missão relatada.",
+    )
+
+    # Subcomando: submit
+    parser_submit = subparsers.add_parser(
+        "submit",
+        help="Valida a entrega da fatia e prepara submissão para revisão humana (AGUARDANDO_PO).",
+    )
+    parser_submit.add_argument(
+        "--path",
+        type=Path,
+        default=Path.cwd(),
+        help="Diretório do projeto (padrão: diretório atual).",
+    )
+    parser_submit.add_argument(
+        "--remote",
+        action="store_true",
+        help="Realiza push e abre/atualiza Draft PR no GitHub via gh.",
+    )
+    parser_submit.add_argument(
+        "--title",
+        type=str,
+        default=None,
+        help="Título do Draft PR.",
+    )
+    parser_submit.add_argument(
+        "--body",
+        type=str,
+        default=None,
+        help="Descrição da entrega para o Draft PR.",
+    )
+    parser_submit.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Ignora verificação prévia (uso restrito e documentado).",
+    )
+
     # Subcomando: tree
     parser_tree = subparsers.add_parser(
         "tree",
@@ -248,6 +352,63 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if ev.overall_state == "PASS" else 1
         except Exception as exc:
             print(f"Erro em 'ch verify': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "mission":
+        if not getattr(args, "mission_action", None):
+            print("Uso: ch mission new \"<título>\" [--remote]", file=sys.stderr)
+            return 1
+        try:
+            path, msg = create_mission(
+                title=args.title,
+                project_path=args.path,
+                executor=args.executor,
+                autonomy=args.autonomy,
+                remote=args.remote,
+            )
+            print(msg)
+            return 0
+        except Exception as exc:
+            print(f"Erro em 'ch mission': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "ruc":
+        try:
+            dest, _ = generate_ruc(
+                project_path=args.path,
+                output_path=args.output,
+                mission_title=args.title,
+            )
+            print(f"Relatório Universal C.H. (RUC/1.0) gerado em: {dest}")
+            return 0
+        except Exception as exc:
+            print(f"Erro em 'ch ruc': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "submit":
+        try:
+            sub = validate_and_submit(
+                project_path=args.path,
+                remote=args.remote,
+                title=args.title,
+                body=args.body,
+                skip_verify=args.no_verify,
+            )
+            print("=" * 60)
+            print(f"CHDevFlow Submit — Entrega da Fatia: {sub['branch']}")
+            print("=" * 60)
+            print(f"  • Verificação     : {sub['verification']}")
+            print(f"  • RUC gerado      : {sub['ruc_file']}")
+            print(f"  • Estado final    : {sub['state']}")
+            if sub["remote_executed"]:
+                print(f"  • Remoto (GitHub) : {sub['remote_details']}")
+            else:
+                print("  • Modo local      : Validações concluídas. Use '--remote' para abrir Draft PR.")
+            print("  • Nota de segurança: Nunca realiza merge. Homologação reservada ao PO.")
+            print("=" * 60)
+            return 0
+        except Exception as exc:
+            print(f"Erro em 'ch submit': {exc}", file=sys.stderr)
             return 1
 
     if args.command == "tree":
