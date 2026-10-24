@@ -69,7 +69,7 @@ def check_git_status(path: Path) -> dict[str, Any]:
     }
 
 
-def get_project_status(project_path: Path) -> dict[str, Any]:
+def get_project_status(project_path: Path, strict: bool = False) -> dict[str, Any]:
     """Coleta o estado integral do projeto (Git, manifesto e governança C.H.)."""
     proj_resolved = project_path.resolve()
     if not proj_resolved.is_dir():
@@ -86,10 +86,14 @@ def get_project_status(project_path: Path) -> dict[str, Any]:
 
     if not manifest_file.exists():
         manifest_status = "AUSENTE"
+        manifest_err = "Arquivo de manifesto chdevflow.yaml não encontrado."
     else:
         try:
             manifest_data = load_manifest(manifest_file)
         except ManifestError as exc:
+            manifest_status = f"INVALIDO ({exc})"
+            manifest_err = str(exc)
+        except Exception as exc:
             manifest_status = f"INVALIDO ({exc})"
             manifest_err = str(exc)
 
@@ -98,24 +102,38 @@ def get_project_status(project_path: Path) -> dict[str, Any]:
     missing_docs: list[str] = []
     for doc in ESSENTIAL_DOCS:
         full_p = proj_resolved / doc
-        if full_p.exists():
+        if full_p.is_file():
             docs_status[doc] = "PRESENTE"
+        elif full_p.is_dir():
+            docs_status[doc] = "INVALIDO (diretório)"
+            missing_docs.append(doc)
+        elif full_p.is_symlink():
+            docs_status[doc] = "INVALIDO (symlink quebrado)"
+            missing_docs.append(doc)
         else:
             docs_status[doc] = "AUSENTE"
             missing_docs.append(doc)
 
-    # 4. Pendências de governança
+    # 4. Pendências estruturais obrigatórias
+    structural_pendencies: list[str] = []
+    if manifest_status != "PRESENTE":
+        structural_pendencies.append(f"Manifesto chdevflow.yaml pendente ou com erro: {manifest_status}")
+    if missing_docs:
+        structural_pendencies.append(f"Documentos fundamentais C.H. ausentes: {', '.join(missing_docs)}")
+
+    structural_health = (len(structural_pendencies) == 0)
+
+    # 5. Pendências gerais (Git + estrutural)
     pendencies: list[str] = []
     if not git_info["is_git"]:
         pendencies.append("Repositório Git não inicializado (executar 'git init').")
     elif git_info["is_dirty"]:
         pendencies.append("Alterações não commitadas na árvore de trabalho.")
+    pendencies.extend(structural_pendencies)
 
-    if manifest_status != "PRESENTE":
-        pendencies.append(f"Manifesto chdevflow.yaml pendente ou com erro: {manifest_status}")
-
-    if missing_docs:
-        pendencies.append(f"Documentos fundamentais C.H. ausentes: {', '.join(missing_docs)}")
+    # 6. Códigos de saída esperados
+    strict_exit_code = 0 if structural_health else 1
+    expected_exit_code = strict_exit_code if strict else 0
 
     return {
         "path": str(proj_resolved),
@@ -128,7 +146,14 @@ def get_project_status(project_path: Path) -> dict[str, Any]:
             "error": manifest_err,
         },
         "docs": docs_status,
+        "missing_docs": missing_docs,
         "pendencies": pendencies,
+        "structural_pendencies": structural_pendencies,
+        "structural_health": structural_health,
+        "saude_estrutural": "CONFORME" if structural_health else "PENDENTE",
+        "strict": strict,
+        "expected_exit_code": expected_exit_code,
+        "strict_exit_code": strict_exit_code,
         "authorization": {
             "status": "NÃO_INFERIDA",
             "message": "Autorizações CH-1/CH-2/CH-3 são concedidas exclusivamente pelo PO humano em Issue/documento formal.",
@@ -181,6 +206,21 @@ def render_status_human(status_data: dict[str, Any]) -> str:
             lines.append(f"  ! {p}")
     else:
         lines.append("  ✓ Nenhuma pendência estrutural identificada.")
+
+    # Diagnóstico Estrutural
+    lines.append("\n[Diagnóstico Estrutural]")
+    health_label = (
+        "CONFORME (100% da fundação presente)"
+        if status_data.get("structural_health")
+        else "PENDENTE (fundação obrigatória incompleta)"
+    )
+    lines.append(f"  • Saúde estrutural : {health_label}")
+    if status_data.get("strict"):
+        exit_code = status_data.get("expected_exit_code", 0)
+        lines.append("  • Modo de avaliação: ESTRITO (--strict)")
+        lines.append(f"  • Código de saída  : {exit_code}")
+    else:
+        lines.append("  • Modo de avaliação: INFORMATIVO (compatível, código 0)")
 
     # Autorização
     lines.append("\n[Governança de Autorização]")

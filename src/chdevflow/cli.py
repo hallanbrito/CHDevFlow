@@ -120,6 +120,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Diretório do projeto (padrão: diretório atual).",
     )
     parser_status.add_argument(
+        "-s",
+        "--strict",
+        action="store_true",
+        default=False,
+        help="Modo estrito: falha com código 1 em caso de pendências estruturais obrigatórias.",
+    )
+    parser_status.add_argument(
         "--json",
         action="store_true",
         help="Exporta o status em formato JSON estruturado.",
@@ -345,12 +352,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "status":
         try:
-            status_data = get_project_status(args.path)
+            status_data = get_project_status(args.path, strict=args.strict)
             if args.json:
                 print(json.dumps(status_data, indent=2, ensure_ascii=False))
             else:
                 print(render_status_human(status_data))
-            return 0
+            return status_data["expected_exit_code"]
         except Exception as exc:
             print(f"Erro em 'ch status': {exc}", file=sys.stderr)
             return 1

@@ -53,7 +53,7 @@ ch --help
 ch new <nome> [--backend <stack>] [--frontend <stack>] [--database <db>] [--preset <preset>]
 ch init [--path <dir>] [--apply]
 ch doctor [--path <dir>] [--json]
-ch status [--path <dir>] [--json]
+ch status [--path <dir>] [--strict] [--json]
 ch tree [--path <dir>]
 ch verify [--path <dir>] [--json]
 ch mission new "<Título>" [--executor AGY] [--autonomy CH-2] [--remote]
