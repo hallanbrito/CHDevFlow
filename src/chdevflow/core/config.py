@@ -302,9 +302,9 @@ def create_manifest_data(
             "type": "postgresql" if database_val in ("postgres", "postgresql") else database_val
         }
 
-    # Se não houver arquivos de build reais, define verificação local executável com base na governança C.H.
+    # Se não houver arquivos de build reais, define verificação local executável com status estrito da governança C.H.
     if not verification_commands:
-        verification_commands = ["ch status"]
+        verification_commands = ["ch status --strict"]
 
     manifest = {
         "version": "1",

@@ -80,9 +80,9 @@ class TestCliAuditFixes(unittest.TestCase):
         target = Path(self.test_dir) / "ReactOnly"
         proj = create_project("ReactOnly", base_dir=Path(self.test_dir), frontend="react")
         manifest = load_manifest(proj / "chdevflow.yaml")
-        # Sem package.json, não deve configurar npm test
+        # Sem package.json, não deve configurar npm test e deve usar ch status --strict
         self.assertNotIn("npm test", manifest["verification"]["commands"])
-        self.assertIn("ch status", manifest["verification"]["commands"])
+        self.assertIn("ch status --strict", manifest["verification"]["commands"])
 
         # Com package.json preexistente, npm test deve ser incluído
         target_with_pkg = Path(self.test_dir) / "RealReact"

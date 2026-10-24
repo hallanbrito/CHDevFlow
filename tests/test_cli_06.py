@@ -88,11 +88,11 @@ class TestCli06WatchAndE2E(unittest.TestCase):
         self.assertTrue((exemplo_dir / "AGENTS.md").exists())
         self.assertTrue((exemplo_dir / ".gitignore").exists())
 
-        # Garante que npm test NÃO foi configurado sem package.json
+        # Garante que npm test NÃO foi configurado sem package.json e usa status estrito
         manifest = load_manifest(exemplo_dir / "chdevflow.yaml")
         commands = manifest["verification"]["commands"]
         self.assertNotIn("npm test", commands)
-        self.assertIn("ch status", commands)
+        self.assertIn("ch status --strict", commands)
 
         # 2. ch doctor
         buf_doc = io.StringIO()
