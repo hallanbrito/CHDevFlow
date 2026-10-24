@@ -15,6 +15,8 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 from chdevflow.cli import main as cli_main
+from chdevflow.core.init import run_init
+from chdevflow.core.tree import generate as generate_tree
 from chdevflow.core.config import create_manifest_data, save_manifest
 from chdevflow.core.evidence import (
     VerificationEvidence,
@@ -60,15 +62,19 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
     def test_successful_verification_and_evidence_file(self) -> None:
         target = Path(self.test_dir) / "PassingApp"
         target.mkdir()
+        run_init(target, apply=True)
+        generate_tree(target)
         manifest = create_manifest_data("PassingApp")
         manifest["verification"]["commands"] = ["echo 'check one'", "echo 'check two'"]
         save_manifest(target / "chdevflow.yaml", manifest)
 
         ev = run_verification(target, persist=True)
         self.assertEqual(ev.overall_state, "PASS")
-        self.assertEqual(len(ev.commands), 2)
+        self.assertEqual(len(ev.commands), 3)
+        self.assertEqual(ev.commands[0].command, "ch status --strict")
         self.assertEqual(ev.commands[0].state, "PASS")
         self.assertEqual(ev.commands[1].state, "PASS")
+        self.assertEqual(ev.commands[2].state, "PASS")
 
         # Verifica arquivo de evidência persistido
         self.assertIsNotNone(ev.evidence_file)
@@ -81,6 +87,8 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
     def test_fail_fast_skips_subsequent_commands(self) -> None:
         target = Path(self.test_dir) / "FailingApp"
         target.mkdir()
+        run_init(target, apply=True)
+        generate_tree(target)
         manifest = create_manifest_data("FailingApp")
         manifest["verification"]["commands"] = [
             "echo 'primeiro ok'",
@@ -92,17 +100,22 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
         # 1. Com fail-fast ativo (padrão)
         ev_ff = run_verification(target, fail_fast=True, persist=False)
         self.assertEqual(ev_ff.overall_state, "FAIL")
-        self.assertEqual(len(ev_ff.commands), 3)
+        self.assertEqual(len(ev_ff.commands), 4)
+        self.assertEqual(ev_ff.commands[0].command, "ch status --strict")
         self.assertEqual(ev_ff.commands[0].state, "PASS")
-        self.assertEqual(ev_ff.commands[1].state, "FAIL")
-        self.assertEqual(ev_ff.commands[2].state, "SKIPPED")
+        self.assertEqual(ev_ff.commands[1].state, "PASS")
+        self.assertEqual(ev_ff.commands[2].state, "FAIL")
+        self.assertEqual(ev_ff.commands[3].state, "SKIPPED")
 
         # 2. Sem fail-fast
         ev_no_ff = run_verification(target, fail_fast=False, persist=False)
         self.assertEqual(ev_no_ff.overall_state, "FAIL")
+        self.assertEqual(len(ev_no_ff.commands), 4)
+        self.assertEqual(ev_no_ff.commands[0].command, "ch status --strict")
         self.assertEqual(ev_no_ff.commands[0].state, "PASS")
-        self.assertEqual(ev_no_ff.commands[1].state, "FAIL")
-        self.assertEqual(ev_no_ff.commands[2].state, "PASS")
+        self.assertEqual(ev_no_ff.commands[1].state, "PASS")
+        self.assertEqual(ev_no_ff.commands[2].state, "FAIL")
+        self.assertEqual(ev_no_ff.commands[3].state, "PASS")
 
     def test_sanitization_of_secrets_in_command_output(self) -> None:
         target = Path(self.test_dir)
@@ -114,6 +127,8 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
     def test_cli_verify_output_and_exit_code(self) -> None:
         target = Path(self.test_dir) / "CliApp"
         target.mkdir()
+        run_init(target, apply=True)
+        generate_tree(target)
         manifest = create_manifest_data("CliApp")
         manifest["verification"]["commands"] = ["echo 'teste unitario'"]
         save_manifest(target / "chdevflow.yaml", manifest)

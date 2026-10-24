@@ -32,6 +32,8 @@ from chdevflow.core.evidence import (
     run_verification,
     validate_command_safety,
 )
+from chdevflow.core.init import run_init
+from chdevflow.core.tree import generate as generate_tree
 from chdevflow.core.project import create_project, validate_project_name
 from chdevflow.core.ruc import generate_ruc_text
 from chdevflow.core.submit import (
@@ -285,6 +287,9 @@ class TestCliAuditFixes(unittest.TestCase):
         subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
 
+        run_init(target, apply=True)
+        generate_tree(target)
+
         manifest = create_manifest_data("RemoteSuccessRepo")
         manifest["verification"]["commands"] = ["echo 'verify ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
@@ -363,6 +368,9 @@ class TestCliAuditFixes(unittest.TestCase):
         subprocess.run(["git", "-C", str(target), "init", "-b", "feat/nova-entrega"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        run_init(target, apply=True)
+        generate_tree(target)
 
         manifest = create_manifest_data("NewPrRepo")
         manifest["verification"]["commands"] = ["echo 'ok'"]
@@ -577,6 +585,9 @@ class TestCliAuditFixes(unittest.TestCase):
         subprocess.run(["git", "-C", str(target), "init", "-b", "feat/rich-pr"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        run_init(target, apply=True)
+        generate_tree(target)
 
         manifest = create_manifest_data("ExistingRichPrRepo")
         manifest["verification"]["commands"] = ["echo 'ok'"]

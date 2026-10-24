@@ -223,6 +223,12 @@ def run_verification(
             dedup_cmds.append(c_strip)
     commands_to_run = dedup_cmds
 
+    # Gate estrutural obrigatório: todo manifesto com verificações deve executar ch status --strict primeiro
+    if commands_to_run:
+        strict_gate = "ch status --strict"
+        cleaned_cmds = [c for c in commands_to_run if c not in (strict_gate, "ch status")]
+        commands_to_run = [strict_gate] + cleaned_cmds
+
     # Inicia evidência
     evidence_id = str(uuid.uuid4())[:8]
     now_utc = datetime.now(timezone.utc)

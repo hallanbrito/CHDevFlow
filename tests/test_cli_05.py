@@ -17,6 +17,8 @@ if _SRC.is_dir() and str(_SRC) not in sys.path:
 from chdevflow.cli import main as cli_main
 from chdevflow.core.config import create_manifest_data, save_manifest
 from chdevflow.core.evidence import run_verification
+from chdevflow.core.init import run_init
+from chdevflow.core.tree import generate as generate_tree
 from chdevflow.core.mission import create_mission, generate_mission_markdown, slugify
 from chdevflow.core.ruc import generate_ruc, generate_ruc_text
 from chdevflow.core.submit import SubmitError, SubmitSecurityError, validate_and_submit
@@ -65,6 +67,8 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         self.assertNotIn("AGUARDANDO_PO", content1)
 
         # 2. Com evidência de verify gerada
+        run_init(target, apply=True)
+        generate_tree(target)
         manifest = create_manifest_data("RucApp")
         manifest["verification"]["commands"] = ["echo 'teste aprovado'"]
         save_manifest(target / "chdevflow.yaml", manifest)
@@ -107,7 +111,11 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
     def test_submit_success_local_mode(self) -> None:
         target = Path(self.test_dir) / "RepoGood"
         target.mkdir()
+        run_init(target, apply=True)
+        generate_tree(target)
         subprocess.run(["git", "-C", str(target), "init", "-b", "feature/sucesso"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-m", "init"], check=True, capture_output=True)
         manifest = create_manifest_data("RepoGood")
         manifest["verification"]["commands"] = ["echo 'tudo ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
@@ -125,7 +133,11 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
     def test_cli_mission_ruc_submit_commands(self) -> None:
         target = Path(self.test_dir) / "CliCycle"
         target.mkdir()
+        run_init(target, apply=True)
+        generate_tree(target)
         subprocess.run(["git", "-C", str(target), "init", "-b", "agy/teste-fatia"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-m", "init"], check=True, capture_output=True)
         manifest = create_manifest_data("CliCycle")
         manifest["verification"]["commands"] = ["echo 'ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)

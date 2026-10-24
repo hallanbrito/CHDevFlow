@@ -6,9 +6,14 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+
+_SRC = Path(__file__).resolve().parent.parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 from chdevflow.cli import main as cli_main
 from chdevflow.core.config import create_manifest_data, load_manifest, save_manifest
@@ -240,6 +245,178 @@ class TestCliStrictStatus(unittest.TestCase):
         (proj_dir / "docs" / "STATUS.md").unlink()
         ev_after = run_verification(proj_dir, persist=False)
         self.assertEqual(ev_after.overall_state, "FAIL")
+
+    # Regressões AUD-P0-01.1: ch verify com comandos customizados e gate obrigatório
+    def test_verify_manifest_with_custom_true_fails_when_doc_missing(self) -> None:
+        """Regressão AUD-P0-01.1 (1): Manifesto com commands: ['true'] e documento ausente retorna FAIL."""
+        base = Path(self.test_dir)
+        proj = create_project("CustomTrueApp", base_dir=base)
+        manifest = load_manifest(proj / "chdevflow.yaml")
+        manifest["verification"]["commands"] = ["true"]
+        save_manifest(proj / "chdevflow.yaml", manifest)
+
+        # Remove documento fundamental
+        (proj / "docs" / "STATUS.md").unlink()
+
+        ev = run_verification(proj, persist=False)
+        self.assertEqual(ev.overall_state, "FAIL")
+        self.assertGreaterEqual(len(ev.commands), 1)
+        self.assertEqual(ev.commands[0].command, "ch status --strict")
+        self.assertEqual(ev.commands[0].state, "FAIL")
+        # Segundo comando ("true") deve ser SKIPPED devido ao fail-fast
+        self.assertEqual(ev.commands[1].command, "true")
+        self.assertEqual(ev.commands[1].state, "SKIPPED")
+
+        # Via CLI verify
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = cli_main(["verify", "--path", str(proj)])
+        self.assertEqual(code, 1)
+
+    def test_verify_manifest_with_simulated_real_command_fails_when_doc_missing(self) -> None:
+        """Regressão AUD-P0-01.1 (2): Manifesto com comando real simulado retornando 0 e documento ausente falha."""
+        base = Path(self.test_dir)
+        proj = create_project("RealCmdApp", base_dir=base)
+        manifest = load_manifest(proj / "chdevflow.yaml")
+        manifest["verification"]["commands"] = ["python3 -c 'import sys; sys.exit(0)'"]
+        save_manifest(proj / "chdevflow.yaml", manifest)
+
+        # Remove AGENTS.md
+        (proj / "AGENTS.md").unlink()
+
+        ev = run_verification(proj, persist=False)
+        self.assertEqual(ev.overall_state, "FAIL")
+        self.assertEqual(ev.commands[0].command, "ch status --strict")
+        self.assertEqual(ev.commands[0].state, "FAIL")
+        self.assertEqual(ev.commands[1].state, "SKIPPED")
+
+    def test_verify_manifest_structurally_sound_with_custom_commands_passes(self) -> None:
+        """Regressão AUD-P0-01.1 (3): Projeto estruturalmente íntegro com comando próprio retorna PASS."""
+        base = Path(self.test_dir)
+        proj = create_project("SoundCustomApp", base_dir=base)
+        manifest = load_manifest(proj / "chdevflow.yaml")
+        manifest["verification"]["commands"] = ["echo 'custom build ok'", "echo 'custom test ok'"]
+        save_manifest(proj / "chdevflow.yaml", manifest)
+
+        ev = run_verification(proj, persist=False)
+        self.assertEqual(ev.overall_state, "PASS")
+        self.assertEqual(len(ev.commands), 3)
+        self.assertEqual(ev.commands[0].command, "ch status --strict")
+        self.assertEqual(ev.commands[0].state, "PASS")
+        self.assertEqual(ev.commands[1].state, "PASS")
+        self.assertEqual(ev.commands[2].state, "PASS")
+
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = cli_main(["verify", "--path", str(proj)])
+        self.assertEqual(code, 0)
+        self.assertIn("PASS", buf.getvalue())
+
+    def test_verify_gate_appears_only_once_when_already_in_manifest(self) -> None:
+        """Regressão AUD-P0-01.1 (4): Gate 'ch status --strict' aparece uma única vez se já estiver no manifesto."""
+        base = Path(self.test_dir)
+        proj = create_project("DedupGateApp", base_dir=base)
+        manifest = load_manifest(proj / "chdevflow.yaml")
+        # Inclui ch status --strict explicitamente no manifesto
+        manifest["verification"]["commands"] = ["ch status --strict", "echo 'teste ok'"]
+        save_manifest(proj / "chdevflow.yaml", manifest)
+
+        ev = run_verification(proj, persist=False)
+        self.assertEqual(ev.overall_state, "PASS")
+        # Não deve haver duplicata de ch status --strict
+        strict_cmds = [c for c in ev.commands if c.command == "ch status --strict"]
+        self.assertEqual(len(strict_cmds), 1)
+        self.assertEqual(len(ev.commands), 2)
+        self.assertEqual(ev.commands[0].command, "ch status --strict")
+        self.assertEqual(ev.commands[1].command, "echo 'teste ok'")
+
+    def test_verify_fail_fast_skips_subsequent_commands_on_structural_failure(self) -> None:
+        """Regressão AUD-P0-01.1 (5): Comprova SKIPPED de comandos posteriores no modo fail-fast quando gate falha."""
+        base = Path(self.test_dir)
+        proj = create_project("SkipTestApp", base_dir=base)
+        manifest = load_manifest(proj / "chdevflow.yaml")
+        manifest["verification"]["commands"] = ["echo 'cmd1'", "echo 'cmd2'", "echo 'cmd3'"]
+        save_manifest(proj / "chdevflow.yaml", manifest)
+
+        (proj / "docs" / "PROJETO.md").unlink()
+
+        ev = run_verification(proj, fail_fast=True, persist=False)
+        self.assertEqual(ev.overall_state, "FAIL")
+        self.assertEqual(len(ev.commands), 4)
+        self.assertEqual(ev.commands[0].command, "ch status --strict")
+        self.assertEqual(ev.commands[0].state, "FAIL")
+        self.assertEqual(ev.commands[1].state, "SKIPPED")
+        self.assertEqual(ev.commands[2].state, "SKIPPED")
+        self.assertEqual(ev.commands[3].state, "SKIPPED")
+
+    # Regressões AUD-P0-01.2: Diretório, symlink quebrado e validação de is_file em ESSENTIAL_DOCS
+    def test_directory_in_place_of_document_fails_strict(self) -> None:
+        """Regressão AUD-P0-01.2 (1): Diretório com nome de documento é classificado como inválido/ausente e falha no estrito."""
+        base = Path(self.test_dir)
+        proj = create_project("DirDocApp", base_dir=base)
+        status_file = proj / "docs" / "STATUS.md"
+        status_file.unlink()
+        status_file.mkdir()  # Cria um diretório no lugar do arquivo
+
+        # API Python
+        st = get_project_status(proj, strict=True)
+        self.assertFalse(st["structural_health"])
+        self.assertIn("docs/STATUS.md", st["missing_docs"])
+        self.assertEqual(st["docs"]["docs/STATUS.md"], "INVALIDO (diretório)")
+        self.assertEqual(st["expected_exit_code"], 1)
+
+        # CLI status informativa (código 0)
+        buf_info = io.StringIO()
+        with patch("sys.stdout", buf_info):
+            code_info = cli_main(["status", "--path", str(proj)])
+        self.assertEqual(code_info, 0)
+        self.assertIn("INVALIDO (diretório)", buf_info.getvalue())
+
+        # CLI status estrita (código 1)
+        code_strict = cli_main(["status", "--path", str(proj), "--strict"])
+        self.assertEqual(code_strict, 1)
+
+        # ch verify falha
+        ev = run_verification(proj, persist=False)
+        self.assertEqual(ev.overall_state, "FAIL")
+
+    def test_broken_symlink_in_place_of_document_fails_strict(self) -> None:
+        """Regressão AUD-P0-01.2 (2): Symlink quebrado no lugar de documento fundamental falha no modo estrito."""
+        base = Path(self.test_dir)
+        proj = create_project("SymlinkDocApp", base_dir=base)
+        doc_file = proj / "docs" / "CH" / "DECISOES.md"
+        doc_file.unlink()
+        try:
+            doc_file.symlink_to(proj / "nonexistent_target.md")
+        except (OSError, NotImplementedError):
+            self.skipTest("Symlinks não suportados no ambiente de teste.")
+
+        st = get_project_status(proj, strict=True)
+        self.assertFalse(st["structural_health"])
+        self.assertIn("docs/CH/DECISOES.md", st["missing_docs"])
+        self.assertEqual(st["docs"]["docs/CH/DECISOES.md"], "INVALIDO (symlink quebrado)")
+        self.assertEqual(st["expected_exit_code"], 1)
+
+        code_strict = cli_main(["status", "--path", str(proj), "--strict"])
+        self.assertEqual(code_strict, 1)
+
+        ev = run_verification(proj, persist=False)
+        self.assertEqual(ev.overall_state, "FAIL")
+
+    def test_valid_regular_file_and_nonexistent_document_classification(self) -> None:
+        """Regressão AUD-P0-01.2 (3): Valida classificação correta de arquivo regular (PRESENTE) e inexistente (AUSENTE)."""
+        base = Path(self.test_dir)
+        proj = create_project("RegFileApp", base_dir=base)
+
+        # Arquivo regular existente
+        st = get_project_status(proj, strict=False)
+        self.assertEqual(st["docs"]["AGENTS.md"], "PRESENTE")
+
+        # Documento inexistente
+        (proj / "AGENTS.md").unlink()
+        st_missing = get_project_status(proj, strict=False)
+        self.assertEqual(st_missing["docs"]["AGENTS.md"], "AUSENTE")
+        self.assertIn("AGENTS.md", st_missing["missing_docs"])
 
 
 if __name__ == "__main__":

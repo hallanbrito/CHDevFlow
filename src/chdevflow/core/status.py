@@ -102,8 +102,14 @@ def get_project_status(project_path: Path, strict: bool = False) -> dict[str, An
     missing_docs: list[str] = []
     for doc in ESSENTIAL_DOCS:
         full_p = proj_resolved / doc
-        if full_p.exists():
+        if full_p.is_file():
             docs_status[doc] = "PRESENTE"
+        elif full_p.is_dir():
+            docs_status[doc] = "INVALIDO (diretório)"
+            missing_docs.append(doc)
+        elif full_p.is_symlink():
+            docs_status[doc] = "INVALIDO (symlink quebrado)"
+            missing_docs.append(doc)
         else:
             docs_status[doc] = "AUSENTE"
             missing_docs.append(doc)
