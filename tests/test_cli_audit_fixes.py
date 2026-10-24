@@ -34,7 +34,14 @@ from chdevflow.core.evidence import (
 )
 from chdevflow.core.project import create_project, validate_project_name
 from chdevflow.core.ruc import generate_ruc_text
-from chdevflow.core.submit import SubmitError, SubmitSecurityError, validate_and_submit
+from chdevflow.core.submit import (
+    RUC_MARKER_END,
+    RUC_MARKER_START,
+    SubmitError,
+    SubmitSecurityError,
+    inject_or_replace_ruc,
+    validate_and_submit,
+)
 
 
 class TestCliAuditFixes(unittest.TestCase):
@@ -309,7 +316,12 @@ class TestCliAuditFixes(unittest.TestCase):
                     return subprocess.CompletedProcess(
                         cmd,
                         0,
-                        stdout=json.dumps({"url": "https://github.com/org/repo/pull/42", "isDraft": True, "state": "OPEN"}),
+                        stdout=json.dumps({
+                            "url": "https://github.com/org/repo/pull/42",
+                            "isDraft": True,
+                            "state": "OPEN",
+                            "body": "Descrição inicial existente no PR\n- [x] Item 1",
+                        }),
                         stderr="",
                     )
                 if "gh pr edit" in cmd_str:
@@ -478,6 +490,167 @@ class TestCliAuditFixes(unittest.TestCase):
         self.assertNotIn("nenhuma mutação na main", ruc_text)
         self.assertNotIn("Custo adicional verificado", ruc_text)
         self.assertIn("Custo adicional declarado, não verificado", ruc_text)
+
+    # 12. AUD-CLI-04: Preservação de PR body, substituição de RUC e idempotência
+    def test_inject_or_replace_ruc_preserves_description_links_and_checklists(self) -> None:
+        existing = (
+            "# Feature de Autenticação\n\n"
+            "Implementação de login seguro. Veja [RFC-12](https://github.com/org/repo/issues/12).\n\n"
+            "### Checklist de Entrega\n"
+            "- [x] Migrations aplicadas\n"
+            "- [x] Endpoint /auth/login\n"
+            "- [ ] Testes de carga\n\n"
+            "Observações: Aguardando homologação do PO."
+        )
+        ruc = "# RELATÓRIO UNIVERSAL C.H. — AGY — Fatia 1\nStatus: PASS"
+        result = inject_or_replace_ruc(existing, ruc)
+
+        # Preservação integral do conteúdo original
+        self.assertIn("# Feature de Autenticação", result)
+        self.assertIn("Veja [RFC-12](https://github.com/org/repo/issues/12)", result)
+        self.assertIn("- [x] Migrations aplicadas", result)
+        self.assertIn("- [ ] Testes de carga", result)
+        self.assertIn("Observações: Aguardando homologação do PO.", result)
+
+        # Inclusão do RUC com marcadores
+        self.assertIn(RUC_MARKER_START, result)
+        self.assertIn("## RUC da Submissão", result)
+        self.assertIn("RELATÓRIO UNIVERSAL C.H. — AGY — Fatia 1", result)
+        self.assertIn(RUC_MARKER_END, result)
+
+    def test_inject_or_replace_ruc_replaces_old_ruc(self) -> None:
+        # 1. Com marcadores controlados
+        body_with_marked_ruc = (
+            "Descrição do PR\n\n"
+            f"{RUC_MARKER_START}\n## RUC da Submissão\n\nRUC ANTIGO VERSAO 0.1\n{RUC_MARKER_END}"
+        )
+        new_ruc = "RUC NOVO VERSAO 0.2"
+        res1 = inject_or_replace_ruc(body_with_marked_ruc, new_ruc)
+        self.assertIn("Descrição do PR", res1)
+        self.assertNotIn("RUC ANTIGO VERSAO 0.1", res1)
+        self.assertIn("RUC NOVO VERSAO 0.2", res1)
+
+        # 2. Com formato antigo sem marcadores
+        body_with_unmarked_ruc = (
+            "Descrição original do PR\n\n"
+            "## RUC da Submissão\n\n"
+            "# RELATÓRIO UNIVERSAL C.H. — Antigo\nFatos antigos..."
+        )
+        res2 = inject_or_replace_ruc(body_with_unmarked_ruc, new_ruc)
+        self.assertIn("Descrição original do PR", res2)
+        self.assertNotIn("Fatos antigos", res2)
+        self.assertIn("RUC NOVO VERSAO 0.2", res2)
+        self.assertIn(RUC_MARKER_START, res2)
+        self.assertIn(RUC_MARKER_END, res2)
+
+    def test_inject_or_replace_ruc_idempotency_no_duplicates(self) -> None:
+        base = "Descrição inicial do PR\n- [x] Check 1"
+        ruc1 = "RUC Execução 1"
+        ruc2 = "RUC Execução 2"
+        ruc3 = "RUC Execução 3"
+
+        res1 = inject_or_replace_ruc(base, ruc1)
+        res2 = inject_or_replace_ruc(res1, ruc2)
+        res3 = inject_or_replace_ruc(res2, ruc3)
+
+        self.assertIn("Descrição inicial do PR", res3)
+        self.assertIn("- [x] Check 1", res3)
+        self.assertNotIn("RUC Execução 1", res3)
+        self.assertNotIn("RUC Execução 2", res3)
+        self.assertIn("RUC Execução 3", res3)
+
+        # Exatamente um bloco de marcadores e um cabeçalho RUC
+        self.assertEqual(res3.count(RUC_MARKER_START), 1)
+        self.assertEqual(res3.count(RUC_MARKER_END), 1)
+        self.assertEqual(res3.count("## RUC da Submissão"), 1)
+
+    def test_submit_remote_existing_pr_preserves_description_and_updates_ruc(self) -> None:
+        """
+        Teste end-to-end com mocks:
+        PR existente possui descrição rica e RUC antigo.
+        ch submit --remote preserva a descrição rica, substitui o RUC antigo pelo novo
+        e chama gh pr edit com o corpo atualizado e exatamente um bloco RUC.
+        """
+        target = Path(self.test_dir) / "ExistingRichPrRepo"
+        target.mkdir()
+
+        subprocess.run(["git", "-C", str(target), "init", "-b", "feat/rich-pr"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        manifest = create_manifest_data("ExistingRichPrRepo")
+        manifest["verification"]["commands"] = ["echo 'ok'"]
+        save_manifest(target / "chdevflow.yaml", manifest)
+        (target / ".gitignore").write_text(".ch/evidence/\n", encoding="utf-8")
+        (target / "app.py").write_text("print(1)\n", encoding="utf-8")
+
+        subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-m", "initial commit"], check=True, capture_output=True)
+
+        existing_pr_body = (
+            "## Resumo da Entrega\n\n"
+            "Links úteis: [Documentação](https://docs.example.com)\n\n"
+            "### Itens Concluídos\n"
+            "- [x] Feature A\n"
+            "- [x] Testes unitários\n\n"
+            f"{RUC_MARKER_START}\n## RUC da Submissão\n\nRUC ANTIGO QUE DEVE SER SUBSTITUÍDO\n{RUC_MARKER_END}"
+        )
+
+        captured_edit_body: list[str] = []
+        orig_run = subprocess.run
+
+        with patch("subprocess.run") as mock_run:
+            def custom_run(cmd, *args, **kwargs):
+                cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+                if "gh auth status" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="OK", stderr="")
+                if "rev-list" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+                if "git" in cmd_str and "push" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="push ok", stderr="")
+                if "gh pr view" in cmd_str:
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps({
+                            "url": "https://github.com/org/repo/pull/77",
+                            "isDraft": True,
+                            "state": "OPEN",
+                            "body": existing_pr_body,
+                        }),
+                        stderr="",
+                    )
+                if "gh pr edit" in cmd_str:
+                    if isinstance(cmd, list) and "--body" in cmd:
+                        idx = cmd.index("--body")
+                        captured_edit_body.append(cmd[idx + 1])
+                    return subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/org/repo/pull/77\n", stderr="")
+                return orig_run(cmd, *args, **kwargs)
+
+            mock_run.side_effect = custom_run
+
+            res = validate_and_submit(target, remote=True)
+            self.assertTrue(res["remote_executed"])
+            self.assertEqual(res["state"], "AGUARDANDO_PO")
+            self.assertIn("Draft PR existente identificado, validado e atualizado com RUC", res["remote_details"])
+
+            self.assertEqual(len(captured_edit_body), 1)
+            edited = captured_edit_body[0]
+
+            # Preservou a descrição, links e checklist
+            self.assertIn("## Resumo da Entrega", edited)
+            self.assertIn("[Documentação](https://docs.example.com)", edited)
+            self.assertIn("- [x] Feature A", edited)
+
+            # Substituiu o RUC antigo pelo RUC fresco
+            self.assertNotIn("RUC ANTIGO QUE DEVE SER SUBSTITUÍDO", edited)
+            self.assertIn(RUC_MARKER_START, edited)
+            self.assertIn(RUC_MARKER_END, edited)
+            self.assertIn("RELATÓRIO UNIVERSAL C.H.", edited)
+
+            # Idempotência de blocos
+            self.assertEqual(edited.count(RUC_MARKER_START), 1)
+            self.assertEqual(edited.count(RUC_MARKER_END), 1)
 
 
 if __name__ == "__main__":

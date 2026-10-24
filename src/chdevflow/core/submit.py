@@ -3,11 +3,52 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 
 from chdevflow.core.evidence import run_verification
 from chdevflow.core.ruc import generate_ruc, generate_ruc_text
 from chdevflow.core.status import check_git_status
+
+RUC_MARKER_START = "<!-- CHDEVFLOW:RUC:START -->"
+RUC_MARKER_END = "<!-- CHDEVFLOW:RUC:END -->"
+
+
+def format_ruc_block(ruc_text: str) -> str:
+    """Formata o bloco de RUC delimitado por marcadores controlados."""
+    return f"{RUC_MARKER_START}\n## RUC da Submissão\n\n{ruc_text.strip()}\n{RUC_MARKER_END}"
+
+
+def inject_or_replace_ruc(base_text: str, ruc_text: str) -> str:
+    """
+    Substitui ou anexa o RUC em um corpo de texto (ex.: PR body).
+    Preserva integralmente descrições, checklists e links preexistentes.
+    Substitui RUCs antigos e garante idempotência (exatamente um bloco RUC).
+    """
+    ruc_block = format_ruc_block(ruc_text)
+    text = (base_text or "").strip()
+
+    # 1. Se já contém os marcadores controlados, substitui o bloco delimitado
+    marker_pattern = re.compile(
+        rf"{re.escape(RUC_MARKER_START)}[\s\S]*?{re.escape(RUC_MARKER_END)}",
+        re.MULTILINE,
+    )
+    if marker_pattern.search(text):
+        return marker_pattern.sub(ruc_block, text).strip()
+
+    # 2. Se contém cabeçalho antigo de RUC sem marcadores, preserva o que está antes e substitui o restante
+    if "## RUC da Submissão" in text:
+        before = text.split("## RUC da Submissão")[0].rstrip()
+        return f"{before}\n\n{ruc_block}".strip() if before else ruc_block
+
+    if "# RELATÓRIO UNIVERSAL C.H." in text:
+        before = text.split("# RELATÓRIO UNIVERSAL C.H.")[0].rstrip()
+        return f"{before}\n\n{ruc_block}".strip() if before else ruc_block
+
+    # 3. Caso normal: anexa o bloco RUC ao final do conteúdo base
+    if text:
+        return f"{text}\n\n{ruc_block}"
+    return f"Submissão da fatia sob governança C.H.\n\nEstado: AGUARDANDO_PO.\n\n{ruc_block}"
 
 
 class SubmitError(RuntimeError):
@@ -142,9 +183,9 @@ def validate_and_submit(
         if push_cmd.returncode != 0:
             raise SubmitError(f"Falha ao realizar git push na branch '{current_branch}': {push_cmd.stderr.strip()}")
 
-        # Consulta PR existente
+        # Consulta PR existente incluindo corpo atual para preservação
         view_pr = subprocess.run(
-            ["gh", "pr", "view", current_branch, "--json", "number,url,isDraft,state"],
+            ["gh", "pr", "view", current_branch, "--json", "number,url,isDraft,state,body"],
             cwd=str(target),
             capture_output=True,
             text=True,
@@ -152,16 +193,6 @@ def validate_and_submit(
         )
 
         pr_title = title or f"Fatia: {current_branch}"
-        ruc_section = f"## RUC da Submissão\n\n{ruc_text}"
-        if body and body.strip():
-            custom_body = body.strip()
-            if "## RUC da Submissão" in custom_body or "RELATÓRIO UNIVERSAL C.H." in custom_body:
-                pr_body = custom_body
-            else:
-                pr_body = f"{custom_body}\n\n{ruc_section}"
-        else:
-            pr_body = f"Submissão da fatia sob governança C.H.\n\nEstado: AGUARDANDO_PO.\n\n{ruc_section}"
-
         remote_details = ""
 
         if view_pr.returncode == 0:
@@ -178,7 +209,12 @@ def validate_and_submit(
             if pr_data.get("state") in ("MERGED", "CLOSED"):
                 raise SubmitError(f"Operação remota bloqueada: O PR existente está {pr_data.get('state')}.")
 
-            # Atualiza o corpo do Draft PR existente para garantir que o RUC em memória seja sempre anexado
+            # Preserva integralmente a descrição, checklists e links preexistentes do PR
+            existing_body = pr_data.get("body") or ""
+            target_base = body if (body and body.strip()) else existing_body
+            pr_body = inject_or_replace_ruc(target_base, ruc_text)
+
+            # Atualiza o corpo do Draft PR existente garantindo RUC atualizado sem apagar o restante
             edit_cmd = ["gh", "pr", "edit", current_branch, "--body", pr_body]
             if title:
                 edit_cmd.extend(["--title", pr_title])
@@ -194,7 +230,8 @@ def validate_and_submit(
 
             remote_details = f"Draft PR existente identificado, validado e atualizado com RUC: {pr_data.get('url')}"
         else:
-            # Cria novo Draft PR
+            # Cria novo Draft PR preservando --body personalizado se fornecido
+            pr_body = inject_or_replace_ruc(body or "", ruc_text)
             create_pr = subprocess.run(
                 ["gh", "pr", "create", "--draft", "--title", pr_title, "--body", pr_body],
                 cwd=str(target),
