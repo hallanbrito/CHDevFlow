@@ -4,6 +4,13 @@
 {% block page_title %}Grafo Visual de Dependências (DAG Read-Only){% endblock %}
 
 {% block content %}
+{% set incompletos = grafo.nos.values() | selectattr('pendencias_dados') | list %}
+{% if incompletos %}
+<div class="card" role="status" style="border-left: 4px solid var(--status-bloqueada); margin-bottom: 1rem;">
+  <strong>Dados insuficientes: grafo parcial.</strong>
+  <p>{{ incompletos|length }} missão(ões) com campos ou dependências não informados. A ausência de arestas não comprova ausência de dependências.</p>
+</div>
+{% endif %}
 <!-- Alerta de Anomalias (se houver ciclos ou dependências órfãs) -->
 {% if grafo.ciclos_detectados %}
 <div class="card" style="border-left: 5px solid var(--status-ciclo); background-color: var(--status-ciclo-bg); margin-bottom: 1rem;">
@@ -48,7 +55,7 @@
   <div style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem;">
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-concluida); border-radius: 2px;"></span>
-      <span><strong>Concluída:</strong> Integrada na main</span>
+      <span><strong>Concluída:</strong> Etapa de conclusão observada</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-elegivel); border-radius: 2px;"></span>
@@ -135,14 +142,14 @@
     </div>
 
     <!-- Nível 3: Tarefas com Anomalias (Ciclos e Órfãs) -->
-    {% set tem_anomalias = false %}
+    {% set tem_anomalias = namespace(valor=false) %}
     {% for id, no in grafo.nos.items() %}
       {% if no.status_grafo in ['BLOQUEADA_CICLO', 'BLOQUEADA_ORFA'] %}
-        {% set tem_anomalias = true %}
+        {% set tem_anomalias.valor = true %}
       {% endif %}
     {% endfor %}
 
-    {% if tem_anomalias %}
+    {% if tem_anomalias.valor %}
     <div style="margin-top: 1rem;">
       <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--status-ciclo); text-transform: uppercase; margin-bottom: 0.75rem;">
         3. Fila de Anomalias de Dependência (Requer Atenção do PO)
@@ -169,6 +176,21 @@
               </div>
             </div>
           {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% set bloqueadas_dados = grafo.nos.values() | selectattr('status_grafo', 'equalto', 'BLOQUEADA_DADOS') | list %}
+    {% if bloqueadas_dados %}
+    <div style="margin-top: 1rem;">
+      <h4>Dados insuficientes — análise pendente</h4>
+      <div class="graph-level">
+        {% for no in bloqueadas_dados %}
+        <div class="graph-node-card bloqueada">
+          <div class="node-header"><span class="node-id">{{ no.id }}</span><span class="badge-status badge-bloqueada">Dados insuficientes</span></div>
+          <div class="node-title">{{ no.titulo }}</div>
+          <p>{{ no.motivo_bloqueio }}</p>
+        </div>
         {% endfor %}
       </div>
     </div>

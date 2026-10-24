@@ -4,6 +4,24 @@
 {% block page_title %}Dashboard de Supervisão{% endblock %}
 
 {% block content %}
+{% if erro_leitura %}
+<div class="card" role="alert" style="border-left: 4px solid var(--status-ciclo); margin-bottom: 1rem;">
+  <strong>Falha na leitura do projeto</strong>
+  <p>Não foi possível obter os dados. Os indicadores estão indisponíveis; isso não significa que o projeto está vazio.</p>
+  <p>{{ erro_leitura }}</p>
+  <p>Confira o acesso ao GitHub no terminal e tente novamente. O modo selecionado foi preservado.</p>
+</div>
+{% else %}
+<p style="margin-bottom: 1rem;">Itens recebidos: {{ stats.total_recebidos }} · Missões reconhecidas: {{ stats.total_tarefas }} · Itens fora do filtro: {{ stats.total_ignorados }}</p>
+{% if stats.total_dados_insuficientes %}
+<div class="card" role="status" style="border-left: 4px solid var(--status-bloqueada); margin-bottom: 1rem;">
+  <strong>Dados insuficientes para verificar o grafo de {{ stats.total_dados_insuficientes }} missão(ões).</strong>
+  <p>As missões foram carregadas, mas há campos ou dependências não informados. Consulte os detalhes em Missões. Ausência de informação não significa ausência de dependências.</p>
+</div>
+{% endif %}
+{% if not missoes %}
+<p role="status">Nenhuma missão reconhecida neste snapshot. Consulte a contagem de itens recebidos e fora do filtro.</p>
+{% endif %}
 <!-- Grid de Contadores Principais -->
 <div class="stats-grid">
   <div class="stat-card">
@@ -21,13 +39,13 @@
   <div class="stat-card" style="border-left: 4px solid var(--status-bloqueada);">
     <span class="stat-title" style="color: var(--status-bloqueada);">Bloqueadas</span>
     <span class="stat-value" style="color: var(--status-bloqueada);">{{ stats.total_bloqueadas }}</span>
-    <span class="stat-desc">Dependências pendentes</span>
+    <span class="stat-desc">Dependências ou dados insuficientes</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid var(--status-concluida);">
     <span class="stat-title" style="color: var(--status-concluida);">Concluídas</span>
     <span class="stat-value" style="color: var(--status-concluida);">{{ stats.total_concluidas }}</span>
-    <span class="stat-desc">Integradas na branch main</span>
+    <span class="stat-desc">Etapa de conclusão observada</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid {% if stats.total_ciclos > 0 %}var(--status-ciclo){% else %}var(--border-color){% endif %};">
@@ -42,6 +60,7 @@
     <span class="stat-desc">Tarefas não localizadas</span>
   </div>
 </div>
+{% endif %}
 
 <!-- Pílula Didática do Modo Estudante (Destaque) -->
 <div class="student-hint-card">
