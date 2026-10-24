@@ -152,7 +152,16 @@ def validate_and_submit(
         )
 
         pr_title = title or f"Fatia: {current_branch}"
-        pr_body = body or f"Submissão da fatia sob governança C.H.\n\nEstado: AGUARDANDO_PO.\n\n## RUC da Submissão\n\n{ruc_text}"
+        ruc_section = f"## RUC da Submissão\n\n{ruc_text}"
+        if body and body.strip():
+            custom_body = body.strip()
+            if "## RUC da Submissão" in custom_body or "RELATÓRIO UNIVERSAL C.H." in custom_body:
+                pr_body = custom_body
+            else:
+                pr_body = f"{custom_body}\n\n{ruc_section}"
+        else:
+            pr_body = f"Submissão da fatia sob governança C.H.\n\nEstado: AGUARDANDO_PO.\n\n{ruc_section}"
+
         remote_details = ""
 
         if view_pr.returncode == 0:
@@ -169,7 +178,21 @@ def validate_and_submit(
             if pr_data.get("state") in ("MERGED", "CLOSED"):
                 raise SubmitError(f"Operação remota bloqueada: O PR existente está {pr_data.get('state')}.")
 
-            remote_details = f"Draft PR existente identificado e validado: {pr_data.get('url')}"
+            # Atualiza o corpo do Draft PR existente para garantir que o RUC em memória seja sempre anexado
+            edit_cmd = ["gh", "pr", "edit", current_branch, "--body", pr_body]
+            if title:
+                edit_cmd.extend(["--title", pr_title])
+            edit_pr = subprocess.run(
+                edit_cmd,
+                cwd=str(target),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if edit_pr.returncode != 0:
+                raise SubmitError(f"Falha ao atualizar corpo do Draft PR com RUC no GitHub: {edit_pr.stderr.strip()}")
+
+            remote_details = f"Draft PR existente identificado, validado e atualizado com RUC: {pr_data.get('url')}"
         else:
             # Cria novo Draft PR
             create_pr = subprocess.run(

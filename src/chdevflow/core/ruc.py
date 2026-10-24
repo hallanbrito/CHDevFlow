@@ -224,7 +224,7 @@ Documento estruturado emitido pelo CHDevFlow CLI a partir do estado observado no
 - **Arquivos modificados:** {files_block}
 - **Status do manifesto:** {manifest_status_msg}
 - **Sanitização de comandos:** Saídas stdout/stderr e comandos de verificação submetidos a filtros de mascaramento de segredos.
-- **Custo adicional verificado:** R$ 0,00 declarado pelo executor.
+- **Custo adicional declarado, não verificado:** R$ 0,00 declarado pelo executor.
 - **Deploy / merge:** NÃO EXECUTADO (Reservado à decisão humana).
 
 ## 8. Recomendação técnica e próximo passo

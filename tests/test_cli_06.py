@@ -28,19 +28,30 @@ from chdevflow.core.watch import WatchSecurityError, run_watch
 class TestCli06WatchAndE2E(unittest.TestCase):
     def setUp(self) -> None:
         self.test_dir = tempfile.mkdtemp(prefix="ch_test_cli06_")
-        # Garante autossuficiência do executável 'ch' no ambiente de testes E2E
-        if shutil.which("ch") is None:
-            bin_dir = Path(self.test_dir) / "bin"
-            bin_dir.mkdir(parents=True, exist_ok=True)
-            ch_shim = bin_dir / "ch"
-            ch_shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -m chdevflow.cli "$@"\n', encoding="utf-8")
-            ch_shim.chmod(0o755)
-            self._orig_path = os.environ.get("PATH", "")
-            os.environ["PATH"] = f"{bin_dir}:{self._orig_path}"
+        # Garante autossuficiência do executável 'ch' no ambiente de testes E2E mesmo sem instalação prévia
+        import chdevflow
+        src_path = Path(chdevflow.__file__).resolve().parent.parent
+        bin_dir = Path(self.test_dir) / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        ch_shim = bin_dir / "ch"
+        ch_shim.write_text(
+            f'#!/bin/sh\nexport PYTHONPATH="{src_path}:${{PYTHONPATH}}"\nexec "{sys.executable}" -m chdevflow.cli "$@"\n',
+            encoding="utf-8",
+        )
+        ch_shim.chmod(0o755)
+        self._orig_path = os.environ.get("PATH", "")
+        self._orig_pypath = os.environ.get("PYTHONPATH", "")
+        os.environ["PATH"] = f"{bin_dir}:{self._orig_path}"
+        os.environ["PYTHONPATH"] = f"{src_path}:{self._orig_pypath}" if self._orig_pypath else str(src_path)
 
     def tearDown(self) -> None:
         if hasattr(self, "_orig_path"):
             os.environ["PATH"] = self._orig_path
+        if hasattr(self, "_orig_pypath"):
+            if self._orig_pypath:
+                os.environ["PYTHONPATH"] = self._orig_pypath
+            else:
+                os.environ.pop("PYTHONPATH", None)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     def test_watch_without_once_raises_security_error(self) -> None:

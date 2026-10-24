@@ -94,6 +94,16 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
     validate_command_safety(cmd_str)
     sanitized_cmd = sanitize_output(cmd_str)
 
+    run_env = os.environ.copy()
+    try:
+        import chdevflow
+        pkg_src = str(Path(chdevflow.__file__).resolve().parent.parent)
+        cur_pypath = run_env.get("PYTHONPATH", "")
+        if pkg_src not in cur_pypath.split(os.pathsep):
+            run_env["PYTHONPATH"] = f"{pkg_src}{os.pathsep}{cur_pypath}" if cur_pypath else pkg_src
+    except Exception:
+        pass
+
     # Se o comando iniciar com 'ch ' ou for 'ch', e o executável não estiver no PATH,
     # resolve autossuficientemente via sys.executable -m chdevflow.cli
     run_cmd = cmd_str
@@ -108,6 +118,7 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
             run_cmd,
             shell=True,
             cwd=str(cwd),
+            env=run_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

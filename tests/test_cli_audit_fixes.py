@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -39,8 +40,32 @@ from chdevflow.core.submit import SubmitError, SubmitSecurityError, validate_and
 class TestCliAuditFixes(unittest.TestCase):
     def setUp(self) -> None:
         self.test_dir = tempfile.mkdtemp(prefix="ch_test_audit_")
+        self._orig_git_author_name = os.environ.get("GIT_AUTHOR_NAME")
+        self._orig_git_author_email = os.environ.get("GIT_AUTHOR_EMAIL")
+        self._orig_git_committer_name = os.environ.get("GIT_COMMITTER_NAME")
+        self._orig_git_committer_email = os.environ.get("GIT_COMMITTER_EMAIL")
+        os.environ["GIT_AUTHOR_NAME"] = "Tester"
+        os.environ["GIT_AUTHOR_EMAIL"] = "tester@example.com"
+        os.environ["GIT_COMMITTER_NAME"] = "Tester"
+        os.environ["GIT_COMMITTER_EMAIL"] = "tester@example.com"
 
     def tearDown(self) -> None:
+        if self._orig_git_author_name is not None:
+            os.environ["GIT_AUTHOR_NAME"] = self._orig_git_author_name
+        else:
+            os.environ.pop("GIT_AUTHOR_NAME", None)
+        if self._orig_git_author_email is not None:
+            os.environ["GIT_AUTHOR_EMAIL"] = self._orig_git_author_email
+        else:
+            os.environ.pop("GIT_AUTHOR_EMAIL", None)
+        if self._orig_git_committer_name is not None:
+            os.environ["GIT_COMMITTER_NAME"] = self._orig_git_committer_name
+        else:
+            os.environ.pop("GIT_COMMITTER_NAME", None)
+        if self._orig_git_committer_email is not None:
+            os.environ["GIT_COMMITTER_EMAIL"] = self._orig_git_committer_email
+        else:
+            os.environ.pop("GIT_COMMITTER_EMAIL", None)
         shutil.rmtree(self.test_dir, ignore_errors=True)
 
     # 1. E2E real & Stack intent
@@ -146,6 +171,8 @@ class TestCliAuditFixes(unittest.TestCase):
         target = Path(self.test_dir) / "NonDraftRepo"
         target.mkdir()
         subprocess.run(["git", "-C", str(target), "init", "-b", "agy/test-nondraft"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
         manifest = create_manifest_data("NonDraftRepo")
         manifest["verification"]["commands"] = ["echo 'ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
@@ -285,6 +312,9 @@ class TestCliAuditFixes(unittest.TestCase):
                         stdout=json.dumps({"url": "https://github.com/org/repo/pull/42", "isDraft": True, "state": "OPEN"}),
                         stderr="",
                     )
+                if "gh pr edit" in cmd_str:
+                    executed_calls.append(cmd_str)
+                    return subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/org/repo/pull/42\n", stderr="")
                 if "gh pr create" in cmd_str:
                     executed_calls.append(cmd_str)
                     return subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/org/repo/pull/42\n", stderr="")
@@ -297,15 +327,86 @@ class TestCliAuditFixes(unittest.TestCase):
             self.assertEqual(res["state"], "AGUARDANDO_PO")
             self.assertEqual(res["verification"], "PASS")
             self.assertFalse(res["is_dirty"])
-            self.assertIn("Draft PR existente identificado e validado", res["remote_details"])
+            self.assertIn("Draft PR existente identificado, validado e atualizado com RUC", res["remote_details"])
 
-            # Comprova que git push e gh pr view foram chamados
+            # Comprova que git push, gh pr view e gh pr edit foram chamados para atualizar o RUC
             self.assertTrue(any("git" in c and "push" in c for c in executed_calls))
             self.assertTrue(any("gh pr view" in c for c in executed_calls))
+            self.assertTrue(any("gh pr edit" in c for c in executed_calls))
 
         # Comprova que o diretório continua 100% limpo no git
         git_check = subprocess.run(["git", "-C", str(target), "status", "--porcelain"], capture_output=True, text=True, check=True)
         self.assertEqual(git_check.stdout.strip(), "")
+
+    def test_submit_remote_creates_new_pr_and_preserves_custom_body(self) -> None:
+        """
+        Comprova que na criação de um novo Draft PR:
+        - Se o PR não existe ainda (gh pr view retorna 1), chama gh pr create --draft.
+        - Se for fornecido --body customizado, o corpo personalizado é preservado E o RUC é anexado.
+        - Executa confirmação pós-criação com gh pr view.
+        """
+        target = Path(self.test_dir) / "NewPrRepo"
+        target.mkdir()
+
+        subprocess.run(["git", "-C", str(target), "init", "-b", "feat/nova-entrega"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        manifest = create_manifest_data("NewPrRepo")
+        manifest["verification"]["commands"] = ["echo 'ok'"]
+        save_manifest(target / "chdevflow.yaml", manifest)
+        (target / ".gitignore").write_text(".ch/evidence/\n", encoding="utf-8")
+        (target / "code.py").write_text("x = 1\n", encoding="utf-8")
+
+        subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(target), "commit", "-m", "feat: initial commit"], check=True, capture_output=True)
+
+        executed_calls: list[str] = []
+        captured_body: list[str] = []
+        orig_run = subprocess.run
+
+        with patch("subprocess.run") as mock_run:
+            def custom_run(cmd, *args, **kwargs):
+                cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+                executed_calls.append(cmd_str)
+                if "gh auth status" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="OK", stderr="")
+                if "rev-list" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+                if "git" in cmd_str and "push" in cmd_str:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="push ok", stderr="")
+                if "gh pr view" in cmd_str:
+                    # Antes de gh pr create: PR não existe ainda (código 1)
+                    if not any("gh pr create" in c for c in executed_calls):
+                        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="not found")
+                    # Após gh pr create: confirmação (código 0, isDraft=True)
+                    return subprocess.CompletedProcess(
+                        cmd,
+                        0,
+                        stdout=json.dumps({"url": "https://github.com/org/repo/pull/99", "isDraft": True, "state": "OPEN"}),
+                        stderr="",
+                    )
+                if "gh pr create" in cmd_str:
+                    if isinstance(cmd, list) and "--body" in cmd:
+                        idx = cmd.index("--body")
+                        captured_body.append(cmd[idx + 1])
+                    return subprocess.CompletedProcess(cmd, 0, stdout="https://github.com/org/repo/pull/99\n", stderr="")
+                return orig_run(cmd, *args, **kwargs)
+
+            mock_run.side_effect = custom_run
+
+            res = validate_and_submit(target, remote=True, body="Corpo customizado pelo desenvolvedor")
+            self.assertTrue(res["remote_executed"])
+            self.assertEqual(res["state"], "AGUARDANDO_PO")
+            self.assertIn("Draft PR criado e confirmado com sucesso", res["remote_details"])
+
+            # Comprova que gh pr create foi chamado
+            self.assertTrue(any("gh pr create" in c for c in executed_calls))
+            # Comprova que o corpo customizado foi preservado E o RUC foi anexado
+            self.assertTrue(len(captured_body) > 0)
+            self.assertIn("Corpo customizado pelo desenvolvedor", captured_body[0])
+            self.assertIn("## RUC da Submissão", captured_body[0])
+            self.assertIn("RELATÓRIO UNIVERSAL C.H.", captured_body[0])
 
     # 9. Auditoria 2 — Rejeitar segredos nos valores de chdevflow.yaml
     def test_manifest_rejects_secrets_in_values_and_verification_commands(self) -> None:
@@ -375,6 +476,8 @@ class TestCliAuditFixes(unittest.TestCase):
         self.assertNotIn("arquivos foram inspecionados", ruc_text)
         self.assertNotIn("nenhuma exposição de credenciais", ruc_text)
         self.assertNotIn("nenhuma mutação na main", ruc_text)
+        self.assertNotIn("Custo adicional verificado", ruc_text)
+        self.assertIn("Custo adicional declarado, não verificado", ruc_text)
 
 
 if __name__ == "__main__":
