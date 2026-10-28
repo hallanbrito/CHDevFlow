@@ -104,13 +104,22 @@ def execute_single_command(cmd_str: str, cwd: Path, timeout: float = 120.0) -> C
     except Exception:
         pass
 
-    # Se o comando iniciar com 'ch ' ou for 'ch', e o executável não estiver no PATH,
-    # resolve autossuficientemente via sys.executable -m chdevflow.cli
+    # Se o comando iniciar com 'ch ' ou for 'ch', e o executável não estiver no PATH
+    # ou pertencer a outro ambiente Python externo, resolve autossuficientemente via
+    # sys.executable -m chdevflow.cli garantindo execução do pacote correto.
     run_cmd = cmd_str
     stripped = cmd_str.strip()
-    if (stripped == "ch" or stripped.startswith("ch ")) and shutil.which("ch") is None:
-        sub_arg = stripped[2:].strip()
-        run_cmd = f'"{sys.executable}" -m chdevflow.cli {sub_arg}' if sub_arg else f'"{sys.executable}" -m chdevflow.cli'
+    if stripped == "ch" or stripped.startswith("ch "):
+        ch_binary = shutil.which("ch")
+        is_same_env = False
+        if ch_binary:
+            try:
+                is_same_env = Path(ch_binary).resolve().is_relative_to(Path(sys.prefix).resolve())
+            except Exception:
+                is_same_env = False
+        if not is_same_env:
+            sub_arg = stripped[2:].strip()
+            run_cmd = f'"{sys.executable}" -m chdevflow.cli {sub_arg}' if sub_arg else f'"{sys.executable}" -m chdevflow.cli'
 
     start_time = time.perf_counter()
     try:

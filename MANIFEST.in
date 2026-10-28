@@ -1,0 +1,2 @@
+graft src/chdevflow/templates
+global-include src/chdevflow/templates/.*

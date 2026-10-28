@@ -11,6 +11,7 @@ import pytest
 
 from ch_control_center.adapters.sentinela_adapter import SentinelFacade, SentinelaAdapterErro
 from ch_control_center.config import DIRETORIO_FIXTURES
+from ch_sentinela.github_reader import LeitorGitHub, LeitorGitHubErro
 
 
 @pytest.fixture
@@ -78,7 +79,10 @@ def test_fail_closed_em_fixture_json_corrompido(tmp_path: Path) -> None:
 
 def test_snapshot_ao_vivo_sem_credenciais_lanca_erro_seguro() -> None:
     """Ao tentar consultar GitHub ao vivo sem token ou ambiente configurado, lança exceção segura."""
-    facade = SentinelFacade()
-    # Em ambiente de teste/sandbox sem credencial, deve lançar SentinelaAdapterErro
-    with pytest.raises(SentinelaAdapterErro):
+    def mock_falha_sem_token(args: list[str]) -> str:
+        raise LeitorGitHubErro("authentication required: GH_TOKEN not set or invalid")
+
+    leitor = LeitorGitHub(executor_customizado=mock_falha_sem_token)
+    facade = SentinelFacade(leitor=leitor)
+    with pytest.raises(SentinelaAdapterErro, match="GH_TOKEN"):
         facade.obter_snapshot_ao_vivo()

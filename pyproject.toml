@@ -16,7 +16,9 @@ classifiers = [
     "Operating System :: POSIX :: Linux",
     "Operating System :: OS Independent",
 ]
-dependencies = []
+dependencies = [
+    "ch-sentinela>=0.1.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -29,6 +31,19 @@ chdevflow = "chdevflow.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.package-data]
+chdevflow = [
+    "templates/*",
+    "templates/**/*",
+    "templates/**/.*",
+    "templates/**/.github/**/*",
+    "templates/**/.github/**/.*",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv.sources]
+ch-sentinela = { path = "apps/bootstrap/sentinela" }

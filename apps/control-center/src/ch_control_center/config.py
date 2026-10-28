@@ -33,7 +33,16 @@ DIRETORIO_PACOTE: Path = Path(__file__).resolve().parent
 DIRETORIO_MODULO_APP: Path = DIRETORIO_PACOTE.parent.parent
 DIRETORIO_TEMPLATES: Path = DIRETORIO_PACOTE / "templates"
 DIRETORIO_STATIC: Path = DIRETORIO_PACOTE / "static"
-DIRETORIO_FIXTURES: Path = DIRETORIO_MODULO_APP / "fixtures"
+DIRETORIO_FIXTURES: Path = (
+    DIRETORIO_PACOTE / "fixtures"
+    if (DIRETORIO_PACOTE / "fixtures").is_dir()
+    else DIRETORIO_MODULO_APP / "fixtures"
+)
+DIRETORIO_PROFILES: Path = (
+    DIRETORIO_PACOTE / "profiles"
+    if (DIRETORIO_PACOTE / "profiles").is_dir()
+    else DIRETORIO_MODULO_APP / "profiles"
+)
 
 # Intervalo válido de portas TCP (RFC 793)
 PORTA_MINIMA: int = 1
