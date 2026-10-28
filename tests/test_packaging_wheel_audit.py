@@ -6,6 +6,7 @@ eliminando dependências incidentais da árvore-fonte ou hacks de PYTHONPATH.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import shutil
@@ -437,9 +438,40 @@ class TestPackagingWheelAudit(unittest.TestCase):
             self.assertEqual(res_s_demo.returncode, 0)
             self.assertIn("AWAITING_PO", res_s_demo.stdout)
 
-            # Teste CLI: ch watch --once --dry-run
-            res_watch = subprocess.run([str(venv_ch), "watch", "--once", "--dry-run"], cwd=str(proj_dir), env=clean_env, capture_output=True, text=True)
-            self.assertEqual(res_watch.returncode, 0, f"Erro em ch watch: {res_watch.stderr}")
+            # Teste CLI: ch watch --once --dry-run (usando fixture para garantir execução offline em qualquer CI)
+            sample_fixture = work_dir / "sample_watch_fixture.json"
+            sample_fixture.write_text(
+                json.dumps({
+                    "totalCount": 1,
+                    "items": [
+                        {
+                            "content": {
+                                "type": "Issue",
+                                "repository": "hallanbrito/CHDevFlow",
+                                "number": 43,
+                                "title": "AUD-GERAL-P0-02 empacotamento autossuficiente",
+                                "url": "https://github.com/hallanbrito/CHDevFlow/issues/43",
+                            },
+                            "labels": ["ch:workflow", "ch:agy"],
+                        }
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            res_watch = subprocess.run(
+                [str(venv_ch), "watch", "--once", "--dry-run", "--fixture", str(sample_fixture)],
+                cwd=str(proj_dir),
+                env=clean_env,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(
+                res_watch.returncode,
+                0,
+                f"Erro em ch watch: {res_watch.stderr}\nStdout: {res_watch.stdout}",
+            )
+            self.assertIn("Sentinela Python", res_watch.stdout)
+            self.assertIn("Issue #43", res_watch.stdout)
 
             # Teste Control Center: carregamento autossuficiente de perfis, fixtures e rotas
             test_cc_code = (
