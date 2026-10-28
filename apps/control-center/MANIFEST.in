@@ -1,0 +1,4 @@
+graft src/ch_control_center/templates
+graft src/ch_control_center/static
+graft src/ch_control_center/fixtures
+graft src/ch_control_center/profiles

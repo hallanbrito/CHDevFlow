@@ -11,7 +11,7 @@ _SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from chdevflow.core.init import run_init
+from chdevflow.core.init import get_templates_dir, run_init
 
 
 def main() -> None:
@@ -22,13 +22,12 @@ def main() -> None:
     args = ap.parse_args()
 
     destination = args.path.resolve()
-    templates = Path(__file__).resolve().parent.parent / "templates"
     try:
         run_init(
             destination=destination,
             profile=args.profile,
             apply=args.apply,
-            templates_dir=templates,
+            templates_dir=get_templates_dir(),
         )
     except FileNotFoundError as err:
         ap.error(str(err))

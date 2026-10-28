@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ch_control_center.config import (
-    DIRETORIO_MODULO_APP,
+    DIRETORIO_PROFILES,
     PERFIL_CHDEVFLOW,
     PERFIL_HALLANCRAFT,
     obter_perfil_ativo,
@@ -21,7 +21,7 @@ class ProjectService:
     """Gerencia perfis de projeto em modo estritamente somente leitura."""
 
     def __init__(self, diretorio_profiles: Path | None = None) -> None:
-        self.diretorio_profiles = diretorio_profiles or (DIRETORIO_MODULO_APP / "profiles")
+        self.diretorio_profiles = diretorio_profiles or DIRETORIO_PROFILES
         self._perfil_ativo_key = obter_perfil_ativo()
         self._perfis_cache: dict[str, dict[str, Any]] = {}
         self._carregar_perfis()
