@@ -1,11 +1,32 @@
-name: CHDevFlow W1 checks
+name: CHDevFlow CI Integral
 
 on:
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
+      - "src/**"
+      - "apps/**"
       - "scripts/**"
       - "tests/**"
-      - ".github/workflows/w1-checks.yml"
+      - "templates/**"
+      - ".github/**"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - "chdevflow.yaml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "src/**"
+      - "apps/**"
+      - "scripts/**"
+      - "tests/**"
+      - "templates/**"
+      - ".github/**"
+      - "pyproject.toml"
+      - "MANIFEST.in"
+      - "chdevflow.yaml"
   workflow_dispatch:
 
 permissions:
@@ -15,13 +36,32 @@ jobs:
   python-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Compilação sintática
-        run: python -m compileall -q scripts
-      - name: Prévia offline
+
+      - name: Compilação sintática de todos os componentes
+        run: python -m compileall -q src scripts apps
+
+      - name: Prévia offline de governança W1
         run: python scripts/w1_github_project.py
-      - name: Testes
+
+      - name: Instalação de dependências e pacotes locais
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ./apps/bootstrap/sentinela
+          pip install -e ./apps/control-center[dev]
+          pip install -e .[dev]
+
+      - name: Testes CLI e Governança Raiz (tests/)
         run: python -m unittest discover -s tests -v
+
+      - name: Testes Sentinela (apps/bootstrap/sentinela/tests/)
+        run: python -m unittest discover -s apps/bootstrap/sentinela/tests -v
+
+      - name: Testes Control Center (apps/control-center/tests/)
+        run: pytest apps/control-center/tests -v
