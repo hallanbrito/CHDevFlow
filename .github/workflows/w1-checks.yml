@@ -1,6 +1,6 @@
 name: CHDevFlow CI Integral
 
-on:
+"on":
   push:
     branches:
       - main
@@ -17,16 +17,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "src/**"
-      - "apps/**"
-      - "scripts/**"
-      - "tests/**"
-      - "templates/**"
-      - ".github/**"
-      - "pyproject.toml"
-      - "MANIFEST.in"
-      - "chdevflow.yaml"
   workflow_dispatch:
 
 permissions:
