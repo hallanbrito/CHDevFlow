@@ -499,6 +499,192 @@ class TestProjectExport(unittest.TestCase):
             arquivos_sobrando = list(Path(tmpdir).glob(".tmp_snapshot_*"))
             self.assertEqual(len(arquivos_sobrando), 0)
 
+    def test_save_snapshot_preserves_preexisting_directory_0755_permissions(self) -> None:
+        """AUD-05: Diretório pai preexistente (ex.: 0755) tem suas permissões estritamente preservadas."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_preserve_dir_") as tmpdir:
+            pasta_existente = Path(tmpdir) / "pasta_compartilhada_755"
+            pasta_existente.mkdir(mode=0o755)
+            os.chmod(pasta_existente, 0o755)
+            modo_original = stat.S_IMODE(os.stat(pasta_existente).st_mode)
+            self.assertEqual(modo_original, 0o755)
+
+            destino = pasta_existente / "snapshot.json"
+            salvo = save_snapshot_file(snapshot, destino)
+
+            # O diretório preexistente NÃO pode ter tido seu modo alterado para 0700
+            modo_depois = stat.S_IMODE(os.stat(pasta_existente).st_mode)
+            self.assertEqual(
+                modo_depois,
+                0o755,
+                f"Modo do diretório pai preexistente foi alterado indevidamente: esperado 0755, obtido {oct(modo_depois)}.",
+            )
+
+            # O arquivo salvo deve ter 0600
+            modo_arquivo = stat.S_IMODE(os.stat(salvo).st_mode)
+            self.assertEqual(modo_arquivo, 0o600)
+
+    def test_save_snapshot_relative_path_in_current_directory_preserves_cwd_mode(self) -> None:
+        """AUD-05: Destino relativo no diretório atual ('.') preserva permissões do CWD sem alteração para 0700."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_cwd_") as tmpdir:
+            orig_cwd = os.getcwd()
+            os.chmod(tmpdir, 0o755)
+            modo_original = stat.S_IMODE(os.stat(tmpdir).st_mode)
+            self.assertEqual(modo_original, 0o755)
+
+            os.chdir(tmpdir)
+            try:
+                # Salva usando caminho relativo com prefixo explícito '.'
+                salvo_rel = save_snapshot_file(snapshot, "./snapshot_rel.json")
+                self.assertTrue(salvo_rel.is_file())
+                self.assertEqual(stat.S_IMODE(os.stat(salvo_rel).st_mode), 0o600)
+
+                # CWD não pode ter sido modificado para 0700
+                modo_depois = stat.S_IMODE(os.stat(".").st_mode)
+                self.assertEqual(
+                    modo_depois,
+                    0o755,
+                    f"Permissão do diretório de trabalho atual ('.') foi alterada: esperado 0755, obtido {oct(modo_depois)}.",
+                )
+
+                # Salva usando caminho relativo sem prefixo
+                salvo_bare = save_snapshot_file(snapshot, "snapshot_bare.json")
+                self.assertTrue(salvo_bare.is_file())
+                self.assertEqual(stat.S_IMODE(os.stat(salvo_bare).st_mode), 0o600)
+                self.assertEqual(stat.S_IMODE(os.stat(".").st_mode), 0o755)
+            finally:
+                os.chdir(orig_cwd)
+
+    def test_save_snapshot_creates_new_hierarchy_with_0700_without_touching_existing_parent(self) -> None:
+        """AUD-05: Cria novos subdiretórios com modo 0700 preservando o ancestral preexistente 0755 intacto."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_new_hier_") as tmpdir:
+            base_dir = Path(tmpdir) / "base_755"
+            base_dir.mkdir(mode=0o755)
+            os.chmod(base_dir, 0o755)
+
+            sub1 = base_dir / "novo_sub1"
+            sub2 = sub1 / "novo_sub2"
+            destino = sub2 / "snapshot.json"
+
+            salvo = save_snapshot_file(snapshot, destino)
+            self.assertTrue(salvo.is_file())
+
+            # O ancestral preexistente mantém 0755
+            self.assertEqual(stat.S_IMODE(os.stat(base_dir).st_mode), 0o755)
+            # Os novos subdiretórios criados foram configurados com 0700
+            self.assertEqual(stat.S_IMODE(os.stat(sub1).st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(os.stat(sub2).st_mode), 0o700)
+            self.assertEqual(stat.S_IMODE(os.stat(salvo).st_mode), 0o600)
+
+    def test_save_snapshot_insecure_world_writable_parent_fails_closed(self) -> None:
+        """AUD-05: Diretório pai world-writable sem sticky bit falha fechado sem alterar permissões."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_insecure_") as tmpdir:
+            dir_inseguro = Path(tmpdir) / "pasta_publica_777"
+            dir_inseguro.mkdir(mode=0o777)
+            os.chmod(dir_inseguro, 0o777)
+
+            destino = dir_inseguro / "snapshot.json"
+            with self.assertRaises(ProjectExportError) as ctx:
+                save_snapshot_file(snapshot, destino)
+
+            self.assertIn("permissões inseguras", str(ctx.exception))
+            # Garante que o diretório NÃO teve seu modo modificado secretamente
+            self.assertEqual(stat.S_IMODE(os.stat(dir_inseguro).st_mode), 0o777)
+            # Nenhum arquivo deve ter sido gravado
+            self.assertFalse(destino.exists())
+
+    def test_save_snapshot_intermediate_ancestor_symlink_rejected_fail_closed(self) -> None:
+        """AUD-06: Symlink intermediário na cadeia de diretórios é rejeitado fail-closed."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_inter_sym_") as tmpdir:
+            dir_real = Path(tmpdir) / "pasta_real"
+            dir_real.mkdir(mode=0o700)
+            sub_real = dir_real / "subpasta"
+            sub_real.mkdir(mode=0o700)
+
+            # Cria symlink para o diretório raiz intermediário
+            dir_link = Path(tmpdir) / "pasta_link"
+            os.symlink(dir_real, dir_link, target_is_directory=True)
+
+            # Destino usa a pasta simbólica como ancestral intermediário
+            destino = dir_link / "subpasta" / "snapshot.json"
+
+            with self.assertRaises(ProjectExportError) as ctx:
+                save_snapshot_file(snapshot, destino)
+
+            self.assertIn("link simbólico proibido", str(ctx.exception))
+            # O arquivo real de destino não pode ter sido criado
+            self.assertFalse((sub_real / "snapshot.json").exists())
+
+    def test_save_snapshot_relative_intermediate_ancestor_symlink_rejected(self) -> None:
+        """AUD-06: Symlink intermediário em caminho relativo é rejeitado fail-closed."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_rel_sym_") as tmpdir:
+            dir_real = Path(tmpdir) / "pasta_real"
+            dir_real.mkdir(mode=0o700)
+            sub_real = dir_real / "subpasta"
+            sub_real.mkdir(mode=0o700)
+
+            dir_link = Path(tmpdir) / "pasta_link"
+            os.symlink(dir_real, dir_link, target_is_directory=True)
+
+            orig_cwd = os.getcwd()
+            os.chdir(tmpdir)
+            try:
+                destino_rel = Path("pasta_link/subpasta/snapshot.json")
+                with self.assertRaises(ProjectExportError) as ctx:
+                    save_snapshot_file(snapshot, destino_rel)
+
+                self.assertIn("link simbólico proibido", str(ctx.exception))
+                self.assertFalse((sub_real / "snapshot.json").exists())
+            finally:
+                os.chdir(orig_cwd)
+
     def test_governance_values_with_tokens_and_emails_are_sanitized(self) -> None:
         """AUD-02: Valores em campos de governança contendo tokens e e-mails são sanitizados imediatamente."""
         fields_raw = criar_payload_campos_valido()

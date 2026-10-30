@@ -418,39 +418,96 @@ def save_snapshot_file(
 ) -> Path:
     """Salva o snapshot em disco com garantia de atomicidade e permissões estritas (0600).
 
-    Medidas de segurança e contenção (AUD-01):
-    1. Bloqueio incondicional de links simbólicos no destino ou no diretório pai (fail-closed).
-    2. Gravação atômica em arquivo temporário privado exclusivo (0600) no mesmo diretório pai.
-    3. fsync obrigatório antes da substituição atômica via os.replace.
-    4. Garantia estrita de que o arquivo resultante terá permissão 0600 (-rw-------),
+    Medidas de segurança e contenção (AUD-01, AUD-05, AUD-06):
+    1. Bloqueio incondicional de links simbólicos no destino ou em qualquer componente
+       ancestral imediato ou intermediário (fail-closed, sem seguir links).
+    2. Preservação estrita das permissões de diretórios preexistentes (nunca altera modo
+       de diretórios existentes, ex.: 0755 ou . permanecem idênticos).
+    3. Criação de novos diretórios na cadeia exclusivamente com modo restrito (0700).
+    4. Validação de segurança fail-closed se o diretório pai preexistente for inseguro
+       (ex.: gravável por terceiros sem sticky bit ou sem permissão de escrita).
+    5. Gravação atômica em arquivo temporário privado exclusivo (0600) no mesmo diretório pai.
+    6. fsync obrigatório antes da substituição atômica via os.replace.
+    7. Garantia estrita de que o arquivo resultante terá permissão 0600 (-rw-------),
        mesmo que o arquivo preexistente possuísse permissões permissivas (ex.: 0644).
-    5. Preservação do arquivo de destino original caso ocorra falha de escrita ou I/O.
+    8. Preservação do arquivo de destino original caso ocorra falha de escrita ou I/O.
     """
     caminho = Path(output_path)
 
-    # 1. Bloqueio estrito de links simbólicos (fail-closed, sem seguir links)
-    if caminho.is_symlink() or os.path.islink(str(caminho)):
-        raise ProjectExportError(
-            f"Caminho de destino é um link simbólico proibido: '{output_path}'. Operação abortada."
-        )
+    # 1. Bloqueio estrito de links simbólicos em todo o caminho e componentes ancestrais (AUD-01, AUD-06)
+    componentes_a_verificar: set[Path] = set()
+    for base in (caminho, Path(os.path.abspath(caminho))):
+        componentes_a_verificar.add(base)
+        componentes_a_verificar.update(base.parents)
+
+    for comp in componentes_a_verificar:
+        if comp.is_symlink() or os.path.islink(str(comp)):
+            raise ProjectExportError(
+                f"Caminho ou componente ancestral é um link simbólico proibido: '{comp}'. Operação abortada."
+            )
 
     diretorio_pai = caminho.parent
-    if diretorio_pai.is_symlink() or os.path.islink(str(diretorio_pai)):
-        raise ProjectExportError(
-            f"Diretório pai é um link simbólico proibido: '{diretorio_pai}'. Operação abortada."
-        )
 
-    diretorio_pai.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
-        os.chmod(diretorio_pai, 0o700)
-    except OSError as exc:
-        raise ProjectExportError(
-            f"Falha ao assegurar permissões 0700 no diretório pai '{diretorio_pai}': {exc}"
-        ) from exc
+    # 2. Tratamento seguro de diretórios preexistentes vs novos (AUD-05)
+    # Identifica componentes na cadeia do diretório pai que ainda não existem
+    dirs_para_criar: list[Path] = []
+    curr = diretorio_pai
+    while not curr.exists():
+        dirs_para_criar.append(curr)
+        curr = curr.parent
+
+    if dirs_para_criar:
+        # Se há diretórios a criar, valida que o ancestral preexistente tem permissão segura
+        if curr.exists() and curr.is_dir():
+            st_curr = os.stat(curr)
+            modo_curr = stat.S_IMODE(st_curr.st_mode)
+            if (modo_curr & stat.S_IWOTH) and not (st_curr.st_mode & stat.S_ISVTX):
+                raise ProjectExportError(
+                    f"Diretório ancestral preexistente '{curr}' possui permissões inseguras ({oct(modo_curr)}: "
+                    "gravável por outros sem sticky bit). Operação abortada para preservar confidencialidade."
+                )
+
+        # Cria apenas os diretórios novos com modo restrito 0700
+        try:
+            diretorio_pai.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ProjectExportError(
+                f"Falha ao criar diretório '{diretorio_pai}': {exc}"
+            ) from exc
+
+        for d in dirs_para_criar:
+            try:
+                os.chmod(d, 0o700)
+            except OSError as exc:
+                raise ProjectExportError(
+                    f"Falha ao assegurar permissões 0700 no novo diretório criado '{d}': {exc}"
+                ) from exc
+    else:
+        # Diretório pai preexistente: NUNCA alterar as permissões de diretórios já existentes (AUD-05)
+        if not diretorio_pai.is_dir():
+            raise ProjectExportError(
+                f"Caminho pai informado não é um diretório válido: '{diretorio_pai}'."
+            )
+
+        st = os.stat(diretorio_pai)
+        modo_pai = stat.S_IMODE(st.st_mode)
+
+        # Falha fechado se o diretório pai existente for inseguro (world-writable sem sticky bit)
+        if (modo_pai & stat.S_IWOTH) and not (st.st_mode & stat.S_ISVTX):
+            raise ProjectExportError(
+                f"Diretório pai preexistente '{diretorio_pai}' possui permissões inseguras ({oct(modo_pai)}: "
+                "gravável por outros sem sticky bit). Operação abortada para preservar integridade e confidencialidade."
+            )
+
+        # Valida se temos permissão de escrita no diretório pai existente
+        if not os.access(diretorio_pai, os.W_OK):
+            raise ProjectExportError(
+                f"Sem permissão de escrita no diretório pai '{diretorio_pai}'. Operação abortada."
+            )
 
     conteudo = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
 
-    # 2. Criação do arquivo temporário exclusivo no mesmo diretório
+    # 3. Criação do arquivo temporário exclusivo no mesmo diretório
     try:
         tmp_fd, tmp_path_str = tempfile.mkstemp(
             prefix=".tmp_snapshot_",
@@ -493,7 +550,7 @@ def save_snapshot_file(
         except OSError:
             pass
 
-    # 3. Verificação de permissões do temporário antes do replace
+    # 4. Verificação de permissões do temporário antes do replace
     try:
         tmp_perm = stat.S_IMODE(os.stat(tmp_path).st_mode)
         if tmp_perm != 0o600:
@@ -502,17 +559,18 @@ def save_snapshot_file(
                 f"Permissão do temporário inconsistente: esperado 0600, obtido {oct(tmp_perm)}."
             )
 
-        # Checagem final contra link simbólico concorrente no destino
-        if caminho.is_symlink() or os.path.islink(str(caminho)):
-            tmp_path.unlink(missing_ok=True)
-            raise ProjectExportError(
-                f"Link simbólico concorrente detectado no destino: '{caminho}'. Operação abortada."
-            )
+        # Checagem final contra link simbólico concorrente no destino e ancestrais
+        for comp in componentes_a_verificar:
+            if comp.is_symlink() or os.path.islink(str(comp)):
+                tmp_path.unlink(missing_ok=True)
+                raise ProjectExportError(
+                    f"Link simbólico concorrente detectado: '{comp}'. Operação abortada."
+                )
 
         # Substituição atômica no mesmo sistema de arquivos
         os.replace(tmp_path, caminho)
 
-        # 4. Aplicação estrita e verificação de 0600 no destino final
+        # 5. Aplicação estrita e verificação de 0600 no destino final
         os.chmod(caminho, 0o600)
         final_perm = stat.S_IMODE(os.stat(caminho).st_mode)
         if final_perm != 0o600:

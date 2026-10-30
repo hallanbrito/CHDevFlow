@@ -25,11 +25,13 @@ O exportador de dados do GitHub Project #2 (`scripts/ch_project_export.py` e mó
    - Mascaramento determinístico de segredos conhecidos (tokens `ghp_`, `gho_`, `github_pat_`, chaves `AIza...`) e e-mails pessoais (`[CREDENCIAL_OCULTADA]`, `[DADO_PESSOAL_OCULTADO]`).
    - Todos os valores extraídos de governança (`status`, `etapa_ch`, `esteira`, etc.) e registros em `integrity.anomalies` passam por sanitização completa antes da serialização.
    - Mensagens de erro e diagnóstico no `stderr` são sanitizadas para evitar vazamento em logs.
-4. **Persistência Privada com Atomicidade Real (AUD-01)**:
+4. **Persistência Privada com Atomicidade Real e Preservação de Diretórios (AUD-01, AUD-05, AUD-06)**:
    - Gravação atômica via arquivo temporário exclusivo no mesmo diretório pai (`tempfile.mkstemp`).
    - Aplicação de `fchmod(0600)` e sincronização em disco (`os.fsync`) antes da substituição atômica (`os.replace`).
    - Garantia de que arquivos preexistentes com permissões permissivas (ex.: 0644) são rebaixados estritamente para `0o600` (`-rw-------`).
-   - Bloqueio incondicional de links simbólicos no destino ou diretório pai (fail-closed, sem seguir links).
+   - **Preservação de diretórios preexistentes (AUD-05)**: O exportador nunca altera o modo de diretórios preexistentes (ex.: `0755` ou diretório atual `.` permanecem idênticos). Apenas novos diretórios na cadeia são criados com modo restrito `0700`.
+   - **Falha fechada para diretórios inseguros (AUD-05)**: Recusa imediata de operação caso o diretório pai seja gravável por outros sem sticky bit (`world-writable`) ou não possua permissão de escrita.
+   - **Bloqueio de symlinks em toda a cadeia ancestral (AUD-06)**: Bloqueio incondicional de links simbólicos tanto no destino quanto em qualquer componente ancestral imediato ou intermediário, para caminhos absolutos ou relativos (fail-closed, sem seguir links).
    - Preservação do arquivo de destino original caso ocorra falha de escrita ou I/O.
    - Diretório padrão protegido com `0o700` em `.ch_sentinela/project_snapshot.json`.
    - Ignorado por padrão no `.gitignore` para impedir que snapshots reais sejam comitados no Git (AUD-04).
