@@ -1,6 +1,6 @@
 # RUC/1.0 — CH-ACCESS-01 — Tentativa 2 (Correções da Auditoria Independente)
 
-**Cabeçalho:** missão/Issue: [#49](https://github.com/hallanbrito/CHDevFlow/issues/49) | Draft PR: [#50](https://github.com/hallanbrito/CHDevFlow/pull/50) | parecer auditoria anterior: [CH-AUD-ACCESS-01](https://github.com/hallanbrito/CHDevFlow/pull/50#issuecomment-6525940749) | executor declarado: Google Antigravity (AGY) | coordenação: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 isolada autorizada pelo PO em 30/10/2026 na Issue #49 mantida para correções | ambiente: CachyOS Linux x86_64 / Python 3.13 / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / SNAPSHOT_OFFLINE | timestamp ISO 8601: 2026-10-30T15:15:00Z | run_id anterior: [41074926726](https://github.com/hallanbrito/CHDevFlow/actions/runs/41074926726) (SUCCESS) | baseline SHA: `46fea0afd7d6c1a605fe49fb5f801ac125caa7a6` | branch: `agy/ch-access-01-project-export` | resultado técnico: APROVADO_TECNICAMENTE.
+**Cabeçalho:** missão/Issue: [#49](https://github.com/hallanbrito/CHDevFlow/issues/49) | Draft PR: [#50](https://github.com/hallanbrito/CHDevFlow/pull/50) | parecer auditoria anterior: [CH-AUD-ACCESS-01](https://github.com/hallanbrito/CHDevFlow/pull/50#issuecomment-6525940749) | executor declarado: Google Antigravity (AGY) | coordenação: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 isolada autorizada pelo PO em 30/10/2026 na Issue #49 mantida para correções | ambiente: CachyOS Linux x86_64 / Python 3.13 / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / SNAPSHOT_OFFLINE | timestamp ISO 8601: 2026-10-30T15:17:00Z | run_id: [41079074136](https://github.com/hallanbrito/CHDevFlow/actions/runs/41079074136) (SUCCESS) | baseline SHA: `46fea0afd7d6c1a605fe49fb5f801ac125caa7a6` | HEAD SHA: `eb49286e572407c57064d407135045f3d8db79d8` | branch: `agy/ch-access-01-project-export` | resultado técnico: APROVADO_TECNICAMENTE.
 
 ---
 
@@ -71,7 +71,7 @@
 | E08 | OBSERVADO | `test_save_snapshot_preserves_original_file_on_write_failure` | Falha simulada no `fsync` preservou integralmente o conteúdo prévio do snapshot. |
 | E09 | OBSERVADO | `test_governance_values_with_tokens_and_emails_are_sanitized` | Tokens e e-mails em campos de governança foram mascarados no snapshot e no JSON. |
 | E10 | OBSERVADO | `test_missing_ch_sentinela_dependency_fails_explicitly_no_degradation` | Ausência simulada de `ch_sentinela` levantou `ImportError` explícito sem validadores fracos. |
-| E11 | OBSERVADO | GitHub Actions run 41074926726 | CI remota prévia no PR #50 concluída com SUCCESS (48s). |
+| E11 | OBSERVADO | GitHub Actions runs 41074926726 e 41079074136 | CI remota no PR #50 concluída com SUCCESS (48s e 49s). |
 | E12 | DECLARADO | Issue #49 | Autorização do PO Hallan de Sousa Brito mantida em CH-2 para correções da auditoria. |
 | E13 | OBSERVADO | Ambiente local | R$ 0,00 de custo adicional; nenhuma chamada a serviços de IA pagos realizada. |
 
