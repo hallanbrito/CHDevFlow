@@ -1,0 +1,214 @@
+{
+  "schema_version": "chdevflow.project-snapshot/1.0",
+  "source": "SNAPSHOT_OFFLINE",
+  "project_owner": "hallanbrito",
+  "project_number": 2,
+  "captured_at_utc": "2026-10-30T12:00:00Z",
+  "integrity": {
+    "total_items_reported": 3,
+    "total_items_received": 3,
+    "items_count_match": true,
+    "total_fields_reported": 19,
+    "total_fields_received": 19,
+    "fields_count_match": true,
+    "unique_card_ids": true,
+    "anomalies": [],
+    "snapshot_digest": "sintetico_sha256_demonstracao_exemplo_auditavel"
+  },
+  "fields": [
+    {
+      "id": "PVTF_exemplo_01",
+      "name": "Title",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_02",
+      "name": "Assignees",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTSSF_exemplo_03",
+      "name": "Status",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_todo", "name": "Todo" },
+        { "id": "opt_inprogress", "name": "In Progress" },
+        { "id": "opt_done", "name": "Done" }
+      ]
+    },
+    {
+      "id": "PVTF_exemplo_04",
+      "name": "Labels",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_05",
+      "name": "Linked pull requests",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_06",
+      "name": "Milestone",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_07",
+      "name": "Repository",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_08",
+      "name": "Reviewers",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_09",
+      "name": "Parent issue",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_10",
+      "name": "Sub-issues progress",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_11",
+      "name": "Created",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_12",
+      "name": "Updated",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTF_exemplo_13",
+      "name": "Closed",
+      "type": "ProjectV2Field"
+    },
+    {
+      "id": "PVTSSF_exemplo_14",
+      "name": "Etapa CH",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_backlog", "name": "BACKLOG" },
+        { "id": "opt_pronta", "name": "PRONTA" },
+        { "id": "opt_em_execucao", "name": "EM_EXECUCAO" },
+        { "id": "opt_em_revisao", "name": "EM_REVISAO" },
+        { "id": "opt_aguardando_po", "name": "AGUARDANDO_PO" },
+        { "id": "opt_aprovada", "name": "APROVADA" },
+        { "id": "opt_parcial", "name": "PARCIAL" },
+        { "id": "opt_correcoes", "name": "CORRECOES" },
+        { "id": "opt_reprovada", "name": "REPROVADA" },
+        { "id": "opt_integrada", "name": "INTEGRADA" },
+        { "id": "opt_homologada", "name": "HOMOLOGADA" }
+      ]
+    },
+    {
+      "id": "PVTSSF_exemplo_15",
+      "name": "Esteira",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_hallan", "name": "Hallan" },
+        { "id": "opt_chatgpt", "name": "ChatGPT" },
+        { "id": "opt_codex", "name": "Codex" },
+        { "id": "opt_agy", "name": "AGY" }
+      ]
+    },
+    {
+      "id": "PVTSSF_exemplo_16",
+      "name": "Prioridade CH",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_p0", "name": "P0" },
+        { "id": "opt_p1", "name": "P1" },
+        { "id": "opt_p2", "name": "P2" },
+        { "id": "opt_p3", "name": "P3" }
+      ]
+    },
+    {
+      "id": "PVTSSF_exemplo_17",
+      "name": "Risco CH",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_baixo", "name": "BAIXO" },
+        { "id": "opt_medio", "name": "MEDIO" },
+        { "id": "opt_alto", "name": "ALTO" },
+        { "id": "opt_critico", "name": "CRITICO" }
+      ]
+    },
+    {
+      "id": "PVTSSF_exemplo_18",
+      "name": "Autonomia CH",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_ch0", "name": "CH-0" },
+        { "id": "opt_ch1", "name": "CH-1" },
+        { "id": "opt_ch2", "name": "CH-2" },
+        { "id": "opt_ch3", "name": "CH-3" }
+      ]
+    },
+    {
+      "id": "PVTSSF_exemplo_19",
+      "name": "Decisao PO",
+      "type": "ProjectV2SingleSelectField",
+      "options": [
+        { "id": "opt_pendente", "name": "PENDENTE" },
+        { "id": "opt_aprovado", "name": "APROVADO" },
+        { "id": "opt_parcial", "name": "PARCIAL" },
+        { "id": "opt_ajustes", "name": "AJUSTES" },
+        { "id": "opt_reprovado", "name": "REPROVADO" }
+      ]
+    }
+  ],
+  "items": [
+    {
+      "card_id": "PVTI_sintetico_01",
+      "content_type": "Issue",
+      "number": 101,
+      "title": "EXEMPLO-01: Exemplo de fatia sintética para documentação",
+      "url": "https://github.com/hallanbrito/CHDevFlow/issues/101",
+      "repository": "hallanbrito/CHDevFlow",
+      "status": "Todo",
+      "esteira": "AGY",
+      "etapa_ch": "PRONTA",
+      "prioridade_ch": "P1",
+      "risco_ch": "BAIXO",
+      "autonomia_ch": "CH-2",
+      "decisao_po": "APROVADO",
+      "labels": ["ch:workflow", "ch:agy"]
+    },
+    {
+      "card_id": "PVTI_sintetico_02",
+      "content_type": "Issue",
+      "number": 102,
+      "title": "EXEMPLO-02: Exemplo de fatia em execução supervisionada",
+      "url": "https://github.com/hallanbrito/CHDevFlow/issues/102",
+      "repository": "hallanbrito/CHDevFlow",
+      "status": "In Progress",
+      "esteira": "ChatGPT",
+      "etapa_ch": "EM_EXECUCAO",
+      "prioridade_ch": "P0",
+      "risco_ch": "MEDIO",
+      "autonomia_ch": "CH-1",
+      "decisao_po": "APROVADO",
+      "labels": ["ch:workflow", "ch:chatgpt"]
+    },
+    {
+      "card_id": "PVTI_sintetico_03",
+      "content_type": "Issue",
+      "number": 103,
+      "title": "EXEMPLO-03: Exemplo de homologação concluída pelo PO",
+      "url": "https://github.com/hallanbrito/CHDevFlow/issues/103",
+      "repository": "hallanbrito/CHDevFlow",
+      "status": "Done",
+      "esteira": "Hallan",
+      "etapa_ch": "HOMOLOGADA",
+      "prioridade_ch": "P1",
+      "risco_ch": "BAIXO",
+      "autonomia_ch": "CH-0",
+      "decisao_po": "APROVADO",
+      "labels": ["ch:workflow", "ch:po"]
+    }
+  ]
+}

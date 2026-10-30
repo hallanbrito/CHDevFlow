@@ -19,6 +19,7 @@ from ch_sentinela.contracts import (
 from ch_sentinela.github_reader import (
     LeitorGitHub,
     LeitorGitHubErro,
+    validar_campos_projeto,
     validar_snapshot_projeto,
 )
 from ch_sentinela.security.policies import (
@@ -58,6 +59,25 @@ class SentinelFacade:
     def validar_snapshot(self, snapshot: dict[str, Any]) -> bool:
         """Alias para validar_estrutura_snapshot."""
         return self.validar_estrutura_snapshot(snapshot)
+
+    def validar_campos(self, campos: dict[str, Any]) -> bool:
+        """Executa validação estrutural centralizada da Sentinela sobre os campos do Project."""
+        validar_campos_projeto(campos)
+        return True
+
+    def obter_campos_ao_vivo(self) -> dict[str, Any]:
+        """Obtém os campos atuais do GitHub Project #2 via CLI gh somente leitura.
+
+        Raises:
+            SentinelaAdapterErro: Se ocorrer falha na execução ou validação estrutural.
+        """
+        try:
+            campos = self.leitor.listar_campos_projeto()
+            self.validar_campos(campos)
+            return campos
+        except LeitorGitHubErro as exc:
+            msg = f"Falha na leitura dos campos do GitHub Project: {exc}"
+            raise SentinelaAdapterErro(msg) from exc
 
     def obter_snapshot_ao_vivo(self) -> dict[str, Any]:
         """Obtém o snapshot atual do GitHub Project #2 via CLI gh somente leitura.
