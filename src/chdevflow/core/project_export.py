@@ -5,8 +5,9 @@ Missão CH-ACCESS-01:
 - Consulta itens e campos estruturados, validando totais reais a cada execução.
 - Produz snapshot JSON compacto, determinístico e auditável.
 - Sanitiza segredos, credenciais, e-mails, dados pessoais, comentários e corpos de issues.
-- Persistência local privada com permissão estrita 0600.
-- Comportamento estritamente fail-closed diante de qualquer erro.
+- Persistência local privada com atomicidade estrita (tempfile + fchmod 0600 + fsync + os.replace).
+- Bloqueio rigoroso de links simbólicos e destinos não autorizados.
+- Comportamento estritamente fail-closed diante de qualquer erro (sem degradação silenciosa).
 """
 from __future__ import annotations
 
@@ -16,8 +17,11 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
+import tempfile
 from typing import Any, Callable
 
+# AUD-03: Importação estrita de ch_sentinela sem substituição por validadores degradados
 try:
     from ch_sentinela.config import (
         NUMERO_PROJETO_PADRAO,
@@ -33,32 +37,12 @@ try:
         ViolacaoPoliticaSegurancaErro,
         sanitizar_texto_segredos,
     )
-except ImportError:
-    # Fallback para ambientes de execução onde ch_sentinela não esteja no path
-    NUMERO_PROJETO_PADRAO = 2
-    PROPRIETARIO_PADRAO = "hallanbrito"
-    LeitorGitHub = None  # type: ignore
-    LeitorGitHubErro = RuntimeError  # type: ignore
-    ViolacaoPoliticaSegurancaErro = ValueError  # type: ignore
-
-    def sanitizar_texto_segredos(texto: str) -> str:  # type: ignore
-        if not texto or not isinstance(texto, str):
-            return ""
-        t = re.sub(r"\b(?:gh[opusr]_|github_pat_)[A-Za-z0-9_]{20,}\b", "[CREDENCIAL_OCULTADA]", texto)
-        t = re.sub(r"\bAIza[0-9A-Za-z-_]{35}\b", "[CREDENCIAL_OCULTADA]", t)
-        return t
-
-    def validar_snapshot_projeto(dados: Any) -> None:  # type: ignore
-        if not isinstance(dados, dict) or "items" not in dados or "totalCount" not in dados:
-            raise RuntimeError("Snapshot inválido.")
-        if len(dados["items"]) != dados["totalCount"]:
-            raise RuntimeError("Project incompleto.")
-
-    def validar_campos_projeto(dados: Any) -> None:  # type: ignore
-        if not isinstance(dados, dict) or "fields" not in dados or "totalCount" not in dados:
-            raise RuntimeError("Campos inválidos.")
-        if len(dados["fields"]) != dados["totalCount"]:
-            raise RuntimeError("Campos incompletos.")
+except ImportError as exc:
+    raise ImportError(
+        "Dependência obrigatória 'ch_sentinela' ausente ou inacessível. "
+        "O exportador de governança exige 'ch_sentinela' integralmente para garantir "
+        "as políticas centrais de segurança e sanitização do Método C.H. sem degradação."
+    ) from exc
 
 
 SCHEMA_VERSION = "chdevflow.project-snapshot/1.0"
@@ -89,7 +73,8 @@ VALORES_GOVERNANCA_PADRAO: dict[str, list[str]] = {
     "Decisao PO": ["PENDENTE", "APROVADO", "PARCIAL", "AJUSTES", "REPROVADO"],
 }
 
-REGEX_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b")
+REGEX_EMAIL = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
+REGEX_GITHUB_TOKEN = re.compile(r"(?:gh[opusr]_|github_pat_)[A-Za-z0-9_]{20,}")
 
 
 class ProjectExportError(RuntimeError):
@@ -101,16 +86,23 @@ class ProjectExportIntegrityError(ProjectExportError):
 
 
 def sanitizar_texto_completo(texto: str) -> str:
-    """Sanitiza segredos conhecidos e remove endereços de e-mail."""
+    """Sanitiza segredos conhecidos e remove endereços de e-mail de qualquer string.
+
+    Aplica as políticas centrais da Sentinela e mascara dados pessoais.
+    """
     if not texto or not isinstance(texto, str):
         return ""
     limpo = sanitizar_texto_segredos(texto)
+    limpo = REGEX_GITHUB_TOKEN.sub("[CREDENCIAL_OCULTADA]", limpo)
     limpo = REGEX_EMAIL.sub("[DADO_PESSOAL_OCULTADO]", limpo)
     return limpo.strip()
 
 
 def extrair_valor_campo(item: dict[str, Any], nome_campo: str) -> str | None:
-    """Obtém o valor de um campo de forma case-insensitive, rejeitando duplicidades."""
+    """Obtém o valor de um campo de forma case-insensitive e sanitizada, rejeitando duplicidades.
+
+    AUD-02: Garante que todo retorno de extração seja imediatamente sanitizado.
+    """
     alvo = nome_campo.casefold()
     correspondencias = [
         val for key, val in item.items()
@@ -118,17 +110,25 @@ def extrair_valor_campo(item: dict[str, Any], nome_campo: str) -> str | None:
     ]
     if len(correspondencias) > 1:
         raise ProjectExportIntegrityError(
-            f"Campo duplicado detectado no item do Project: '{nome_campo}'."
+            f"Campo duplicado detectado no item do Project: '{sanitizar_texto_completo(nome_campo)}'."
         )
     if not correspondencias or correspondencias[0] is None:
         return None
 
     valor = correspondencias[0]
+    texto_extraido: str | None = None
     if isinstance(valor, dict) and "name" in valor:
-        return str(valor["name"]).strip() or None
-    if isinstance(valor, str):
-        return valor.strip() or None
-    return str(valor).strip() or None
+        texto_extraido = str(valor["name"]).strip() or None
+    elif isinstance(valor, str):
+        texto_extraido = valor.strip() or None
+    else:
+        texto_extraido = str(valor).strip() or None
+
+    if texto_extraido is None:
+        return None
+
+    # AUD-02: Sanitização imediata do valor bruto
+    return sanitizar_texto_completo(texto_extraido) or None
 
 
 def processar_definicoes_campos(
@@ -145,8 +145,8 @@ def processar_definicoes_campos(
             raise ProjectExportIntegrityError("Campo do Project não é um dicionário JSON válido.")
 
         nome = sanitizar_texto_completo(str(f.get("name", "")))
-        tipo = str(f.get("type", ""))
-        campo_id = str(f.get("id", ""))
+        tipo = sanitizar_texto_completo(str(f.get("type", "")))
+        campo_id = sanitizar_texto_completo(str(f.get("id", "")))
 
         info_campo: dict[str, Any] = {
             "id": campo_id,
@@ -161,7 +161,7 @@ def processar_definicoes_campos(
                 if isinstance(opt, dict):
                     opt_nome = sanitizar_texto_completo(str(opt.get("name", "")))
                     opcoes_lista.append({
-                        "id": str(opt.get("id", "")),
+                        "id": sanitizar_texto_completo(str(opt.get("id", ""))),
                         "name": opt_nome,
                     })
                     if opt_nome:
@@ -199,9 +199,11 @@ def resumir_itens_projeto(
         if not isinstance(item, dict):
             raise ProjectExportIntegrityError("Item do Project não é um objeto JSON válido.")
 
-        card_id = item.get("id")
-        if not card_id or not isinstance(card_id, str):
+        card_id_raw = item.get("id")
+        if not card_id_raw or not isinstance(card_id_raw, str):
             raise ProjectExportIntegrityError("Item do Project com ID ausente ou inválido.")
+
+        card_id = sanitizar_texto_completo(card_id_raw)
 
         if card_id in card_ids_vistos:
             raise ProjectExportIntegrityError(
@@ -213,7 +215,7 @@ def resumir_itens_projeto(
         if not isinstance(content, dict):
             content = {}
 
-        content_type = str(content.get("type") or "DraftIssue")
+        content_type = sanitizar_texto_completo(str(content.get("type") or "DraftIssue"))
         issue_number = content.get("number")
         if issue_number is not None and not isinstance(issue_number, int):
             try:
@@ -238,24 +240,28 @@ def resumir_itens_projeto(
             if isinstance(l, str)
         ]
 
-        # Extração de campos de governança com distinção preservada
+        # AUD-02: Extração de governança com sanitização estrita e detecção segura de anomalias
         def extrair_governanca(nome_campo: str) -> str:
             val = extrair_valor_campo(item, nome_campo)
             if val is None or val == "":
                 return "NÃO_OBSERVADO"
 
+            val_sanitizado = sanitizar_texto_completo(val)
+
             # Validação contra opções conhecidas
             chave = nome_campo.casefold()
             opcoes_validas = opcoes_lookup.get(chave) or set(VALORES_GOVERNANCA_PADRAO.get(nome_campo, []))
-            if opcoes_validas and val not in opcoes_validas:
+            if opcoes_validas and val_sanitizado not in opcoes_validas:
+                # Opção desconhecida sanitizada e sinalizada como anomalia
+                # Nunca serializa dado cru e nunca declara aprovação humana
                 anomalias.append({
                     "card_id": card_id,
                     "issue_number": issue_number,
-                    "field": nome_campo,
-                    "value": val,
+                    "field": sanitizar_texto_completo(nome_campo),
+                    "value": val_sanitizado,
                     "error": "OPCAO_DESCONHECIDA",
                 })
-            return val
+            return val_sanitizado
 
         status_val = extrair_governanca("Status")
         esteira_val = extrair_governanca("Esteira")
@@ -319,8 +325,6 @@ def export_project_snapshot(
     else:
         fonte = source_override or SOURCE_LIVE
         if leitor is None:
-            if LeitorGitHub is None:
-                raise ProjectExportError("Módulo 'ch_sentinela' indisponível para consulta live.")
             leitor = LeitorGitHub()
 
         try:
@@ -412,38 +416,112 @@ def save_snapshot_file(
     snapshot: dict[str, Any],
     output_path: Path | str,
 ) -> Path:
-    """Salva o snapshot em disco com permissões privadas restritas (0600).
+    """Salva o snapshot em disco com garantia de atomicidade e permissões estritas (0600).
 
-    Args:
-        snapshot: Dicionário do snapshot validado.
-        output_path: Caminho de destino do arquivo.
-
-    Returns:
-        Path: Caminho resolvido onde o arquivo foi persistido.
+    Medidas de segurança e contenção (AUD-01):
+    1. Bloqueio incondicional de links simbólicos no destino ou no diretório pai (fail-closed).
+    2. Gravação atômica em arquivo temporário privado exclusivo (0600) no mesmo diretório pai.
+    3. fsync obrigatório antes da substituição atômica via os.replace.
+    4. Garantia estrita de que o arquivo resultante terá permissão 0600 (-rw-------),
+       mesmo que o arquivo preexistente possuísse permissões permissivas (ex.: 0644).
+    5. Preservação do arquivo de destino original caso ocorra falha de escrita ou I/O.
     """
-    caminho = Path(output_path).resolve()
-    caminho.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    caminho = Path(output_path)
+
+    # 1. Bloqueio estrito de links simbólicos (fail-closed, sem seguir links)
+    if caminho.is_symlink() or os.path.islink(str(caminho)):
+        raise ProjectExportError(
+            f"Caminho de destino é um link simbólico proibido: '{output_path}'. Operação abortada."
+        )
+
+    diretorio_pai = caminho.parent
+    if diretorio_pai.is_symlink() or os.path.islink(str(diretorio_pai)):
+        raise ProjectExportError(
+            f"Diretório pai é um link simbólico proibido: '{diretorio_pai}'. Operação abortada."
+        )
+
+    diretorio_pai.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        os.chmod(diretorio_pai, 0o700)
+    except OSError as exc:
+        raise ProjectExportError(
+            f"Falha ao assegurar permissões 0700 no diretório pai '{diretorio_pai}': {exc}"
+        ) from exc
 
     conteudo = json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n"
 
-    # Abertura atômica com permissões 0600 (apenas leitura e escrita pelo proprietário)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    fd = os.open(str(caminho), flags, 0o600)
+    # 2. Criação do arquivo temporário exclusivo no mesmo diretório
     try:
-        with open(fd, "w", encoding="utf-8") as f:
-            f.write(conteudo)
-    except Exception:
-        # Se falhar durante escrita
+        tmp_fd, tmp_path_str = tempfile.mkstemp(
+            prefix=".tmp_snapshot_",
+            suffix=".json",
+            dir=str(diretorio_pai),
+        )
+    except OSError as exc:
+        raise ProjectExportError(
+            f"Falha ao criar arquivo temporário seguro em '{diretorio_pai}': {exc}"
+        ) from exc
+
+    tmp_path = Path(tmp_path_str)
+
+    try:
+        # Garante fchmod 0600 no descritor de arquivo aberto antes de escrever dados
         try:
-            os.close(fd)
+            os.fchmod(tmp_fd, 0o600)
+        except OSError as exc:
+            raise ProjectExportError(
+                f"Falha ao aplicar fchmod(0600) no arquivo temporário: {exc}"
+            ) from exc
+
+        with open(tmp_fd, "w", encoding="utf-8", closefd=False) as f:
+            f.write(conteudo)
+            f.flush()
+        os.fsync(tmp_fd)
+    except Exception as exc:
+        try:
+            os.close(tmp_fd)
         except OSError:
             pass
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        raise ProjectExportError(
+            f"Falha durante gravação/sincronização do snapshot temporário: {exc}"
+        ) from exc
+    else:
+        try:
+            os.close(tmp_fd)
+        except OSError:
+            pass
+
+    # 3. Verificação de permissões do temporário antes do replace
+    try:
+        tmp_perm = stat.S_IMODE(os.stat(tmp_path).st_mode)
+        if tmp_perm != 0o600:
+            tmp_path.unlink(missing_ok=True)
+            raise ProjectExportError(
+                f"Permissão do temporário inconsistente: esperado 0600, obtido {oct(tmp_perm)}."
+            )
+
+        # Checagem final contra link simbólico concorrente no destino
+        if caminho.is_symlink() or os.path.islink(str(caminho)):
+            tmp_path.unlink(missing_ok=True)
+            raise ProjectExportError(
+                f"Link simbólico concorrente detectado no destino: '{caminho}'. Operação abortada."
+            )
+
+        # Substituição atômica no mesmo sistema de arquivos
+        os.replace(tmp_path, caminho)
+
+        # 4. Aplicação estrita e verificação de 0600 no destino final
+        os.chmod(caminho, 0o600)
+        final_perm = stat.S_IMODE(os.stat(caminho).st_mode)
+        if final_perm != 0o600:
+            raise ProjectExportError(
+                f"Permissão final do snapshot divergente: esperado 0600, obtido {oct(final_perm)}."
+            )
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
         raise
 
-    # Garante explicitamente permissões restritas 0600
-    try:
-        os.chmod(caminho, 0o600)
-    except OSError:
-        pass
-
-    return caminho
+    return caminho.resolve()

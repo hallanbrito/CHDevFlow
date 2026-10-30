@@ -2,7 +2,7 @@
 
 **Missão:** [Issue #49](https://github.com/hallanbrito/CHDevFlow/issues/49)  
 **Autorização:** CH-2 isolada em branch concedida pelo PO (Hallan de Sousa Brito) em 30/10/2026.  
-**Estado:** `AGUARDANDO_AUDITORIA_CHATGPT`.
+**Estado:** `AGUARDANDO_REAUDITORIA_CHATGPT`.
 
 ---
 
@@ -11,21 +11,28 @@
 O exportador de dados do GitHub Project #2 (`scripts/ch_project_export.py` e módulo `chdevflow.core.project_export`) implementa uma interface puramente somente-leitura (read-only) para extração estruturada de governança do GitHub Project #2 (esteiras C.H.).
 
 ### Princípios e Reutilização:
-1. **Reutilização da Sentinela Python (`ch_sentinela`)**:
+1. **Reutilização da Sentinela Python (`ch_sentinela`) sem Degradação (AUD-03)**:
    - Reutiliza `LeitorGitHub`, `executar_consulta_json` e `sanitizar_texto_segredos`.
    - Adicionada a função `validar_campos_projeto` e o método `listar_campos_projeto` em `LeitorGitHub`.
    - Proibição estrita de subcomandos mutáveis (`item-edit`, `item-create`, `field-create`, `field-delete`, `push`, `--apply`, etc.).
+   - Eliminação de qualquer fallback enfraquecido: ausência de `ch_sentinela` aborta com `ImportError` explícito e seguro.
 2. **Validação Dinâmica de Integridade a Cada Execução**:
    - Valida `totalCount == len(items)` para os cartões (26 cartões observados live).
    - Valida `totalCount == len(fields)` para os campos estruturados (19 campos observados live).
    - Valida unicidade estrita de `id` para todos os cartões. Qualquer ID duplicado interrompe a exportação.
-3. **Higienização e Proteção de Dados Privados**:
+3. **Higienização Integral e Proteção de Dados Privados (AUD-02)**:
    - Omissão categórica de `content.body` (corpo de issues), comentários, revisões e nomes de pessoas/assignees.
    - Mascaramento determinístico de segredos conhecidos (tokens `ghp_`, `gho_`, `github_pat_`, chaves `AIza...`) e e-mails pessoais (`[CREDENCIAL_OCULTADA]`, `[DADO_PESSOAL_OCULTADO]`).
-4. **Persistência Local Privada (Permissões 0600)**:
-   - Arquivo padrão gravado em `.ch_sentinela/project_snapshot.json` com permissão UNIX estrita `0o600` (`-rw-------`).
-   - Diretório protegido com `0o700`.
-   - Ignorado por padrão no `.gitignore` para impedir que snapshots reais sejam comitados no Git.
+   - Todos os valores extraídos de governança (`status`, `etapa_ch`, `esteira`, etc.) e registros em `integrity.anomalies` passam por sanitização completa antes da serialização.
+   - Mensagens de erro e diagnóstico no `stderr` são sanitizadas para evitar vazamento em logs.
+4. **Persistência Privada com Atomicidade Real (AUD-01)**:
+   - Gravação atômica via arquivo temporário exclusivo no mesmo diretório pai (`tempfile.mkstemp`).
+   - Aplicação de `fchmod(0600)` e sincronização em disco (`os.fsync`) antes da substituição atômica (`os.replace`).
+   - Garantia de que arquivos preexistentes com permissões permissivas (ex.: 0644) são rebaixados estritamente para `0o600` (`-rw-------`).
+   - Bloqueio incondicional de links simbólicos no destino ou diretório pai (fail-closed, sem seguir links).
+   - Preservação do arquivo de destino original caso ocorra falha de escrita ou I/O.
+   - Diretório padrão protegido com `0o700` em `.ch_sentinela/project_snapshot.json`.
+   - Ignorado por padrão no `.gitignore` para impedir que snapshots reais sejam comitados no Git (AUD-04).
 5. **Comportamento Fail-Closed (Falha Fechada)**:
    - Se o comando `gh`, rede, autenticação ou parsing falhar, o script encerra imediatamente com status `BLOQUEADO` e código de saída `1`.
    - Não há fallback automático para fixtures. Fixtures são aceitas única e exclusivamente com passagem explícita de argumentos `--fixture-items` e `--fixture-fields`.
@@ -70,7 +77,7 @@ python scripts/ch_project_export.py \
 
 ## 3. Proposta Arquitetural: Canal de Leitura Automática para a Daily 07h
 
-> **Nota de Governança:** Conforme restrições do escopo CH-ACCESS-01 e Decisão D05, **nenhum daemon 24/7, cron job ou upload remoto de snapshots reais foi ativado nesta missão**. A proposta abaixo descreve a solução técnica recomendada para deliberação do PO e futura implementação em fatia específica.
+> **Nota de Governança:** Conforme restrições do escopo CH-ACCESS-01 e Decisão D05, **nenhum daemon 24/7, cron job ou upload remoto de snapshots reais foi ativado nesta fatia**. A proposta abaixo descreve a solução técnica recomendada para deliberação do PO e futura implementação em fatia específica.
 
 ### 3.1. Requisitos do Canal Automático
 1. **Autenticação Mínima com Privilégio Estrito**:

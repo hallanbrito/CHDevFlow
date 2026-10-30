@@ -399,6 +399,234 @@ class TestProjectExport(unittest.TestCase):
                 f"Permissões do snapshot devem ser 0600 (rw-------), obtido {oct(perm)}.",
             )
 
+    def test_save_snapshot_replaces_preexisting_0644_with_strict_0600(self) -> None:
+        """AUD-01: Sobrescrita de arquivo preexistente com 0644 força rebaixamento seguro para 0600."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_0644_") as tmpdir:
+            destino = Path(tmpdir) / "snapshot_antigo.json"
+            destino.write_text("{\"antigo\": true}\n", encoding="utf-8")
+            os.chmod(destino, 0o644)
+            self.assertEqual(stat.S_IMODE(os.stat(destino).st_mode), 0o644)
+
+            salvo = save_snapshot_file(snapshot, destino)
+            self.assertEqual(salvo, destino.resolve())
+            perm = stat.S_IMODE(os.stat(salvo).st_mode)
+            self.assertEqual(
+                perm,
+                0o600,
+                f"Permissões finais após replace de arquivo 0644 devem ser estritamente 0600, obtido {oct(perm)}.",
+            )
+
+    def test_save_snapshot_destination_symlink_rejected_fail_closed(self) -> None:
+        """AUD-01: Destino como link simbólico é rejeitado fail-closed sem perseguir o link."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_symlink_") as tmpdir:
+            alvo_real = Path(tmpdir) / "arquivo_alvo_intacto.json"
+            alvo_real.write_text("CONTEUDO_PROTEGIDO", encoding="utf-8")
+
+            link_destino = Path(tmpdir) / "link_para_alvo.json"
+            os.symlink(alvo_real, link_destino)
+
+            with self.assertRaises(ProjectExportError) as ctx:
+                save_snapshot_file(snapshot, link_destino)
+
+            self.assertIn("link simbólico proibido", str(ctx.exception))
+            # Garante que o arquivo apontado pelo symlink NÃO foi modificado
+            self.assertEqual(alvo_real.read_text(encoding="utf-8"), "CONTEUDO_PROTEGIDO")
+
+    def test_save_snapshot_parent_dir_symlink_rejected(self) -> None:
+        """AUD-01: Diretório pai como link simbólico é rejeitado fail-closed."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_pdir_symlink_") as tmpdir:
+            dir_real = Path(tmpdir) / "pasta_real"
+            dir_real.mkdir(mode=0o700)
+
+            dir_link = Path(tmpdir) / "pasta_link"
+            os.symlink(dir_real, dir_link, target_is_directory=True)
+
+            destino = dir_link / "snapshot.json"
+            with self.assertRaises(ProjectExportError) as ctx:
+                save_snapshot_file(snapshot, destino)
+
+            self.assertIn("link simbólico proibido", str(ctx.exception))
+
+    def test_save_snapshot_preserves_original_file_on_write_failure(self) -> None:
+        """AUD-01: Falha durante escrita/fsync limpa temporário e preserva intacto o arquivo original."""
+        snapshot = {
+            "schema_version": "chdevflow.project-snapshot/1.0",
+            "source": "SNAPSHOT_TEST",
+            "captured_at_utc": "2026-10-30T12:00:00Z",
+            "items": [],
+            "fields": [],
+        }
+
+        with tempfile.TemporaryDirectory(prefix="test_snap_fail_preserve_") as tmpdir:
+            destino = Path(tmpdir) / "snapshot_existente.json"
+            destino.write_text("{\"versao_original\": 1}\n", encoding="utf-8")
+            os.chmod(destino, 0o600)
+
+            from unittest.mock import patch
+            # Simula falha de disco no os.fsync
+            with patch("os.fsync", side_effect=OSError("Disk full / I/O error")):
+                with self.assertRaises(ProjectExportError) as ctx:
+                    save_snapshot_file(snapshot, destino)
+                self.assertIn("Falha durante gravação/sincronização", str(ctx.exception))
+
+            # Arquivo original deve permanecer exatamente como estava
+            self.assertEqual(destino.read_text(encoding="utf-8"), "{\"versao_original\": 1}\n")
+            # Nenhum resíduo temporário pode ter ficado na pasta
+            arquivos_sobrando = list(Path(tmpdir).glob(".tmp_snapshot_*"))
+            self.assertEqual(len(arquivos_sobrando), 0)
+
+    def test_governance_values_with_tokens_and_emails_are_sanitized(self) -> None:
+        """AUD-02: Valores em campos de governança contendo tokens e e-mails são sanitizados imediatamente."""
+        fields_raw = criar_payload_campos_valido()
+        items_raw = {
+            "items": [
+                {
+                    "id": "PVTI_teste_vazamento_gov",
+                    "title": "Tarefa com vazamento em governanca",
+                    "status": "Todo",
+                    "esteira": "AGY ghp_1234567890abcdefghijklmnopqrstuvwxyz",
+                    "etapa CH": "PRONTA usuario_vazado@empresa.com.br",
+                    "prioridade CH": "P1 AIzaSyD12345678901234567890123456789012",
+                    "content": {
+                        "type": "Issue",
+                        "number": 55,
+                        "title": "Issue 55",
+                        "url": "https://github.com/hallanbrito/CHDevFlow/issues/55",
+                    },
+                }
+            ],
+            "totalCount": 1,
+        }
+
+        snapshot = export_project_snapshot(
+            items_raw=items_raw,
+            fields_raw=fields_raw,
+        )
+
+        item = snapshot["items"][0]
+        # Valida que as credenciais e e-mails foram eliminados dos valores do item
+        self.assertNotIn("ghp_", item["esteira"])
+        self.assertIn("[CREDENCIAL_OCULTADA]", item["esteira"])
+
+        self.assertNotIn("@empresa.com.br", item["etapa_ch"])
+        self.assertIn("[DADO_PESSOAL_OCULTADO]", item["etapa_ch"])
+
+        self.assertNotIn("AIzaSy", item["prioridade_ch"])
+        self.assertIn("[CREDENCIAL_OCULTADA]", item["prioridade_ch"])
+
+        # Confirma que a serialização completa em JSON não vaza os segredos
+        texto_serializado = json.dumps(snapshot, ensure_ascii=False)
+        self.assertNotIn("ghp_1234567890abcdefghijklmnopqrstuvwxyz", texto_serializado)
+        self.assertNotIn("usuario_vazado@empresa.com.br", texto_serializado)
+        self.assertNotIn("AIzaSyD12345678901234567890123456789012", texto_serializado)
+
+    def test_unknown_governance_option_with_secrets_sanitized_in_anomalies_and_items(self) -> None:
+        """AUD-02: Opção desconhecida com token ou e-mail é sanitizada tanto em anomalias quanto no item."""
+        fields_raw = criar_payload_campos_valido()
+        items_raw = {
+            "items": [
+                {
+                    "id": "PVTI_anomalia_secreta",
+                    "title": "Item anomalia secreta",
+                    "etapa CH": "FASE_INVENTADA ghp_1234567890abcdefghijklmnopqrstuvwxyz admin@corp.org",
+                    "content": {"type": "Issue", "number": 66, "title": "Item 66"},
+                }
+            ],
+            "totalCount": 1,
+        }
+
+        snapshot = export_project_snapshot(
+            items_raw=items_raw,
+            fields_raw=fields_raw,
+        )
+
+        anomalias = snapshot["integrity"]["anomalies"]
+        self.assertEqual(len(anomalias), 1)
+        anomalia = anomalias[0]
+        self.assertEqual(anomalia["field"], "Etapa CH")
+        self.assertEqual(anomalia["error"], "OPCAO_DESCONHECIDA")
+
+        # Garante ausência estrita de token e e-mail no registro da anomalia
+        self.assertNotIn("ghp_", anomalia["value"])
+        self.assertNotIn("admin@corp.org", anomalia["value"])
+        self.assertIn("[CREDENCIAL_OCULTADA]", anomalia["value"])
+        self.assertIn("[DADO_PESSOAL_OCULTADO]", anomalia["value"])
+
+        # E também no item resumido
+        item = snapshot["items"][0]
+        self.assertNotIn("ghp_", item["etapa_ch"])
+        self.assertNotIn("admin@corp.org", item["etapa_ch"])
+
+    def test_error_diagnostic_does_not_leak_secrets_to_stderr(self) -> None:
+        """AUD-02: Mensagens de erro/diagnóstico no stderr sanitizam tokens e credenciais."""
+        cmd = [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "ch_project_export.py"),
+            "--fixture-items", "/tmp/inexistente_ghp_1234567890abcdefghijklmnopqrstuvwxyz/items.json",
+            "--fixture-fields", "/tmp/inexistente_email_teste@empresa.com.br/fields.json",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        self.assertEqual(proc.returncode, 1)
+        self.assertNotIn("ghp_1234567890abcdefghijklmnopqrstuvwxyz", proc.stderr)
+        self.assertNotIn("teste@empresa.com.br", proc.stderr)
+        self.assertTrue(
+            "[CREDENCIAL_OCULTADA]" in proc.stderr or "[DADO_PESSOAL_OCULTADO]" in proc.stderr
+        )
+
+    def test_missing_ch_sentinela_dependency_fails_explicitly_no_degradation(self) -> None:
+        """AUD-03: Ausência de ch_sentinela levanta ImportError explícito sem substituir por validadores degradados."""
+        script_teste = (
+            "import sys\n"
+            "sys.modules['ch_sentinela'] = None\n"
+            "sys.modules['ch_sentinela.config'] = None\n"
+            "sys.modules['ch_sentinela.github_reader'] = None\n"
+            "sys.modules['ch_sentinela.security.policies'] = None\n"
+            "if 'chdevflow.core.project_export' in sys.modules:\n"
+            "    del sys.modules['chdevflow.core.project_export']\n"
+            "try:\n"
+            "    import chdevflow.core.project_export\n"
+            "    print('FALHA: Não deve importar sem ch_sentinela')\n"
+            "    sys.exit(2)\n"
+            "except ImportError as exc:\n"
+            "    assert 'ch_sentinela' in str(exc)\n"
+            "    print('SUCESSO: ImportError explícito')\n"
+            "    sys.exit(0)\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", script_teste],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PYTHONPATH": str(SRC_PATH)},
+        )
+        self.assertEqual(proc.returncode, 0, f"Teste falhou: {proc.stdout} | {proc.stderr}")
+        self.assertIn("SUCESSO: ImportError explícito", proc.stdout)
+
+
     def test_script_cli_execution_with_fixtures(self) -> None:
         """Executa scripts/ch_project_export.py via subprocess com fixtures offline."""
         with tempfile.TemporaryDirectory(prefix="test_cli_export_") as tmpdir:

@@ -28,6 +28,7 @@ from chdevflow.core.project_export import (
     ProjectExportError,
     ProjectExportIntegrityError,
     export_project_snapshot,
+    sanitizar_texto_completo,
     save_snapshot_file,
 )
 
@@ -108,7 +109,8 @@ def main(argv: list[str] | None = None) -> int:
                 fields_raw = json.load(f)
             source_override = "SNAPSHOT_OFFLINE"
         except Exception as exc:
-            print(f"ERRO: Falha ao carregar fixtures offline: {exc}", file=sys.stderr)
+            msg = sanitizar_texto_completo(str(exc))
+            print(f"ERRO: Falha ao carregar fixtures offline: {msg}", file=sys.stderr)
             return 1
 
     # 2. Execução da exportação sob governança fail-closed
@@ -121,15 +123,17 @@ def main(argv: list[str] | None = None) -> int:
             source_override=source_override,
         )
     except (ProjectExportError, ProjectExportIntegrityError) as exc:
+        diag = sanitizar_texto_completo(str(exc))
         print("=" * 60, file=sys.stderr)
         print("CHDevFlow — Exportador do GitHub Project #2: BLOQUEADO", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
-        print(f"  • Diagnóstico : {exc}", file=sys.stderr)
+        print(f"  • Diagnóstico : {diag}", file=sys.stderr)
         print("  • Governança  : Falha fechada (fail-closed). Sem fallback para fixtures automáticas.", file=sys.stderr)
         print("=" * 60, file=sys.stderr)
         return 1
     except Exception as exc:
-        print(f"ERRO INESPERADO no exportador: {exc}", file=sys.stderr)
+        msg = sanitizar_texto_completo(str(exc))
+        print(f"ERRO INESPERADO no exportador: {msg}", file=sys.stderr)
         return 1
 
     integ = snapshot.get("integrity", {})
@@ -159,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         caminho_salvo = save_snapshot_file(snapshot, args.output)
     except Exception as exc:
-        print(f"ERRO ao persistir arquivo de snapshot seguro: {exc}", file=sys.stderr)
+        msg = sanitizar_texto_completo(str(exc))
+        print(f"ERRO ao persistir arquivo de snapshot seguro: {msg}", file=sys.stderr)
         return 1
 
     print("=" * 60)

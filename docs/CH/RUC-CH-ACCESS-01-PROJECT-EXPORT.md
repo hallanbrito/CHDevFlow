@@ -1,13 +1,15 @@
-# RUC/1.0 — CH-ACCESS-01 — Tentativa 1
+# RUC/1.0 — CH-ACCESS-01 — Tentativa 2 (Correções da Auditoria Independente)
 
-**Cabeçalho:** missão/Issue: [#49](https://github.com/hallanbrito/CHDevFlow/issues/49) | executor declarado: Google Antigravity (AGY) | coordenação: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 isolada autorizada pelo PO em 30/10/2026 na Issue #49 | ambiente: CachyOS Linux x86_64 / Python 3.13 / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / SNAPSHOT_OFFLINE | timestamp ISO 8601: 2026-10-30T14:46:00Z | run_id: NÃO_APLICÁVEL | baseline SHA: `46fea0afd7d6c1a605fe49fb5f801ac125caa7a6` | branch: `agy/ch-access-01-project-export` | resultado técnico: APROVADO_TECNICAMENTE.
+**Cabeçalho:** missão/Issue: [#49](https://github.com/hallanbrito/CHDevFlow/issues/49) | Draft PR: [#50](https://github.com/hallanbrito/CHDevFlow/pull/50) | parecer auditoria anterior: [CH-AUD-ACCESS-01](https://github.com/hallanbrito/CHDevFlow/pull/50#issuecomment-6525940749) | executor declarado: Google Antigravity (AGY) | coordenação: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 isolada autorizada pelo PO em 30/10/2026 na Issue #49 mantida para correções | ambiente: CachyOS Linux x86_64 / Python 3.13 / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / SNAPSHOT_OFFLINE | timestamp ISO 8601: 2026-10-30T15:15:00Z | run_id anterior: [41074926726](https://github.com/hallanbrito/CHDevFlow/actions/runs/41074926726) (SUCCESS) | baseline SHA: `46fea0afd7d6c1a605fe49fb5f801ac125caa7a6` | branch: `agy/ch-access-01-project-export` | resultado técnico: APROVADO_TECNICAMENTE.
 
 ---
 
 ## 1. Identificação
 
 - **Missão:** CH-ACCESS-01 — Exportação segura e auditável do GitHub Project #2 (read-only)
+- **Ciclo:** Tentativa 2 — Fechamento estrito dos apontamentos de auditoria AUD-01, AUD-02, AUD-03 e AUD-04
 - **Issue Oficial:** https://github.com/hallanbrito/CHDevFlow/issues/49
+- **Draft PR:** https://github.com/hallanbrito/CHDevFlow/pull/50
 - **Repositório:** `hallanbrito/CHDevFlow`
 - **Branch de Trabalho:** `agy/ch-access-01-project-export`
 - **Worktree Isolada:** `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow/github_project_exporter`
@@ -17,42 +19,41 @@
 - **Auditor Independente:** ChatGPT.
 - **Product Owner (PO):** Hallan de Sousa Brito.
 - **Custo Adicional:** R$ 0,00 (Nenhum consumo de API paga ou serviço externo faturável).
-- **Estado Inicial:** PRONTA PARA EXECUÇÃO ISOLADA PELO AGY.
-- **Estado Final Esperado:** `AGUARDANDO_AUDITORIA_CHATGPT`.
+- **Estado Inicial da Tentativa:** CORREÇÕES NECESSÁRIAS / NÃO HOMOLOGADO (Parecer CH-AUD-ACCESS-01).
+- **Estado Final Esperado:** `AGUARDANDO_REAUDITORIA_CHATGPT`.
 
 ---
 
 ## 2. Resumo Executivo
 
-1. Implementado exportador somente-leitura do GitHub Project #2 (`scripts/ch_project_export.py` e `src/chdevflow/core/project_export.py`), reutilizando componentes centrais de `ch_sentinela`.
-2. A validação dinâmica conferiu com exatidão os 26 cartões reais e os 19 campos observados do Project #2, com 26 IDs únicos e sem anomalias.
-3. Produz snapshot JSON compacto sob esquema `chdevflow.project-snapshot/1.0`, com permissões privadas UNIX 0600 (`-rw-------`), digest SHA-256 canônico e sanitização de segredos e e-mails.
-4. Omissão rigorosa de `content.body`, comentários e nomes de pessoas/assignees; snapshots reais protegidos no `.gitignore`.
-5. Bateria integral de 307 testes locais executada e aprovada com 100% de sucesso (185 raiz + 69 Sentinela + 53 Control Center), sem regressões.
+1. **AUD-01 (Persistência Atômica e Privada 0600):** Refatorada a função `save_snapshot_file` para gravação atômica via `tempfile.mkstemp` no mesmo diretório pai, com `fchmod(0600)` e `os.fsync` antes do `os.replace`. Rejeição fail-closed imediata de destinos ou diretórios que sejam links simbólicos (sem seguir links); rebaixamento forçado para 0600 de arquivos preexistentes permissivos (ex.: 0644); e preservação estrita do arquivo original diante de falha de escrita ou I/O.
+2. **AUD-02 (Sanitização Integral de Valores de Governança e Anomalias):** Aplicada `sanitizar_texto_completo` a todos os valores extraídos de campos (`status`, `etapa_ch`, `esteira`, etc.) e na captura de anomalias (`anomalies[].value`), eliminando qualquer possibilidade de vazamento de tokens ou e-mails em snapshot, `--stdout` ou mensagens de erro no `stderr`.
+3. **AUD-03 (Eliminação de Fallback Silencioso Degradado):** Removido o bloco `try/except ImportError` que substituía validadores centrais por implementações enfraquecidas. O módulo agora requer `ch_sentinela` estritamente, abortando com `ImportError` explícito e seguro caso inacessível.
+4. **AUD-04 (Higiene de Governança no `.gitignore` e Redução de Duplicação):** Restaurado `.ch/evidence/` no `.gitignore` (em vez de ignorar `.ch/` por completo), mantendo o bloqueio de `*project_snapshot*.json` e exceção para `docs/CH/exemplos/*.json`. Eliminada a duplicata do RUC na raiz do repositório, consolidando `docs/CH/RUC-CH-ACCESS-01-PROJECT-EXPORT.md` como fonte única da verdade.
+5. **Cobertura de Testes e CI:** Criados 8 novos testes negativos e de regressão em `tests/test_project_export.py` (total de 24 testes). Suíte integral local totaliza 315 testes aprovados (193 raiz + 69 Sentinela + 53 Control Center).
 
 ---
 
 ## 3. Consultas/atividades realizadas
 
-1. **Inspeção de Baseline e Permissões:**
-   - Conferido `origin/main` no commit `46fea0a`.
-   - Criada branch isolada `agy/ch-access-01-project-export`.
-   - Conferido `gh auth status` confirmando escopos `'gist', 'project', 'read:org', 'repo', 'workflow'`, sem exposição de tokens.
-2. **Reutilização e Extensão da Sentinela:**
-   - Estendido `LeitorGitHub` em `apps/bootstrap/sentinela/src/ch_sentinela/github_reader.py` com o método `listar_campos_projeto` e função de validação estrutural `validar_campos_projeto`.
-   - Adicionada salvaguarda `field-delete` a `SUBCOMANDOS_MUTAVEIS_PROIBIDOS`.
-   - Atualizado adaptador `SentinelFacade` em `apps/control-center/src/ch_control_center/adapters/sentinela_adapter.py` para expor `validar_campos` e `obter_campos_ao_vivo`.
-3. **Construção do Núcleo do Exportador:**
-   - Desenvolvido `src/chdevflow/core/project_export.py` contendo a lógica central de extração, sumarização sanitizada, checagem de unicidade por Card ID, integridade estrutural, digest canônico e gravação atômica com `0600`.
-   - Criado script executável `scripts/ch_project_export.py` com suporte às flags `--validate-only`, `--dry-run`, `--stdout`, `--output`, `--fixture-items` e `--fixture-fields`.
-4. **Proteção de Segredos e Exemplo Sintético:**
-   - Atualizado `.gitignore` para bloquear `.ch/`, `.ch_sentinela/` e `*project_snapshot*.json`, excetuando exemplos sintéticos.
-   - Criado exemplo sintético versionado em `docs/CH/exemplos/project_snapshot_sintetico.json`.
-5. **Proposta Arquitetural para Futura Daily 07h:**
-   - Elaborada proposta detalhada em `docs/CH/CH-ACCESS-01-EXPORTADOR.md` contemplando autenticação mínima (Read-only em Projects), validação de frescor (TTL <= 30 min) e ausência de daemons 24/7 (Decisão D05).
-6. **Suíte de Testes:**
-   - Criado `tests/test_project_export.py` com 16 testes offline cobrindo todos os requisitos e cenários de quebra.
-   - Adicionados 2 testes unitários em `apps/bootstrap/sentinela/tests/test_github_reader.py`.
+1. **Análise Integral da Auditoria:** Leitura completa do parecer CH-AUD-ACCESS-01 no comentário 6525940749 do PR #50.
+2. **Correção AUD-01 (Persistência Segura):**
+   - Implementada verificação de links simbólicos via `is_symlink()` e `os.path.islink()` no destino e no diretório pai.
+   - Implementada escrita em temporário exclusivo (`tempfile.mkstemp`) com `fchmod(0600)`, `flush()` e `os.fsync()`.
+   - Adicionada substituição atômica via `os.replace` e `os.chmod(0600)` com verificação pós-escrita.
+   - Implementado rollback com exclusão do temporário e preservação do arquivo original em caso de erro de I/O.
+3. **Correção AUD-02 (Sanitização de Governança):**
+   - Sanitização de retorno em `extrair_valor_campo` e `extrair_governanca`.
+   - Sanitização de valores em `integrity.anomalies` e de mensagens de diagnóstico impressas em `stderr`.
+   - Introduzido `REGEX_GITHUB_TOKEN` para contenção em profundidade de tokens concatenados.
+4. **Correção AUD-03 (Dependência Estrita):**
+   - Removido fallback permissivo em `src/chdevflow/core/project_export.py`; ausência de `ch_sentinela` gera `ImportError` formal.
+5. **Correção AUD-04 (Governança e `.gitignore`):**
+   - Atualizado `.gitignore` preservando `.ch/` e restringindo ignore a `.ch/evidence/` e `*project_snapshot*.json`.
+   - Removido `RUC-CH-ACCESS-01-PROJECT-EXPORT.md` da raiz via `git rm`.
+6. **Bateria de Testes Negativos e Regressivos:**
+   - 8 novos testes adicionados em `tests/test_project_export.py` validando symlinks, substituição de arquivo 0644, falhas de I/O, sanitização de opções desconhecidas e ausência de degradação.
+   - Execução das 3 suítes locais com 100% de aprovação.
 
 ---
 
@@ -60,18 +61,19 @@
 
 | ID | Classe | Fonte/ref | Fato observado e limite |
 |---|---|---|---|
-| E01 | OBSERVADO | `gh project item-list 2 --owner hallanbrito --limit 500 --format json` | Retornou `totalCount=26` e 26 itens recebidos; 26 IDs de cartões únicos. |
-| E02 | OBSERVADO | `gh project field-list 2 --owner hallanbrito --format json` | Retornou `totalCount=19` e 19 campos estruturados recebidos. |
-| E03 | OBSERVADO | `python scripts/ch_project_export.py --validate-only` | Validou com sucesso os 26 cartões e 19 campos ao vivo (`LIVE_GITHUB`), 0 anomalias, digest gerado. |
-| E04 | OBSERVADO | `python scripts/ch_project_export.py` | Gravou `.ch_sentinela/project_snapshot.json` com permissão estrita `0600` (`-rw-------`). |
-| E05 | OBSERVADO | `python -m unittest tests/test_project_export.py` | 16 testes executados e aprovados em 0.315s. |
-| E06 | OBSERVADO | `python -m unittest discover -s apps/bootstrap/sentinela/tests` | 69 testes executados e aprovados em 0.100s. |
-| E07 | OBSERVADO | `pytest apps/control-center/tests` | 53 testes executados e aprovados em 0.44s. |
-| E08 | OBSERVADO | `python -m unittest discover -s tests` | 185 testes da raiz executados e aprovados em 29.962s. |
-| E09 | OBSERVADO | `python -m compileall -q src scripts apps` | Compilação sintática de todos os arquivos concluída com código 0. |
-| E10 | OBSERVADO | `git status` | Snapshot real local não é rastreado pelo Git devido à regra em `.gitignore`. |
-| E11 | DECLARADO | Issue #49 | Autorização do PO Hallan de Sousa Brito para missão CH-2 isolada sem merge/deploy. |
-| E12 | OBSERVADO | Ambiente local | R$ 0,00 de custo adicional; nenhuma chamada a serviços de IA pagos realizada. |
+| E01 | OBSERVADO | `python -m unittest tests/test_project_export.py` | 24 testes executados e aprovados em 0.439s (incluindo 8 testes para AUD-01 a AUD-04). |
+| E02 | OBSERVADO | `python -m unittest discover -s apps/bootstrap/sentinela/tests` | 69 testes da Sentinela executados e aprovados em 0.063s. |
+| E03 | OBSERVADO | `pytest apps/control-center/tests` | 53 testes do Control Center executados e aprovados em 0.46s. |
+| E04 | OBSERVADO | `python -m unittest discover -s tests` | 193 testes da raiz executados e aprovados em 21.069s. |
+| E05 | OBSERVADO | `python -m compileall -q src scripts apps` | Código 0 sem erros ou avisos sintáticos. |
+| E06 | OBSERVADO | `test_save_snapshot_replaces_preexisting_0644_with_strict_0600` | Arquivo preexistente 0644 rebaixado com sucesso para 0600 após save. |
+| E07 | OBSERVADO | `test_save_snapshot_destination_symlink_rejected_fail_closed` | Symlink rejeitado fail-closed; arquivo apontado permaneceu intacto. |
+| E08 | OBSERVADO | `test_save_snapshot_preserves_original_file_on_write_failure` | Falha simulada no `fsync` preservou integralmente o conteúdo prévio do snapshot. |
+| E09 | OBSERVADO | `test_governance_values_with_tokens_and_emails_are_sanitized` | Tokens e e-mails em campos de governança foram mascarados no snapshot e no JSON. |
+| E10 | OBSERVADO | `test_missing_ch_sentinela_dependency_fails_explicitly_no_degradation` | Ausência simulada de `ch_sentinela` levantou `ImportError` explícito sem validadores fracos. |
+| E11 | OBSERVADO | GitHub Actions run 41074926726 | CI remota prévia no PR #50 concluída com SUCCESS (48s). |
+| E12 | DECLARADO | Issue #49 | Autorização do PO Hallan de Sousa Brito mantida em CH-2 para correções da auditoria. |
+| E13 | OBSERVADO | Ambiente local | R$ 0,00 de custo adicional; nenhuma chamada a serviços de IA pagos realizada. |
 
 ---
 
@@ -79,60 +81,58 @@
 
 | Teste | Critério | Resultado | Evidência |
 |---|---|---|---|
-| T01 | Consulta e validação dinâmica dos 26 cartões e 19 campos | PASSOU | E01, E02, E03, E04 |
-| T02 | Produção de snapshot compacto, auditável, com UTC e governança | PASSOU | E03, E04, E05 |
-| T03 | Proteção e não publicação de snapshots reais e mascaramento de credenciais | PASSOU | E04, E05, E10 |
-| T04 | Operação 100% somente leitura sem modificar cartões, regras ou permissões | PASSOU | E01, E03, E04 |
-| T05 | Testes offline de fail-closed (falha gh, timeout, json inválido, contagens divergentes) | PASSOU | E05, E06 |
-| T06 | Trabalho restrito à branch isolada `agy/ch-access-01-project-export` | PASSOU | E10 |
-| T07 | Execução integral da suíte de testes sem regressões (307 testes locais aprovados) | PASSOU | E05, E06, E07, E08 |
-| T08 | Proposta arquitetural para Daily 07h com autenticação mínima e frescor comprovado | PASSOU | Documentado em `docs/CH/CH-ACCESS-01-EXPORTADOR.md` |
+| T01 | AUD-01: Persistência atômica, fchmod(0600), fsync, os.replace e bloqueio de symlinks | PASSOU | E01, E06, E07, E08 |
+| T02 | AUD-02: Sanitização estrita de valores de governança, anomalias e mensagens de stderr | PASSOU | E01, E09 |
+| T03 | AUD-03: Remoção de fallback de validação degradada com fail-closed explícito | PASSOU | E01, E10 |
+| T04 | AUD-04: .gitignore refinado (restrito a .ch/evidence/) e eliminação de RUC duplicado | PASSOU | E04, git status |
+| T05 | Consulta e validação dinâmica dos 26 cartões e 19 campos | PASSOU | Validado na Tentativa 1 |
+| T06 | Operação 100% somente leitura sem modificar cartões, regras ou permissões | PASSOU | E01, E02, E03 |
+| T07 | Execução integral da suíte de testes sem regressões (315 testes locais aprovados) | PASSOU | E01, E02, E03, E04 |
+| T08 | Proposta arquitetural para Daily 07h mantida em documentação | PASSOU | `docs/CH/CH-ACCESS-01-EXPORTADOR.md` |
 
 ---
 
 ## 6. Riscos e bloqueios
 
-- **Risco R1 (Vazamento Acidental de Snapshot Real):** Mitigado com inclusão explícita de `.ch_sentinela/`, `.ch/` e `*project_snapshot*.json` no `.gitignore` e permissão `0600` no sistema de arquivos. Exemplo fornecido é 100% sintético.
-- **Risco R2 (Falha ou Indisponibilidade de Rede do GitHub CLI):** Mitigado com comportamento fail-closed rigoroso; o script encerra com código 1 e erro seguro sanitizado, sem gerar falsos sucessos.
-- **Risco R3 (Incompatibilidade com Daily 07h):** A proposta arquitetural foi isolada e não ativa daemons nem cron jobs automáticos nesta fatia, respeitando rigorosamente a Decisão D05.
-- **Bloqueios Atuais:** Nenhum bloqueio técnico. Missão concluída e apta para auditoria independente.
+- **Risco R1 (Concorrência Local de Escrita):** Mitigado pelo uso de arquivos temporários exclusivos (`tempfile.mkstemp`) e substituição atômica no mesmo diretório (`os.replace`).
+- **Risco R2 (Symlink Hijacking):** Mitigado por checagem explícita com fail-closed tanto no destino quanto no diretório pai.
+- **Risco R3 (Vazamento de Segredos em Valores Inválidos):** Mitigado pela sanitização antecipada de qualquer valor antes de sua inclusão em itens, anomalias ou logs.
+- **Bloqueios Atuais:** Nenhum bloqueio técnico. Modificações prontas para reauditoria independente.
 
 ---
 
 ## 7. Alterações realizadas
 
 - **Arquivos modificados:**
-  - `.gitignore`: Adicionada proteção para `.ch/` e `*project_snapshot*.json`, mantendo exceção para `docs/CH/exemplos/*.json`.
-  - `apps/bootstrap/sentinela/src/ch_sentinela/github_reader.py`: Adicionados `listar_campos_projeto`, `validar_campos_projeto` e salvaguarda `field-delete`.
-  - `apps/bootstrap/sentinela/tests/test_github_reader.py`: Adicionados testes unitários para campos de projeto.
-  - `apps/control-center/src/ch_control_center/adapters/sentinela_adapter.py`: Adicionados `validar_campos` e `obter_campos_ao_vivo`.
-- **Arquivos criados:**
-  - `src/chdevflow/core/project_export.py`: Módulo central de exportação segura, validação e persistência restrita (0600).
-  - `scripts/ch_project_export.py`: Script CLI executável com flags `--validate-only`, `--dry-run`, `--stdout`, `--fixture-items`, etc.
-  - `tests/test_project_export.py`: Bateria com 16 testes offline de conformidade e fail-closed.
-  - `docs/CH/CH-ACCESS-01-EXPORTADOR.md`: Documentação técnica completa e proposta arquitetural para a Daily 07h.
-  - `docs/CH/exemplos/project_snapshot_sintetico.json`: Snapshot sintético de exemplo para fins documentais.
-  - `docs/CH/RUC-CH-ACCESS-01-PROJECT-EXPORT.md`: Este relatório RUC/1.0.
-  - `RUC-CH-ACCESS-01-PROJECT-EXPORT.md`: Cópia espelhada na raiz do repositório.
+  - `src/chdevflow/core/project_export.py`:
+    - Refatoração de `save_snapshot_file` com atomicidade, `fchmod(0600)`, `fsync`, `os.replace` e rejeição de links simbólicos (AUD-01).
+    - Sanitização integral de valores de campos de governança, anomalias e erros (AUD-02).
+    - Remoção do fallback enfraquecido de `ch_sentinela` (AUD-03).
+  - `scripts/ch_project_export.py`:
+    - Sanitização de mensagens de exceção e diagnósticos impressos no `stderr` (AUD-02).
+  - `.gitignore`:
+    - Restaurado `.ch/evidence/` em substituição ao ignore genérico de `.ch/` (AUD-04).
+  - `tests/test_project_export.py`:
+    - Adicionados 8 testes cobrindo permissões preexistentes, symlinks, falha de I/O, sanitização de governança/anomalias/stderr e dependência ausente.
+  - `docs/CH/CH-ACCESS-01-EXPORTADOR.md`:
+    - Atualizada a documentação técnica com os mecanismos de persistência atômica e sanitização integral.
+  - `docs/CH/RUC-CH-ACCESS-01-PROJECT-EXPORT.md`:
+    - Atualizado para Tentativa 2 com todas as evidências das correções.
+- **Arquivos removidos:**
+  - `RUC-CH-ACCESS-01-PROJECT-EXPORT.md` (removido da raiz para eliminar duplicação conforme AUD-04).
 
 ---
 
 ## 8. Recomendação técnica
 
-**APROVADO_TECNICAMENTE** — A missão CH-ACCESS-01 atendeu integralmente a todos os critérios de aceite estipulados na Issue #49:
-- Consulta segura e validada dos 26 cartões e 19 campos.
-- Snapshot compacto, higienizado e protegido com permissão 0600.
-- Falha fechada absoluta comprovada por testes offline.
-- Total de 307 testes locais aprovados sem regressões.
-- Nenhuma alteração remota, mutação de cartões, merge ou custo financeiro.
+**APROVADO_TECNICAMENTE** — Todas as pendências e vulnerabilidades apontadas no parecer CH-AUD-ACCESS-01 (AUD-01, AUD-02, AUD-03 e AUD-04) foram integralmente sanadas com testes negativos comprovando o comportamento seguro fail-closed. 
 
-Encaminha-se o Draft PR para auditoria técnica independente do revisor declarado (ChatGPT).
+Encaminha-se para reauditoria técnica independente pelo ChatGPT no Draft PR #50.
 
 ---
 
 ## 9. Decisão necessária do PO
 
 **PENDENTE** — Autorização do Product Owner (Hallan de Sousa Brito) para:
-1. Recebimento e homologação da auditoria técnica independente a ser conduzida pelo ChatGPT.
+1. Recebimento e homologação da reauditoria técnica independente a ser conduzida pelo ChatGPT.
 2. Deliberação sobre a proposta arquitetural para a Daily 07h descrita em `docs/CH/CH-ACCESS-01-EXPORTADOR.md`.
-3. Eventual abertura de fatia W subsequente para integração ou implementação do canal automático da Daily.
