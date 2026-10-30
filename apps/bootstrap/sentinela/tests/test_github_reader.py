@@ -18,6 +18,7 @@ from ch_sentinela.github_reader import (
     LeitorGitHub,
     LeitorGitHubErro,
     executar_comando_gh,
+    validar_campos_projeto,
     validar_snapshot_projeto,
 )
 from ch_sentinela.security.policies import ViolacaoPoliticaSegurancaErro
@@ -167,6 +168,37 @@ class TestesLeitorGitHub(unittest.TestCase):
         with self.assertRaises(LeitorGitHubErro) as ctx:
             validar_snapshot_projeto(snapshot_gigante)
         self.assertIn("excede limite seguro de leitura", str(ctx.exception))
+
+    def test_listar_campos_projeto_sucesso_com_mock(self) -> None:
+        """Valida consulta de campos do Project com mock."""
+        payload_campos = {
+            "fields": [
+                {"id": "f1", "name": "Title", "type": "ProjectV2Field"},
+                {"id": "f2", "name": "Status", "type": "ProjectV2SingleSelectField", "options": [{"id": "o1", "name": "Todo"}]},
+            ],
+            "totalCount": 2,
+        }
+        def mock_executor(args: list[str]) -> str:
+            self.assertIn("field-list", args)
+            self.assertIn("2", args)
+            return json.dumps(payload_campos)
+
+        leitor = LeitorGitHub(executor_customizado=mock_executor)
+        dados = leitor.listar_campos_projeto()
+        self.assertEqual(dados["totalCount"], 2)
+        self.assertEqual(len(dados["fields"]), 2)
+
+    def test_validar_campos_projeto_divergencias_e_tipos(self) -> None:
+        """Valida que validar_campos_projeto rejeita campos incompletos ou tipos inválidos."""
+        with self.assertRaises(LeitorGitHubErro):
+            validar_campos_projeto("não é dict")
+        with self.assertRaises(LeitorGitHubErro):
+            validar_campos_projeto({"totalCount": 1})
+        with self.assertRaises(LeitorGitHubErro):
+            validar_campos_projeto({"fields": [], "totalCount": True})
+        with self.assertRaises(LeitorGitHubErro):
+            validar_campos_projeto({"fields": [{"id": "f1"}], "totalCount": 2})
+
 
 
 if __name__ == "__main__":

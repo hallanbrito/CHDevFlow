@@ -39,6 +39,7 @@ SUBCOMANDOS_MUTAVEIS_PROIBIDOS: tuple[str, ...] = (
     "item-delete",
     "item-archive",
     "field-create",
+    "field-delete",
     "push",
     "apply",
     "--apply",
@@ -197,6 +198,53 @@ def validar_snapshot_projeto(dados: Any) -> None:
         )
 
 
+def validar_campos_projeto(dados: Any) -> None:
+    """Valida a integridade estrutural e limites da lista de campos do GitHub Project.
+
+    Garante que o dicionário contenha:
+    - 'fields': lista de campos do Project V2
+    - 'totalCount': inteiro não-negativo exatamente igual a len(fields)
+
+    Args:
+        dados: Objeto a ser validado como resposta de campos do Project.
+
+    Raises:
+        LeitorGitHubErro: Se a estrutura for inválida, incompleta ou com tipos inesperados.
+    """
+    if not isinstance(dados, dict):
+        raise LeitorGitHubErro(
+            f"Campos do Project inválidos: esperado objeto JSON (dict), obtido {type(dados).__name__}."
+        )
+
+    if "fields" not in dados:
+        raise LeitorGitHubErro("Campos do Project inválidos: campo 'fields' ausente.")
+
+    campos = dados["fields"]
+    if not isinstance(campos, list):
+        raise LeitorGitHubErro(
+            f"Campos do Project inválidos: campo 'fields' deve ser uma lista, obtido {type(campos).__name__}."
+        )
+
+    if "totalCount" not in dados:
+        raise LeitorGitHubErro("Campos do Project inválidos: campo 'totalCount' ausente.")
+
+    total_count = dados["totalCount"]
+    if isinstance(total_count, bool) or not isinstance(total_count, int):
+        raise LeitorGitHubErro(
+            f"Campos do Project inválidos: campo 'totalCount' deve ser um inteiro, obtido {type(total_count).__name__}."
+        )
+
+    if total_count < 0:
+        raise LeitorGitHubErro(
+            f"Campos do Project inválidos: campo 'totalCount' não pode ser negativo ({total_count})."
+        )
+
+    if len(campos) != total_count:
+        raise LeitorGitHubErro(
+            f"Campos do Project incompletos: 'fields' ({len(campos)}) difere de 'totalCount' ({total_count})."
+        )
+
+
 class LeitorGitHub:
     """Interface de leitura restrita e somente-leitura para o GitHub."""
 
@@ -329,3 +377,40 @@ class LeitorGitHub:
         dados = executar_consulta_json(args, executor_customizado=self._executor)
         validar_snapshot_projeto(dados)
         return dados
+
+    def listar_campos_projeto(
+        self,
+        numero_projeto: int = NUMERO_PROJETO_PADRAO,
+        proprietario: str = PROPRIETARIO_PADRAO,
+    ) -> dict[str, Any]:
+        """Consulta os campos do GitHub Project com validação estrutural.
+
+        Args:
+            numero_projeto: Número do projeto (padrão: 2).
+            proprietario: Usuário ou organização proprietária (padrão: 'hallanbrito').
+
+        Returns:
+            Dicionário com a lista de campos e totalCount validado.
+
+        Raises:
+            ViolacaoPoliticaSegurancaErro: Se o número do projeto não for autorizado.
+            LeitorGitHubErro: Se a consulta falhar ou a estrutura for inválida.
+        """
+        if numero_projeto != NUMERO_PROJETO_PADRAO:
+            raise ViolacaoPoliticaSegurancaErro(
+                f"Número de Projeto {numero_projeto} não autorizado. Permitido: {NUMERO_PROJETO_PADRAO}."
+            )
+
+        args = [
+            "project",
+            "field-list",
+            str(numero_projeto),
+            "--owner",
+            proprietario,
+            "--format",
+            "json",
+        ]
+        dados = executar_consulta_json(args, executor_customizado=self._executor)
+        validar_campos_projeto(dados)
+        return dados
+

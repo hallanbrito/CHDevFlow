@@ -7,4 +7,6 @@ build/
 .venv/
 .pytest_cache/
 .ch_sentinela/
-.ch/evidence/
+.ch/
+*project_snapshot*.json
+!docs/CH/exemplos/*.json
