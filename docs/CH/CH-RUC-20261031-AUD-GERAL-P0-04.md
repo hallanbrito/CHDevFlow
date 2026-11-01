@@ -1,6 +1,6 @@
 # Relatório Técnico de Auditoria e Implementação C.H. — Protocolo RUC/1.0
 
-**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-01T01:00:00Z | run_id atual: [41259002591](https://github.com/hallanbrito/CHDevFlow/actions/runs/41259002591) (SUCCESS) | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | HEAD SHA: `26395685cbdf6b3f204949cec9007eb18bd300f9` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_AUDITORIA_CHATGPT_E_HOMOLOGACAO_PO.
+**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-01T01:30:00Z | run_id atual: [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918) (SUCCESS) | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | HEAD SHA: `875caf0ef7f97b3c2c67522aca56ccc023b0bf21` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
 
 ---
 
@@ -19,7 +19,7 @@
 - **Auditor Independente:** ChatGPT (auditorias prévias CH-1 e homologação final).
 - **Product Owner (PO):** Hallan de Sousa Brito.
 - **Custo Adicional:** R$ 0,00 (Nenhum serviço faturável ou pacote pago utilizado).
-- **Estado Final:** `AGUARDANDO_AUDITORIA_CHATGPT_E_HOMOLOGACAO_PO`.
+- **Estado Final:** `AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO`.
 
 ---
 
@@ -68,16 +68,16 @@ Classificação rigorosa das evidências levantadas e verificadas no código:
 
 ## 4. Módulos Implementados e Alterações
 
-### 4.1 Módulo `src/chdevflow/core/trust.py` (Novo)
+### 4.1 Módulo `src/chdevflow/core/trust.py` (Novo e Corrigido em R1)
 
 Implementa o ciclo de vida da governança de confiança:
-- `compute_project_fingerprint(project_root)`: Gera digest SHA-256 combinando `chdevflow.yaml`, arquivos de build (`package.json`, `pyproject.toml`, `requirements.txt`, etc.) e estado Git local relevante (`get_git_state`).
-- `get_git_state(project_root)`: Captura o HEAD commit e inspeciona `git status --porcelain=v1`, filtrando arquivos de código e scripts e ignorando modificações puramente documentais (`docs/`, `.ch/`, `.github/`, `*.md`).
+- `compute_project_fingerprint(project_root)`: Gera digest SHA-256 combinando `chdevflow.yaml`, arquivos de build (`package.json`, `pyproject.toml`, `requirements.txt`, etc.) e estado Git local relevante (`get_git_state`). Opera em modo fail-closed caso arquivos do manifesto ou build não possam ser lidos (`TrustIntegrityError`).
+- `get_git_state(project_root)`: Captura o HEAD commit e inspeciona `git status --porcelain=v1 -uall`. Para cada arquivo relevante modificado ou não rastreado, calcula o hash SHA-256 de conteúdo (`code:path:content_hash`), falhando fechado caso ocorra erro de I/O (`TrustIntegrityError`). Garante que modificações sucessivas sob o mesmo código de status Git (ex: ` M core.py`) invalidem imediatamente a confiança.
 - `grant_trust(project_root, declaration)`: Grava `.ch/trust.json` com permissões `0600` e notice explícito de consentimento e não-sandbox.
-- `check_trust(project_root)`: Valida existência, integridade estrutural e correspondência do fingerprint. Retorna `(False, motivo)` caso arquivos tenham sido alterados ou o registro tenha sido violado.
+- `check_trust(project_root)`: Valida existência, integridade estrutural e correspondência exata do fingerprint. Retorna `(False, motivo)` caso arquivos tenham sido alterados, o registro tenha sido violado ou ocorra `TrustIntegrityError`.
 - `invalidate_trust(project_root)`: Remove conscientemente o registro local de confiança.
 
-### 4.2 Módulo `src/chdevflow/core/evidence.py` (Hardening Integral)
+### 4.2 Módulo `src/chdevflow/core/evidence.py` (Hardening Integral e Correção R1)
 
 - `ALLOWED_VERIFICATION_BINARIES`: Allowlists de binários: `ch`, `python`, `python3`, `pytest`, `npm`, `pnpm`, `yarn`, `dotnet`, `mvn`, `gradle`, `cargo`, `go`, `echo`, `true`, `false`, `exit`.
 - `ALLOWED_SUBCOMMANDS`: Restrição granular de subcomandos para cada adaptador.
@@ -87,7 +87,7 @@ Implementa o ciclo de vida da governança de confiança:
 - `safe_resolve_executable(bin_name, sanitized_path, project_root)`: Localiza binário via `shutil.which` no PATH estritamente higienizado e valida permissões físicas de execução (`os.X_OK`) e integridade de origem.
 - `parse_and_validate_command(cmd_str, project_root, sanitized_path)`: Parser defensivo sem shell, impedindo metacaracteres e bypasses.
 - Leitura com teto real via threads (`_read_pipe_bounded`): Aloca no máximo 5 MB por pipe durante a leitura contínua, anexando aviso de segurança em caso de truncamento.
-- Encerramento de grupo de processos em dois estágios: `start_new_session=True` em POSIX, disparando `os.killpg(pid, SIGTERM)` com carência de 2.0s antes de `os.killpg(pid, SIGKILL)`.
+- Encerramento de grupo de processos em dois estágios com persistência de grupo (Correção R1 P0-03): Executa sob `start_new_session=True` em POSIX, definindo PGID isolado. Dispara `os.killpg(pgid, SIGTERM)` e monitora ativamente se qualquer processo do grupo sobrevive via `os.killpg(pgid, 0)` durante a carência de 2.0s (mesmo se o processo líder finalizar antes). Se remanescentes persistirem, emite `os.killpg(pgid, SIGKILL)` estritamente confinado ao PGID alvo.
 - `run_verification(...)`: Suporte a `--trust`, `--dry-run`, `--timeout` e fail-closed em caso de erro no manifesto.
 
 ### 4.3 Módulo `src/chdevflow/core/submit.py`
@@ -95,17 +95,17 @@ Implementa o ciclo de vida da governança de confiança:
 - Validação rigorosa: `validate_and_submit` invoca `run_verification(target, trust=False)` para garantir que nenhum bypass de confiança seja concedido pelo pipeline de submissão.
 - Se o projeto for untrusted ou se checks falharem, a operação é terminada imediatamente com `SubmitError`, sem interações remotas (`git push` / `gh pr`).
 
-### 4.4 Módulos `cli.py`, `config.py` e `project.py`
+### 4.4 Módulos `cli.py`, `config.py` e `project.py` (Correção R1 P0-01)
 
 - `cli.py`: Adicionadas as flags `--trust`, `--dry-run` e `--timeout` ao subcomando `ch verify`.
-- `config.py`: Validação de sintaxe estrita no manifesto (`verification.commands` não pode conter caracteres de controle ou metacaracteres de shell).
-- `project.py`: Inclusão obrigatória de `.ch/trust.json` e `.ch/evidence/` no `.gitignore` padrão na inicialização do projeto.
+- `config.py`: Removido integralmente o parâmetro `auto_trust=True` de `save_manifest()`. A persistência do manifesto nunca concede confiança implícita.
+- `project.py`: `create_project()` desacoplado de `grant_trust()`. Criar ou modificar um projeto nunca manifesta consentimento automático de confiança. Inclusão obrigatória de `.ch/trust.json` e `.ch/evidence/` no `.gitignore` padrão na inicialização do projeto.
 
 ---
 
 ## 5. Matriz Completa de Testes de Segurança
 
-Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **40 cenários automatizados** (10 positivos e 30 negativos/regressivos):
+Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **44 cenários automatizados** (10 positivos e 34 negativos/regressivos):
 
 | ID | Cenário | Tipo | Entrada Testada | Comportamento Observado | Resultado |
 |---|---|---|---|---|---|
@@ -149,18 +149,22 @@ Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **40 cen�
 | **TN-28** | Teto de 5 MB de saída | Negativo | Script gerando ~6 MB de texto | Truncado na leitura contínua com aviso de segurança | `APROVADO` |
 | **TN-29** | Segredo no manifesto | Negativo | Manifesto contendo token `ghp_...` | Gera `ManifestSecurityError` distinto de erro de schema | `APROVADO` |
 | **TN-30** | Declaração não-sandbox | Negativo | Inspeciona registro emitido | Contém aviso de consentimento e não-sandbox de SO | `APROVADO` |
+| **TN-31** | Auto-trust desabilitado (P0-01) | Negativo | `save_manifest` e `create_project` sem trust prévio | Nunca geram `.ch/trust.json`; manifestação separada | `APROVADO` |
+| **TN-32** | Alterações sucessivas com mesmo status Git (P0-02) | Negativo | Modifica `core.py`, concede trust, modifica novamente com mesmo status ` M` | Hash de conteúdo SHA-256 altera; confiança invalidada | `APROVADO` |
+| **TN-33** | Falha fechada em arquivo ilegível (P0-02) | Negativo | Arquivo em working tree ilegível sem permissão de leitura | Dispara `TrustIntegrityError` fail-closed, confiança negada | `APROVADO` |
+| **TN-34** | Timeout com término precoce do líder (P0-03) | Negativo | Processo pai finaliza mas filho persistente continua | Varredura ativa de PGID envia `SIGKILL` confinado ao grupo | `APROVADO` |
 
 ---
 
 ## 6. Resultados de Testes e Integração Contínua
 
-- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 40/40 aprovados (100%).
-- **Suíte Completa do Repositório (`tests/`):** 238 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
+- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 44/44 aprovados (100%).
+- **Suíte Completa do Repositório (`tests/`):** 242 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
 - **Checagem de Diff (`git diff --check`):** 100% limpo, sem erros de whitespace ou formatação.
 - **Integração Contínua (GitHub Actions):**
-  - **Run ID:** [41259002591](https://github.com/hallanbrito/CHDevFlow/actions/runs/41259002591)
+  - **Run ID:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918)
   - **Job:** `python-checks`
-  - **Status:** `completed` / `conclusion: success` (Tempo de execução: 37s).
+  - **Status:** `completed` / `conclusion: success` (Tempo de execução: 51s).
   - Cobriu integralmente: Compilação sintática de todos os componentes, testes de governança W1, testes da raiz CLI (`tests/`), testes do Sentinela (`apps/bootstrap/sentinela/tests/`) e testes do Control Center (`apps/control-center/tests/`).
 
 ---
@@ -197,4 +201,4 @@ A implementação CH-2 atende com precisão a todos os requisitos da Issue [#51]
 
 Nenhuma alteração foi realizada na branch `main`. Nenhum merge foi executado. A vulnerabilidade não é declarada resolvida unilateralmente.
 
-**Estado Final Obrigatório:** `AGUARDANDO_AUDITORIA_CHATGPT_E_HOMOLOGACAO_PO`.
+**Estado Final Obrigatório:** `AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO`.
