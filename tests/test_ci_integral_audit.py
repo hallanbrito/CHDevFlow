@@ -208,6 +208,11 @@ class TestCiIntegralAudit(unittest.TestCase):
 
     def test_pytest_failure_fails_control_center_runner_strictly(self) -> None:
         """DEMONSTRAÇÃO DE QUEBRA (AUD-03): Falha em teste do Control Center faz pytest falhar estritamente."""
+        try:
+            import pytest  # noqa: F401
+        except ImportError:
+            self.skipTest("pytest não está instalado no ambiente local de execução.")
+
         with tempfile.TemporaryDirectory(prefix="ci_test_pytest_") as tmpdir:
             test_file = Path(tmpdir) / "test_cc_fail.py"
             test_file.write_text(

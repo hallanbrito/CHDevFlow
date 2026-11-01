@@ -7,6 +7,7 @@ import re
 from chdevflow.core.config import create_manifest_data, save_manifest
 from chdevflow.core.init import run_init
 from chdevflow.core.tree import generate as generate_tree
+from chdevflow.core.trust import grant_trust
 
 VALID_BACKENDS = {"dotnet", "python", "java", "none"}
 VALID_FRONTENDS = {"angular", "react", "none"}
@@ -19,6 +20,7 @@ PRESETS: dict[str, dict[str, str]] = {
 }
 
 DEFAULT_GITIGNORE_CONTENT = """.ch/evidence/
+.ch/trust.json
 __pycache__/
 *.py[cod]
 .venv/
@@ -46,14 +48,19 @@ def validate_project_name(name: str) -> str:
 
 
 def ensure_project_gitignore(project_dir: Path) -> None:
-    """Garante que .gitignore exista e contenha a exclusão de .ch/evidence/."""
+    """Garante que .gitignore exista e contenha a exclusão de .ch/evidence/ e .ch/trust.json."""
     gitignore_file = project_dir / ".gitignore"
     if not gitignore_file.exists():
         gitignore_file.write_text(DEFAULT_GITIGNORE_CONTENT, encoding="utf-8")
     else:
         content = gitignore_file.read_text(encoding="utf-8")
+        additions: list[str] = []
         if ".ch/evidence" not in content and ".ch/" not in content:
-            new_content = content.rstrip() + "\n.ch/evidence/\n"
+            additions.append(".ch/evidence/")
+        if ".ch/trust.json" not in content and ".ch/" not in content:
+            additions.append(".ch/trust.json")
+        if additions:
+            new_content = content.rstrip() + "\n" + "\n".join(additions) + "\n"
             gitignore_file.write_text(new_content, encoding="utf-8")
 
 
@@ -129,5 +136,8 @@ def create_project(
 
     # 4. Árvore do projeto
     generate_tree(target)
+
+    # 5. Registro inicial de confiança para projeto criado localmente
+    grant_trust(target, declaration="Confiança inicial de criação local do projeto pelo CHDevFlow.")
 
     return target

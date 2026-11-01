@@ -1,0 +1,289 @@
+"""Gerenciamento de confiança explícita para execução de projetos C.H.
+
+A concessão de confiança manifesta consentimento explícito do operador humano
+para execução dos comandos de teste e build do projeto.
+NÃO constitui sandbox de sistema operacional.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+from typing import Any
+
+TRUST_FILE_REL = Path(".ch") / "trust.json"
+
+RELEVANT_CONFIG_FILES: tuple[str, ...] = (
+    "chdevflow.yaml",
+    "package.json",
+    "package-lock.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+    "requirements.txt",
+    "Pipfile",
+    "Pipfile.lock",
+    "uv.lock",
+    "pom.xml",
+    "build.gradle",
+    "build.gradle.kts",
+    "Cargo.toml",
+    "Cargo.lock",
+    "go.mod",
+    "go.sum",
+)
+
+EXCLUDED_DIR_NAMES: frozenset[str] = frozenset({
+    ".git",
+    ".ch",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "dist",
+    "build",
+    "target",
+    "bin",
+    "obj",
+})
+
+
+def _hash_file(path: Path) -> str:
+    """Calcula hash SHA-256 do conteúdo de um arquivo."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _is_relevant_for_trust(file_path: str) -> bool:
+    """
+    Determina se um caminho de arquivo é relevante para execução de código e trust.
+    Ignora documentação, metadados internos do C.H., relatórios e assets estáticos.
+    Inclui manifestos de build, configurações e código-fonte.
+    """
+    clean = file_path.strip().strip('"').strip("'")
+    if not clean:
+        return False
+
+    p = Path(clean)
+    parts = p.parts
+
+    # Pastas estritamente ignoradas para execução de código
+    if any(part in {".ch", "docs", ".github", "prompts", ".vscode", ".idea"} for part in parts):
+        return False
+
+    name_lower = p.name.lower()
+    # Manifestos e arquivos de build críticos são SEMPRE relevantes
+    if name_lower in {f.lower() for f in RELEVANT_CONFIG_FILES} or name_lower.startswith("requirements"):
+        return True
+
+    # Extensões puramente documentais ou visuais não afetam a segurança de execução
+    if p.suffix.lower() in {
+        ".md", ".txt", ".rst", ".adoc", ".png", ".jpg", ".jpeg",
+        ".gif", ".svg", ".ico", ".pdf", ".drawio"
+    }:
+        return False
+
+    return True
+
+
+def get_git_state(project_root: Path) -> str:
+    """
+    Captura o estado do Git local incluindo commit HEAD e modificações/untracked na working tree.
+    Filtra apenas arquivos relevantes de código/configuração para invalidar trust.
+    Retorna hash SHA-256 do estado Git ou string vazia se não for repositório Git.
+    """
+    git_dir = project_root / ".git"
+    if not git_dir.exists():
+        return ""
+
+    try:
+        proc_status = subprocess.run(
+            ["git", "-C", str(project_root), "status", "--porcelain=v1"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10.0,
+        )
+        status_out = proc_status.stdout if proc_status.returncode == 0 else ""
+
+        relevant_lines: list[str] = []
+        for line in status_out.splitlines():
+            # Formato porcelain v1: XY filename ou XY orig -> dest
+            content = line[3:].strip() if len(line) > 3 else line.strip()
+            if " -> " in content:
+                parts_path = content.split(" -> ")
+                if any(_is_relevant_for_trust(p) for p in parts_path):
+                    relevant_lines.append(line)
+            else:
+                if _is_relevant_for_trust(content):
+                    relevant_lines.append(line)
+
+        filtered_porcelain = "\n".join(relevant_lines)
+
+        proc_rev = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10.0,
+        )
+        head_sha = proc_rev.stdout.strip() if proc_rev.returncode == 0 else ""
+
+        combined = f"HEAD:{head_sha}\nPORCELAIN:\n{filtered_porcelain}"
+        return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+    except Exception:
+        return ""
+
+
+def compute_project_fingerprint(project_root: Path) -> tuple[str, dict[str, str]]:
+    """
+    Calcula uma impressão digital (fingerprint) composta do projeto.
+    Considera chdevflow.yaml, arquivos de build/configuração e estado Git local.
+    """
+    root = project_root.resolve()
+
+    # 1. Hash do manifesto chdevflow.yaml
+    manifest_path = root / "chdevflow.yaml"
+    manifest_hash = _hash_file(manifest_path) if manifest_path.is_file() else "no-manifest"
+
+    # 2. Hash de arquivos de build relevantes
+    config_hashes: list[str] = []
+    for cfg_name in sorted(RELEVANT_CONFIG_FILES):
+        cfg_file = root / cfg_name
+        if cfg_file.is_file():
+            config_hashes.append(f"{cfg_name}:{_hash_file(cfg_file)}")
+
+    # Procura também em subpastas imediatas de apps/ se houver monorepo
+    apps_dir = root / "apps"
+    if apps_dir.is_dir():
+        for sub in sorted(apps_dir.iterdir()):
+            if sub.is_dir() and sub.name not in EXCLUDED_DIR_NAMES:
+                for cfg_name in sorted(RELEVANT_CONFIG_FILES):
+                    cfg_file = sub / cfg_name
+                    if cfg_file.is_file():
+                        rel = str(cfg_file.relative_to(root))
+                        config_hashes.append(f"{rel}:{_hash_file(cfg_file)}")
+
+    configs_combined = hashlib.sha256("\n".join(config_hashes).encode("utf-8")).hexdigest()
+
+    # 3. Estado local Git (inclui arquivos modificados e untracked relevantes)
+    git_hash = get_git_state(root)
+    if not git_hash:
+        # Se não for repositório Git, gera hash das árvores de código/configuração
+        file_list: list[str] = []
+        for p in sorted(root.rglob("*")):
+            if p.is_file():
+                rel = p.relative_to(root)
+                rel_parts = rel.parts
+                if not any(excluded in rel_parts for excluded in EXCLUDED_DIR_NAMES):
+                    if _is_relevant_for_trust(str(rel)):
+                        file_list.append(f"{rel}:{_hash_file(p)}")
+        git_hash = hashlib.sha256("\n".join(file_list).encode("utf-8")).hexdigest()
+
+    # 4. Impressão digital composta
+    composite_raw = f"MANIFEST:{manifest_hash}|CONFIGS:{configs_combined}|STATE:{git_hash}"
+    fingerprint = hashlib.sha256(composite_raw.encode("utf-8")).hexdigest()
+
+    components = {
+        "manifest_sha256": manifest_hash,
+        "configs_sha256": configs_combined,
+        "local_state_sha256": git_hash,
+    }
+
+    return fingerprint, components
+
+
+def grant_trust(project_root: Path, declaration: str = "explicit_consent") -> dict[str, Any]:
+    """
+    Grava registro de confiança explícita em .ch/trust.json vinculado ao estado atual.
+    Ajusta permissões para 0600 em sistemas POSIX.
+    """
+    root = project_root.resolve()
+    fingerprint, components = compute_project_fingerprint(root)
+
+    trust_dir = root / ".ch"
+    trust_dir.mkdir(parents=True, exist_ok=True)
+
+    trust_data: dict[str, Any] = {
+        "trust_version": "1",
+        "granted_at": datetime.now(timezone.utc).isoformat(),
+        "declaration": declaration,
+        "notice": (
+            "Manifestação explícita de consentimento para execução de código de projeto. "
+            "Não constitui sandbox de sistema operacional."
+        ),
+        "fingerprint": fingerprint,
+        "components": components,
+    }
+
+    trust_file = root / TRUST_FILE_REL
+    content = json.dumps(trust_data, indent=2, ensure_ascii=False) + "\n"
+    trust_file.write_text(content, encoding="utf-8")
+
+    # Permissões restritas ao usuário atual (0600)
+    try:
+        os.chmod(trust_file, 0o600)
+    except Exception:
+        pass
+
+    return trust_data
+
+
+def check_trust(project_root: Path) -> tuple[bool, str]:
+    """
+    Verifica se o projeto possui registro de confiança válido e íntegro.
+    Retorna (True, mensagem) se válido; (False, motivo) se ausente ou invalidado.
+    """
+    root = project_root.resolve()
+    trust_file = root / TRUST_FILE_REL
+
+    if not trust_file.is_file():
+        return (
+            False,
+            "Registro de confiança ausente (.ch/trust.json). "
+            "Execute 'ch verify --trust' para manifestar consentimento explícito."
+        )
+
+    try:
+        content = trust_file.read_text(encoding="utf-8")
+        data = json.loads(content)
+    except Exception:
+        return (False, "Registro de confiança corrompido ou ilegível em .ch/trust.json.")
+
+    expected_fp = data.get("fingerprint")
+    if not expected_fp or not isinstance(expected_fp, str):
+        return (False, "Registro de confiança incompleto em .ch/trust.json.")
+
+    current_fp, _ = compute_project_fingerprint(root)
+    if current_fp != expected_fp:
+        return (
+            False,
+            "Confiança invalidada: arquivos de configuração ou código do projeto "
+            "foram modificados desde a concessão anterior. "
+            "Execute 'ch verify --trust' para revalidar conscientemente."
+        )
+
+    return (True, "Projeto com confiança válida.")
+
+
+def invalidate_trust(project_root: Path) -> None:
+    """Remove o registro de confiança local forçando nova autorização explícita."""
+    trust_file = project_root.resolve() / TRUST_FILE_REL
+    if trust_file.is_file():
+        try:
+            trust_file.unlink()
+        except Exception:
+            pass

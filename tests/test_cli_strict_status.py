@@ -278,7 +278,7 @@ class TestCliStrictStatus(unittest.TestCase):
         base = Path(self.test_dir)
         proj = create_project("RealCmdApp", base_dir=base)
         manifest = load_manifest(proj / "chdevflow.yaml")
-        manifest["verification"]["commands"] = ["python3 -c 'import sys; sys.exit(0)'"]
+        manifest["verification"]["commands"] = ["echo 'simulado ok'"]
         save_manifest(proj / "chdevflow.yaml", manifest)
 
         # Remove AGENTS.md
