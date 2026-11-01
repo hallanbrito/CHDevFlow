@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -116,13 +117,14 @@ class TestVerifySecurityP04(unittest.TestCase):
     def test_tp05_node_npm_allowed(self) -> None:
         """TP-05: Adaptadores Node/npm com subcomandos de teste e lifecycle scripts autorizados."""
         sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
-        with patch("shutil.which", return_value="/usr/bin/npm"):
+        echo_bin = shutil.which("echo") or "/bin/echo"
+        with patch("shutil.which", return_value=echo_bin):
             tokens_test = parse_and_validate_command("npm test", self.root, sanitized_path)
-            self.assertTrue(tokens_test[0].endswith("npm") or tokens_test[0].endswith("npm-cli.js"))
+            self.assertEqual(tokens_test[0], echo_bin)
             self.assertEqual(tokens_test[1:], ["test"])
 
             tokens_run = parse_and_validate_command("npm run test:ci", self.root, sanitized_path)
-            self.assertTrue(tokens_run[0].endswith("npm") or tokens_run[0].endswith("npm-cli.js"))
+            self.assertEqual(tokens_run[0], echo_bin)
             self.assertEqual(tokens_run[1:], ["run", "test:ci"])
 
     def test_tp06_fail_fast_behavior(self) -> None:
