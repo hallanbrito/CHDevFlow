@@ -97,7 +97,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         manifest = create_manifest_data("RucApp")
         manifest["verification"]["commands"] = ["echo 'teste aprovado'"]
         save_manifest(target / "chdevflow.yaml", manifest)
-        run_verification(target, persist=True)
+        run_verification(target, persist=True, trust=True)
 
         dest2, content2 = generate_ruc(target)
         self.assertIn("APROVADO_TECNICAMENTE", content2)

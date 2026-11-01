@@ -255,19 +255,13 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
     return data
 
 
-def save_manifest(manifest_path: Path, data: dict[str, Any], auto_trust: bool = True) -> None:
-    """Valida e grava o manifesto em chdevflow.yaml."""
+def save_manifest(manifest_path: Path, data: dict[str, Any]) -> None:
+    """Valida e grava o manifesto em chdevflow.yaml sem concessão de confiança automática."""
     errors = validate_manifest(data)
     if errors:
         raise ManifestError("Não é possível salvar manifesto inválido: " + "; ".join(errors))
     content = dump_yaml_text(data)
     manifest_path.write_text(content, encoding="utf-8")
-    if auto_trust:
-        try:
-            from chdevflow.core.trust import grant_trust
-            grant_trust(manifest_path.parent, declaration="Confiança registrada ao salvar manifesto programaticamente.")
-        except Exception:
-            pass
 
 
 def create_manifest_data(

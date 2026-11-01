@@ -431,22 +431,43 @@ def execute_single_command(
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            # Encerramento em 2 estágios do grupo de processos
+            # Encerramento em 2 estágios do grupo de processos (POSIX) ou kill de processo (Windows)
             if is_posix:
+                pgid = proc.pid
+                # 1. Envia SIGTERM para todo o grupo de processos
                 try:
-                    os.killpg(proc.pid, signal.SIGTERM)
+                    os.killpg(pgid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-                try:
-                    proc.wait(timeout=2.0)
-                except subprocess.TimeoutExpired:
+
+                # 2. Aguarda até a carência (2.0s) verificando se TODO o grupo encerrou
+                # Garante que mesmo se o líder terminar imediatamente, descendentes continuem sendo monitorados
+                grace_deadline = time.time() + 2.0
+                while time.time() < grace_deadline:
                     try:
-                        os.killpg(proc.pid, signal.SIGKILL)
+                        # os.killpg(pgid, 0) verifica se ainda há qualquer processo vivo no grupo
+                        os.killpg(pgid, 0)
+                        time.sleep(0.05)
                     except ProcessLookupError:
-                        pass
-                    proc.wait()
+                        break
+                    except PermissionError:
+                        break
+
+                # 3. Se ainda houver qualquer processo remanescente no grupo após a carência, envia SIGKILL
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+                try:
+                    proc.wait(timeout=1.0)
+                except Exception:
+                    pass
             else:
-                proc.kill()
+                try:
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+                except Exception:
+                    proc.kill()
                 proc.wait()
 
         t_out.join(timeout=2.0)

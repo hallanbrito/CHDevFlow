@@ -7,7 +7,6 @@ import re
 from chdevflow.core.config import create_manifest_data, save_manifest
 from chdevflow.core.init import run_init
 from chdevflow.core.tree import generate as generate_tree
-from chdevflow.core.trust import grant_trust
 
 VALID_BACKENDS = {"dotnet", "python", "java", "none"}
 VALID_FRONTENDS = {"angular", "react", "none"}
@@ -136,8 +135,5 @@ def create_project(
 
     # 4. Árvore do projeto
     generate_tree(target)
-
-    # 5. Registro inicial de confiança para projeto criado localmente
-    grant_trust(target, declaration="Confiança inicial de criação local do projeto pelo CHDevFlow.")
 
     return target

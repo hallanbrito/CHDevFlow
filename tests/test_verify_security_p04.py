@@ -15,6 +15,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -41,6 +42,7 @@ from chdevflow.core.evidence import (
     MAX_OUTPUT_BYTES,
 )
 from chdevflow.core.init import run_init
+from chdevflow.core.project import create_project
 from chdevflow.core.tree import generate as generate_tree
 from chdevflow.core.submit import validate_and_submit, SubmitError
 from chdevflow.core.trust import (
@@ -474,11 +476,7 @@ class TestVerifySecurityP04(unittest.TestCase):
         # Remove trust
         invalidate_trust(self.root)
         self.manifest["verification"]["commands"] = ["echo 'teste'"]
-        # Salva sem auto_trust
-        content = json.dumps(self.manifest)
-        # Escreve cru para não disparar save_manifest auto_trust
-        import yaml
-        self.manifest_file.write_text(yaml.safe_dump(self.manifest), encoding="utf-8")
+        save_manifest(self.manifest_file, self.manifest)
 
         with self.assertRaises(SubmitError):
             validate_and_submit(self.root)
@@ -488,6 +486,129 @@ class TestVerifySecurityP04(unittest.TestCase):
         trust_data = grant_trust(self.root, declaration="operador_humano_teste")
         self.assertIn("operador_humano_teste", trust_data["declaration"])
         self.assertIn("Não constitui sandbox de sistema operacional", trust_data["notice"])
+
+    # -------------------------------------------------------------------------
+    # REGRESSÕES ESPECÍFICAS DA REAUDITORIA INDEPENDENTE R1 (P0-01, P0-02, P0-03)
+    # -------------------------------------------------------------------------
+
+    def test_p0_01_save_manifest_and_create_project_never_grant_auto_trust(self) -> None:
+        """P0-01: save_manifest e create_project não concedem aprovação/trust implícita."""
+        # 1. save_manifest não cria trust.json
+        invalidate_trust(self.root)
+        self.assertFalse((self.root / TRUST_FILE_REL).exists())
+        self.manifest["verification"]["commands"] = ["echo 'novo comando'"]
+        save_manifest(self.manifest_file, self.manifest)
+        self.assertFalse(
+            (self.root / TRUST_FILE_REL).exists(),
+            "save_manifest() não deve gravar .ch/trust.json nem manifestar auto-trust.",
+        )
+        is_ok, reason = check_trust(self.root)
+        self.assertFalse(is_ok)
+        self.assertIn("Registro de confiança ausente", reason)
+
+        # 2. create_project não cria trust.json
+        new_proj_dir = self.root / "sub_new_proj"
+        create_project("sub_new_proj", base_dir=self.root)
+        self.assertTrue(new_proj_dir.is_dir())
+        self.assertFalse(
+            (new_proj_dir / TRUST_FILE_REL).exists(),
+            "create_project() deve gerar arquivos sem manifestar aprovação ou auto-trust.",
+        )
+        is_ok_proj, reason_proj = check_trust(new_proj_dir)
+        self.assertFalse(is_ok_proj)
+        self.assertIn("Registro de confiança ausente", reason_proj)
+
+    def test_p0_02_regression_successive_modifications_with_same_git_status_invalidates_trust(self) -> None:
+        """P0-02 (Regressão obrigatória): Conceder trust após 1ª modificação de core.py,
+
+        modificar novamente com mesmo status Git e demonstrar invalidação de confiança.
+        """
+        core_file = self.root / "core.py"
+        # Cria e commita estado base inicial
+        core_file.write_text("print('base')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.root), "add", "core.py"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-m", "add core.py"], check=True, capture_output=True)
+
+        # 1ª Modificação não commitada (status: M core.py)
+        core_file.write_text("print('modificacao_v1')\n", encoding="utf-8")
+        proc_status1 = subprocess.run(
+            ["git", "-C", str(self.root), "status", "--porcelain=v1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertIn("M core.py", proc_status1.stdout)
+
+        # Concede confiança vinculada à modificação v1
+        grant_trust(self.root, declaration="trust_v1")
+        is_ok_v1, _ = check_trust(self.root)
+        self.assertTrue(is_ok_v1, "Trust deve ser válido para a versão v1 concedida.")
+
+        # 2ª Modificação sucessiva (status Git permanece idêntico: M core.py)
+        core_file.write_text("print('modificacao_v2_payload_adulterado')\n", encoding="utf-8")
+        proc_status2 = subprocess.run(
+            ["git", "-C", str(self.root), "status", "--porcelain=v1"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # Status do Git continua sendo ' M core.py'
+        self.assertIn("M core.py", proc_status2.stdout)
+
+        # Validação obrigatória: a confiança DEVE ser invalidada pelo hash de conteúdo
+        is_ok_v2, reason_v2 = check_trust(self.root)
+        self.assertFalse(
+            is_ok_v2,
+            "Confiança DEVE ser invalidada em modificações sucessivas com mesmo status Git.",
+        )
+        self.assertIn("Confiança invalidada", reason_v2)
+
+    def test_p0_02_fail_closed_on_unreadable_file(self) -> None:
+        """P0-02: Erro ao calcular integridade de arquivo falha fechado."""
+        with patch("chdevflow.core.trust._hash_file", return_value=""):
+            is_ok, reason = check_trust(self.root)
+            self.assertFalse(is_ok)
+            self.assertIn("fail-closed", reason)
+
+    def test_p0_03_timeout_kills_persisting_child_when_parent_terminates_early(self) -> None:
+        """P0-03: Processo pai que termina antes da carência não deixa filho persistente vivo."""
+        if os.name != "posix":
+            self.skipTest("Teste de isolamento de processo POSIX (killpg)")
+
+        pid_file = self.root / "child_running.pid"
+        script = self.root / "tests" / "parent_exit_early.py"
+        script.parent.mkdir(parents=True, exist_ok=True)
+
+        # Script pai cria filho que ignora SIGTERM e dorme 100s.
+        # Ao receber SIGTERM, o pai encerra imediatamente (sys.exit(0)), antes da carência de 2.0s.
+        code = f'''import subprocess, sys, time, signal, os
+from pathlib import Path
+
+child_code = """import signal, time, os
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+Path('{pid_file}').write_text(str(os.getpid()))
+time.sleep(100)
+"""
+p = subprocess.Popen([sys.executable, '-c', child_code])
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+time.sleep(100)
+'''
+        script.write_text(code, encoding="utf-8")
+
+        # Executa com timeout curto (0.4s)
+        res = execute_single_command("python3 tests/parent_exit_early.py", cwd=self.root, timeout=0.4)
+        self.assertEqual(res.state, "TIMEOUT")
+        self.assertEqual(res.exit_code, -1)
+
+        # Verifica se o PID do filho foi registrado
+        self.assertTrue(pid_file.is_file(), "Filho deveria ter gravado seu PID.")
+        child_pid = int(pid_file.read_text().strip())
+
+        # Verifica que o filho foi encerrado pelo SIGKILL disparado ao grupo após a carência
+        time.sleep(0.1)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(child_pid, 0)
 
 
 if __name__ == "__main__":

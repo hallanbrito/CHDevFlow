@@ -55,6 +55,11 @@ EXCLUDED_DIR_NAMES: frozenset[str] = frozenset({
 })
 
 
+class TrustIntegrityError(RuntimeError):
+    """Erro em caso de falha de integridade, arquivos ilegíveis ou estado Git incerto (fail-closed)."""
+    pass
+
+
 def _hash_file(path: Path) -> str:
     """Calcula hash SHA-256 do conteúdo de um arquivo."""
     try:
@@ -101,70 +106,105 @@ def _is_relevant_for_trust(file_path: str) -> bool:
 
 def get_git_state(project_root: Path) -> str:
     """
-    Captura o estado do Git local incluindo commit HEAD e modificações/untracked na working tree.
-    Filtra apenas arquivos relevantes de código/configuração para invalidar trust.
-    Retorna hash SHA-256 do estado Git ou string vazia se não for repositório Git.
+    Captura o estado do Git local incluindo commit HEAD, modificações e novos arquivos untracked.
+    Incorpora o hash de conteúdo de cada arquivo relevante para detectar alterações sucessivas
+    mesmo quando o código de status do Git permanece idêntico.
+    Falha fechado se houver erro ao ler arquivos ou executar git status.
     """
-    git_dir = project_root / ".git"
+    root = project_root.resolve()
+    git_dir = root / ".git"
     if not git_dir.exists():
         return ""
 
     try:
         proc_status = subprocess.run(
-            ["git", "-C", str(project_root), "status", "--porcelain=v1"],
+            ["git", "-C", str(root), "status", "--porcelain=v1", "-uall"],
             capture_output=True,
             text=True,
             check=False,
             timeout=10.0,
         )
-        status_out = proc_status.stdout if proc_status.returncode == 0 else ""
+        if proc_status.returncode != 0:
+            raise TrustIntegrityError(f"Falha ao executar 'git status': {proc_status.stderr.strip()}")
 
-        relevant_lines: list[str] = []
+        status_out = proc_status.stdout
+        relevant_entries: list[str] = []
+
         for line in status_out.splitlines():
-            # Formato porcelain v1: XY filename ou XY orig -> dest
-            content = line[3:].strip() if len(line) > 3 else line.strip()
+            line_str = line.strip()
+            if not line_str:
+                continue
+            status_code = line[:2]
+            content = line[3:].strip().strip('"')
+            target_path_str = content
             if " -> " in content:
                 parts_path = content.split(" -> ")
-                if any(_is_relevant_for_trust(p) for p in parts_path):
-                    relevant_lines.append(line)
-            else:
-                if _is_relevant_for_trust(content):
-                    relevant_lines.append(line)
+                target_path_str = parts_path[1].strip().strip('"')
 
-        filtered_porcelain = "\n".join(relevant_lines)
+            if not _is_relevant_for_trust(target_path_str):
+                continue
+
+            file_path = (root / target_path_str).resolve()
+            if not file_path.is_relative_to(root):
+                raise TrustIntegrityError(f"Arquivo relevante fora da raiz do projeto: {target_path_str}")
+
+            if "D" in status_code:
+                content_hash = "DELETED"
+            elif file_path.is_file():
+                content_hash = _hash_file(file_path)
+                if not content_hash:
+                    raise TrustIntegrityError(f"Arquivo relevante ilegível ou corrompido: {target_path_str}")
+            else:
+                content_hash = "NON_REGULAR"
+
+            relevant_entries.append(f"{status_code}:{target_path_str}:{content_hash}")
+
+        filtered_porcelain = "\n".join(sorted(relevant_entries))
 
         proc_rev = subprocess.run(
-            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
             capture_output=True,
             text=True,
             check=False,
             timeout=10.0,
         )
-        head_sha = proc_rev.stdout.strip() if proc_rev.returncode == 0 else ""
+        head_sha = proc_rev.stdout.strip() if proc_rev.returncode == 0 else "EMPTY_HEAD"
 
-        combined = f"HEAD:{head_sha}\nPORCELAIN:\n{filtered_porcelain}"
+        combined = f"HEAD:{head_sha}\nPORCELAIN_WITH_CONTENT:\n{filtered_porcelain}"
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
-    except Exception:
-        return ""
+    except subprocess.TimeoutExpired:
+        raise TrustIntegrityError("Timeout excedido ao verificar estado do Git.")
+    except TrustIntegrityError:
+        raise
+    except Exception as exc:
+        raise TrustIntegrityError(f"Erro inesperado ao capturar estado do Git: {exc}")
 
 
 def compute_project_fingerprint(project_root: Path) -> tuple[str, dict[str, str]]:
     """
-    Calcula uma impressão digital (fingerprint) composta do projeto.
-    Considera chdevflow.yaml, arquivos de build/configuração e estado Git local.
+    Calcula uma impressão digital (fingerprint) composta do projeto com falha fechada.
+    Considera chdevflow.yaml, arquivos de build/configuração e estado Git local com hashes de conteúdo.
     """
     root = project_root.resolve()
 
     # 1. Hash do manifesto chdevflow.yaml
     manifest_path = root / "chdevflow.yaml"
-    manifest_hash = _hash_file(manifest_path) if manifest_path.is_file() else "no-manifest"
+    if manifest_path.is_file():
+        manifest_hash = _hash_file(manifest_path)
+        if not manifest_hash:
+            raise TrustIntegrityError("Manifesto chdevflow.yaml ilegível na verificação de integridade.")
+    else:
+        manifest_hash = "no-manifest"
 
     # 2. Hash de arquivos de build relevantes
     config_hashes: list[str] = []
     for cfg_name in sorted(RELEVANT_CONFIG_FILES):
         cfg_file = root / cfg_name
         if cfg_file.is_file():
-            config_hashes.append(f"{cfg_name}:{_hash_file(cfg_file)}")
+            h = _hash_file(cfg_file)
+            if not h:
+                raise TrustIntegrityError(f"Arquivo de configuração ilegível: {cfg_name}")
+            config_hashes.append(f"{cfg_name}:{h}")
 
     # Procura também em subpastas imediatas de apps/ se houver monorepo
     apps_dir = root / "apps"
@@ -175,11 +215,14 @@ def compute_project_fingerprint(project_root: Path) -> tuple[str, dict[str, str]
                     cfg_file = sub / cfg_name
                     if cfg_file.is_file():
                         rel = str(cfg_file.relative_to(root))
-                        config_hashes.append(f"{rel}:{_hash_file(cfg_file)}")
+                        h = _hash_file(cfg_file)
+                        if not h:
+                            raise TrustIntegrityError(f"Arquivo de configuração em apps/ ilegível: {rel}")
+                        config_hashes.append(f"{rel}:{h}")
 
     configs_combined = hashlib.sha256("\n".join(config_hashes).encode("utf-8")).hexdigest()
 
-    # 3. Estado local Git (inclui arquivos modificados e untracked relevantes)
+    # 3. Estado local Git (inclui arquivos modificados e untracked relevantes com hashes de conteúdo)
     git_hash = get_git_state(root)
     if not git_hash:
         # Se não for repositório Git, gera hash das árvores de código/configuração
@@ -190,7 +233,10 @@ def compute_project_fingerprint(project_root: Path) -> tuple[str, dict[str, str]
                 rel_parts = rel.parts
                 if not any(excluded in rel_parts for excluded in EXCLUDED_DIR_NAMES):
                     if _is_relevant_for_trust(str(rel)):
-                        file_list.append(f"{rel}:{_hash_file(p)}")
+                        h = _hash_file(p)
+                        if not h:
+                            raise TrustIntegrityError(f"Arquivo de código ilegível: {rel}")
+                        file_list.append(f"{rel}:{h}")
         git_hash = hashlib.sha256("\n".join(file_list).encode("utf-8")).hexdigest()
 
     # 4. Impressão digital composta
@@ -267,7 +313,13 @@ def check_trust(project_root: Path) -> tuple[bool, str]:
     if not expected_fp or not isinstance(expected_fp, str):
         return (False, "Registro de confiança incompleto em .ch/trust.json.")
 
-    current_fp, _ = compute_project_fingerprint(root)
+    try:
+        current_fp, _ = compute_project_fingerprint(root)
+    except TrustIntegrityError as tie:
+        return (False, f"Falha de integridade ao verificar o projeto (fail-closed): {tie}")
+    except Exception as exc:
+        return (False, f"Falha inesperada ao inspecionar integridade do projeto (fail-closed): {exc}")
+
     if current_fp != expected_fp:
         return (
             False,

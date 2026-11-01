@@ -68,7 +68,7 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
         manifest["verification"]["commands"] = ["echo 'check one'", "echo 'check two'"]
         save_manifest(target / "chdevflow.yaml", manifest)
 
-        ev = run_verification(target, persist=True)
+        ev = run_verification(target, persist=True, trust=True)
         self.assertEqual(ev.overall_state, "PASS")
         self.assertEqual(len(ev.commands), 3)
         self.assertEqual(ev.commands[0].command, "ch status --strict")
@@ -98,7 +98,7 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
         save_manifest(target / "chdevflow.yaml", manifest)
 
         # 1. Com fail-fast ativo (padrão)
-        ev_ff = run_verification(target, fail_fast=True, persist=False)
+        ev_ff = run_verification(target, fail_fast=True, persist=False, trust=True)
         self.assertEqual(ev_ff.overall_state, "FAIL")
         self.assertEqual(len(ev_ff.commands), 4)
         self.assertEqual(ev_ff.commands[0].command, "ch status --strict")
@@ -108,7 +108,7 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
         self.assertEqual(ev_ff.commands[3].state, "SKIPPED")
 
         # 2. Sem fail-fast
-        ev_no_ff = run_verification(target, fail_fast=False, persist=False)
+        ev_no_ff = run_verification(target, fail_fast=False, persist=False, trust=True)
         self.assertEqual(ev_no_ff.overall_state, "FAIL")
         self.assertEqual(len(ev_no_ff.commands), 4)
         self.assertEqual(ev_no_ff.commands[0].command, "ch status --strict")
@@ -135,7 +135,7 @@ class TestCli04VerifyAndEvidence(unittest.TestCase):
 
         buf = io.StringIO()
         with patch("sys.stdout", buf):
-            code_pass = cli_main(["verify", "--path", str(target)])
+            code_pass = cli_main(["verify", "--path", str(target), "--trust"])
         self.assertEqual(code_pass, 0)
         self.assertIn("CHDevFlow Verify", buf.getvalue())
         self.assertIn("PASS", buf.getvalue())
