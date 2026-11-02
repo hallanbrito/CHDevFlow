@@ -1,6 +1,6 @@
 # Relatório Técnico de Auditoria e Implementação C.H. — Protocolo RUC/1.0
 
-**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclos R2/R3 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-02T15:20:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | reauditoria R3 SHA: `e02a2fb236fc2582935c4bfabb3e45645b1a4baa` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
+**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclos R2/R3/R4 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-02T15:48:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | reauditoria R3 SHA: `e02a2fb236fc2582935c4bfabb3e45645b1a4baa` | reauditoria R4 (apontamento): `752ea8376cd1332c990b0ce93ca4656b1d9d6f78` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
 
 ---
 
@@ -137,11 +137,20 @@ Sob a mesma autorização CH-2 (Issue [#51](https://github.com/hallanbrito/CHDev
    - Adequação rigorosa do texto do RUC e do corpo do Draft PR [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) descrevendo exatamente o mecanismo em código (interceptação inline com chamada a `cli_main` e `--path`), eliminando referências fictícias a funções ou expurgos inexistentes de `sys.path`.
    - Atualização completa do corpo do PR refletindo o histórico e contagens acumuladas dos ciclos R1, R2 e R3.
 
+### 4.7 Correção da Reauditoria Independente R4 (R4-01)
+
+Sob a mesma autorização CH-2 mantida pelo PO (Issue [#51](https://github.com/hallanbrito/CHDevFlow/issues/51), [fila #53](https://github.com/hallanbrito/CHDevFlow/issues/53#issuecomment-6581214568)), foi remediada a pendência pontual:
+
+1. **R4-01 (P1) — Normalização de Casing de Interpretador Python em `_extract_explicit_targets`:**
+   - O executor/runner de verificação aceita variantes de capitalização como `Python3` e `PYTHON3`, normalizando o nome do executável para minúsculas (`tokens[0].lower()`). No entanto, a extração de alvos explícitos (`_extract_explicit_targets` em `src/chdevflow/core/trust.py`) comparava `toks[0]` sem normalização, deixando de extrair alvos de comandos expressos nessas variantes e permitindo que modificações em scripts passassem sem invalidar o trust.
+   - A extração foi corrigida com `bin_name = toks[0].lower()`, alinhando a normalização à allowlist de `evidence.py` e garantindo que variantes de capitalização (`python3`, `Python3`, `PYTHON3`, `python`, `Python`, `PYTHON`, `PyThOn3`) extraiam deterministicamente os arquivos alvos para o cálculo do componente `TARGETS` do fingerprint, invalidando o trust caso o script seja modificado.
+   - A preservação de sensibilidade a maiúsculas/minúsculas para caminhos relativos de scripts (ex.: `./scripts/run.py` ou `scripts/Run.py`) foi mantida inalterada via `toks[0].lstrip("./")`.
+
 ---
 
 ## 5. Matriz Completa de Testes de Segurança
 
-Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **59 cenários automatizados** (11 positivos e 48 negativos/regressivos):
+Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **60 cenários automatizados** (11 positivos e 49 negativos/regressivos):
 
 | ID | Cenário | Tipo | Entrada Testada | Comportamento Observado | Resultado |
 |---|---|---|---|---|---|
@@ -204,20 +213,22 @@ Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **59 cen�
 | **TN-47** | Symlink interno (`docs/entry.md -> body.txt`) invalida trust (R3-01) | Negativo | `docs/body.txt` alterado de v1 para v2 | Conteúdo físico canônico monitorado; confiança invalidada | `APROVADO` |
 | **TN-48** | Reapontamento de symlink para outro arquivo invalida trust (R3-01) | Negativo | Symlink repontado de `body1.txt` para `body2.txt` | Identidade do link alterada; confiança invalidada | `APROVADO` |
 | **TN-49** | Symlink quebrado ou destino fora do projeto falha fechado (R3-01) | Negativo | `broken.py` apontando para arquivo inexistente | Dispara `TrustIntegrityError` fail-closed | `APROVADO` |
+| **TN-50** | Variantes de casing de Python invalidam trust (R4-01) | Negativo | Comandos com `Python3`, `PYTHON3`, `PyThOn3` alterando script | Alvo extraído; alteração de script invalida trust | `APROVADO` |
 
 ---
 
 ## 6. Resultados de Testes e Integração Contínua
 
-- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 59/59 aprovados (100%).
-- **Suíte Completa Raiz (`tests/`):** 258 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
+- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 60/60 aprovados (100%).
+- **Suíte Completa Raiz (`tests/`):** 259 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
 - **Suíte Sentinela (`apps/bootstrap/sentinela/tests/`):** 69/69 testes aprovados (100%).
 - **Suíte Control Center (`apps/control-center/tests/`):** 53/53 testes aprovados (100%).
-- **Total Local Executado:** 380 testes automatizados aprovados, 0 falhas, 0 erros.
+- **Total Local Executado:** 381 testes automatizados aprovados, 0 falhas, 0 erros.
 - **Checagem de Diff (`git diff --check`):** 100% limpo, sem erros de whitespace ou formatação.
 - **Integração Contínua (GitHub Actions):**
-  - **Run ID:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918) (SUCCESS)
+  - **Run ID R1:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918) (SUCCESS)
   - **Run ID R2:** [41464641128](https://github.com/hallanbrito/CHDevFlow/actions/runs/41464641128) (SUCCESS)
+  - **Run ID R3:** [41469711221](https://github.com/hallanbrito/CHDevFlow/actions/runs/41469711221) (SUCCESS)
   - Cobriu integralmente: Compilação sintática de todos os componentes, testes de governança W1, testes da raiz CLI (`tests/`), testes do Sentinela (`apps/bootstrap/sentinela/tests/`) e testes do Control Center (`apps/control-center/tests/`).
 
 ---

@@ -111,7 +111,7 @@ def _extract_explicit_targets(project_root: Path) -> set[str]:
             if not toks:
                 continue
 
-            bin_name = toks[0]
+            bin_name = toks[0].lower()
             script_candidate: str | None = None
 
             # 1. Invocação de interpretador Python (python / python3)
@@ -147,8 +147,8 @@ def _extract_explicit_targets(project_root: Path) -> set[str]:
                     break
 
             # 3. Execução direta de script relativo (ex: ./scripts/run ou scripts/run.py)
-            elif "/" in bin_name and not bin_name.startswith("/"):
-                script_candidate = bin_name.lstrip("./")
+            elif "/" in toks[0] and not toks[0].startswith("/"):
+                script_candidate = toks[0].lstrip("./")
 
             if script_candidate:
                 p_cand = Path(script_candidate)

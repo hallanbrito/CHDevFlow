@@ -52,6 +52,7 @@ from chdevflow.core.trust import (
     invalidate_trust,
     TRUST_FILE_REL,
     TrustIntegrityError,
+    _extract_explicit_targets,
 )
 
 
@@ -934,6 +935,45 @@ time.sleep(100)
         with self.assertRaises(TrustIntegrityError) as ctx:
             compute_project_fingerprint(self.root)
         self.assertIn("quebrado", str(ctx.exception).lower())
+
+    def test_r4_01_casing_variants_of_python_extract_targets_and_invalidate_trust(self) -> None:
+        """R4-01: Variantes de capitalização de python/python3 (Python3, PYTHON3, etc.) extraem alvos e invalidam trust."""
+        variants = ["python3", "Python3", "PYTHON3", "python", "Python", "PYTHON", "PyThOn3"]
+        for bin_variant in variants:
+            with self.subTest(binary=bin_variant):
+                tmp_dir = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp_dir.cleanup)
+                proj_root = Path(tmp_dir.name).resolve()
+                create_project("case_test", proj_root, "python")
+                work_dir = proj_root / "case_test"
+
+                # Cria repositório git e adiciona arquivo em docs/probe.txt
+                subprocess.run(["git", "-C", str(work_dir), "init", "-b", "main"], check=True, capture_output=True)
+                docs_dir = work_dir / "docs"
+                docs_dir.mkdir(parents=True, exist_ok=True)
+                probe_txt = docs_dir / "probe.txt"
+                probe_txt.write_text("print('probe v1')\n", encoding="utf-8")
+
+                m_path = work_dir / "chdevflow.yaml"
+                m_data = load_manifest(m_path)
+                m_data["verification"]["commands"] = [f"{bin_variant} docs/probe.txt"]
+                save_manifest(m_path, m_data)
+
+                # Verifica que _extract_explicit_targets reconhece o alvo com a variante de casing
+                targets = _extract_explicit_targets(work_dir)
+                self.assertIn("docs/probe.txt", targets, f"Deveria extrair 'docs/probe.txt' para variante {bin_variant}")
+
+                subprocess.run(["git", "-C", str(work_dir), "add", "."], check=True, capture_output=True)
+                subprocess.run(["git", "-C", str(work_dir), "commit", "-m", "init"], check=True, capture_output=True)
+
+                grant_trust(work_dir, declaration=f"trust_{bin_variant}")
+                self.assertTrue(check_trust(work_dir)[0])
+
+                # Edita o arquivo do script v1 -> v2
+                probe_txt.write_text("print('probe v2 modificado')\n", encoding="utf-8")
+                is_ok, reason = check_trust(work_dir)
+                self.assertFalse(is_ok, f"Alteração do script deve invalidar trust para variante {bin_variant}")
+                self.assertIn("Confiança invalidada", reason)
 
 
 if __name__ == "__main__":
