@@ -949,6 +949,8 @@ time.sleep(100)
 
                 # Cria repositório git e adiciona arquivo em docs/probe.txt
                 subprocess.run(["git", "-C", str(work_dir), "init", "-b", "main"], check=True, capture_output=True)
+                subprocess.run(["git", "-C", str(work_dir), "config", "user.name", "Tester"], check=True, capture_output=True)
+                subprocess.run(["git", "-C", str(work_dir), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
                 docs_dir = work_dir / "docs"
                 docs_dir.mkdir(parents=True, exist_ok=True)
                 probe_txt = docs_dir / "probe.txt"
