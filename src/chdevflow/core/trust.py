@@ -11,8 +11,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 from typing import Any
+
+from chdevflow.core.config import load_manifest
 
 TRUST_FILE_REL = Path(".ch") / "trust.json"
 
@@ -72,11 +75,58 @@ def _hash_file(path: Path) -> str:
         return ""
 
 
-def _is_relevant_for_trust(file_path: str) -> bool:
+CODE_EXTENSIONS: frozenset[str] = frozenset({
+    ".py", ".sh", ".bash", ".zsh", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx",
+    ".rb", ".go", ".rs", ".c", ".cpp", ".h", ".hpp", ".java", ".kt", ".cs",
+    ".php", ".pl", ".lua", ".swift"
+})
+
+DOCUMENTATION_EXTENSIONS: frozenset[str] = frozenset({
+    ".md", ".rst", ".adoc", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".ico", ".pdf", ".drawio"
+})
+
+
+def _extract_explicit_targets(project_root: Path) -> set[str]:
+    """Extrai alvos de arquivos explicitamente referenciados nos comandos de verificação do manifesto."""
+    targets: set[str] = set()
+    manifest_path = project_root / "chdevflow.yaml"
+    if manifest_path.is_file():
+        try:
+            m_data = load_manifest(manifest_path)
+            v_cmds = m_data.get("verification", {}).get("commands", [])
+            for cmd in v_cmds:
+                if not isinstance(cmd, str) or not cmd.strip():
+                    continue
+                try:
+                    toks = shlex.split(cmd, posix=True)
+                except Exception:
+                    continue
+                for tok in toks[1:]:
+                    if tok.startswith("-"):
+                        continue
+                    p_tok = Path(tok)
+                    if not p_tok.is_absolute() and ".." not in p_tok.parts:
+                        targets.add(str(p_tok))
+                        targets.add(tok)
+        except Exception:
+            pass
+    return targets
+
+
+def _is_relevant_for_trust(
+    file_path: str,
+    project_root: Path | None = None,
+    explicit_targets: set[str] | None = None,
+) -> bool:
     """
-    Determina se um caminho de arquivo é relevante para execução de código e trust.
-    Ignora documentação, metadados internos do C.H., relatórios e assets estáticos.
-    Inclui manifestos de build, configurações e código-fonte.
+    Determina se um caminho de arquivo é relevante para integridade e trust do projeto.
+    Adota política defensiva fail-closed:
+    1. Arquivos internos sob '.ch/' são desconsiderados (evita auto-invalidação por relatórios/metadados).
+    2. Qualquer arquivo explicitamente referenciado nos comandos de verificação do runner é SEMPRE relevante.
+    3. Qualquer arquivo de código/script (.py, .sh, etc.) ou sem extensão ou executável (+x) é SEMPRE relevante.
+    4. Manifestos e arquivos de build/configuração são SEMPRE relevantes.
+    5. Documentação puramente textual/visual (.md, imagens) não referenciada como alvo de execução é isenta.
     """
     clean = file_path.strip().strip('"').strip("'")
     if not clean:
@@ -85,22 +135,45 @@ def _is_relevant_for_trust(file_path: str) -> bool:
     p = Path(clean)
     parts = p.parts
 
-    # Pastas estritamente ignoradas para execução de código
-    if any(part in {".ch", "docs", ".github", "prompts", ".vscode", ".idea"} for part in parts):
+    # Pastas internas de governança e evidências do próprio chdevflow
+    if parts and parts[0] == ".ch":
         return False
+
+    # Alvo explicitamente referenciado em comandos de verificação do runner
+    if explicit_targets:
+        if str(p) in explicit_targets or clean in explicit_targets:
+            return True
 
     name_lower = p.name.lower()
     # Manifestos e arquivos de build críticos são SEMPRE relevantes
     if name_lower in {f.lower() for f in RELEVANT_CONFIG_FILES} or name_lower.startswith("requirements"):
         return True
 
-    # Extensões puramente documentais ou visuais não afetam a segurança de execução
-    if p.suffix.lower() in {
-        ".md", ".txt", ".rst", ".adoc", ".png", ".jpg", ".jpeg",
-        ".gif", ".svg", ".ico", ".pdf", ".drawio"
-    }:
+    suffix_lower = p.suffix.lower()
+
+    # Extensões conhecidas de código e scripts executáveis (em qualquer pasta, inclusive docs/)
+    if suffix_lower in CODE_EXTENSIONS:
+        return True
+
+    # Arquivo sem extensão (scripts executáveis Unix): sempre relevante para prevenir bypass
+    if suffix_lower == "" and name_lower not in EXCLUDED_DIR_NAMES:
+        return True
+
+    # Se o arquivo físico tiver permissão de execução (+x), é sempre relevante
+    if project_root:
+        full_path = (project_root / p).resolve()
+        if full_path.is_file() and os.access(full_path, os.X_OK):
+            return True
+
+    # Extensões puramente documentais ou visuais não referenciadas em comandos
+    if suffix_lower in DOCUMENTATION_EXTENSIONS:
         return False
 
+    # Se for arquivo .txt não referenciado em comandos, é tratado como documentação
+    if suffix_lower == ".txt":
+        return False
+
+    # Qualquer outro arquivo (configuração .toml, .yaml, .json, etc.) é relevante
     return True
 
 
@@ -115,6 +188,8 @@ def get_git_state(project_root: Path) -> str:
     git_dir = root / ".git"
     if not git_dir.exists():
         return ""
+
+    explicit_targets = _extract_explicit_targets(root)
 
     try:
         proc_status = subprocess.run(
@@ -141,7 +216,7 @@ def get_git_state(project_root: Path) -> str:
                 parts_path = content.split(" -> ")
                 target_path_str = parts_path[1].strip().strip('"')
 
-            if not _is_relevant_for_trust(target_path_str):
+            if not _is_relevant_for_trust(target_path_str, project_root=root, explicit_targets=explicit_targets):
                 continue
 
             file_path = (root / target_path_str).resolve()
@@ -226,13 +301,14 @@ def compute_project_fingerprint(project_root: Path) -> tuple[str, dict[str, str]
     git_hash = get_git_state(root)
     if not git_hash:
         # Se não for repositório Git, gera hash das árvores de código/configuração
+        explicit_targets = _extract_explicit_targets(root)
         file_list: list[str] = []
         for p in sorted(root.rglob("*")):
             if p.is_file():
                 rel = p.relative_to(root)
                 rel_parts = rel.parts
                 if not any(excluded in rel_parts for excluded in EXCLUDED_DIR_NAMES):
-                    if _is_relevant_for_trust(str(rel)):
+                    if _is_relevant_for_trust(str(rel), project_root=root, explicit_targets=explicit_targets):
                         h = _hash_file(p)
                         if not h:
                             raise TrustIntegrityError(f"Arquivo de código ilegível: {rel}")

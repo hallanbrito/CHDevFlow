@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -77,6 +79,9 @@ ALLOWED_SUBCOMMANDS: dict[str, frozenset[str]] = {
 
 ALLOWED_PYTHON_MODULES: frozenset[str] = frozenset({"unittest", "pytest"})
 FORBIDDEN_PYTHON_FLAGS: frozenset[str] = frozenset({"-c", "--command", "-i", "-e"})
+ALLOWED_PYTHON_FLAGS_NO_ARG: frozenset[str] = frozenset({
+    "-u", "-b", "-B", "-v", "-q", "-O", "-OO", "-E", "-s", "-S"
+})
 
 ALLOWED_ENV_VARS: frozenset[str] = frozenset({
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "PYTHONPATH", "NODE_ENV", "TERM"
@@ -287,24 +292,81 @@ def parse_and_validate_command(cmd_str: str, project_root: Path, sanitized_path:
             exit_code = int(args[0])
         return [sys.executable, "-c", f"import sys; sys.exit({exit_code})"]
 
-    # 2. Validação profunda de Python
+    # 2. Validação profunda de Python com gramática estrita e fail-closed
     if bin_name in ("python", "python3"):
         args = tokens[1:]
         if not args:
             raise VerificationSecurityError("Invocação de Python sem argumentos ou módulo.")
-        for f in FORBIDDEN_PYTHON_FLAGS:
-            if f in args:
-                raise VerificationSecurityError(f"Flag proibida em comando Python: '{f}'.")
-        if "-m" in args:
-            m_idx = args.index("-m")
-            if m_idx + 1 >= len(args):
-                raise VerificationSecurityError("Flag '-m' sem especificação de módulo.")
-            mod = args[m_idx + 1]
-            if mod not in ALLOWED_PYTHON_MODULES:
-                raise VerificationSecurityError(f"Módulo Python não autorizado: '{mod}'.")
-        else:
-            # Script alvo: deve ser caminho relativo interno ao projeto
-            script_path_str = args[0]
+
+        idx = 0
+        target_kind: str | None = None  # "module" ou "script"
+        target_val: str | None = None
+
+        while idx < len(args):
+            arg = args[idx]
+
+            # Rejeição estrita de execução via stdin ('-')
+            if arg == "-":
+                raise VerificationSecurityError("Execução de Python via stdin ('-') proibida em 'ch verify'.")
+
+            # Rejeição estrita de flags proibidas (-c, -i, -e, --command e formas compactas/anexadas)
+            if arg in {"-c", "--command", "-i", "-e"} or arg.startswith(("-c", "-e", "-i", "--command")):
+                raise VerificationSecurityError(f"Flag proibida em comando Python: '{arg}'.")
+
+            # Alvo de módulo (-m <modulo>)
+            if arg == "-m":
+                if idx + 1 >= len(args):
+                    raise VerificationSecurityError("Flag '-m' sem especificação de módulo.")
+                target_kind = "module"
+                target_val = args[idx + 1]
+                if target_val.startswith("-"):
+                    raise VerificationSecurityError(f"Nome de módulo Python inválido: '{target_val}'.")
+                if target_val not in ALLOWED_PYTHON_MODULES:
+                    raise VerificationSecurityError(
+                        f"Módulo Python não autorizado: '{target_val}'. "
+                        f"Permitidos: {', '.join(sorted(ALLOWED_PYTHON_MODULES))}"
+                    )
+                # Todos os argumentos subsequentes são parâmetros passados ao módulo de teste
+                idx = len(args)
+                break
+
+            # Rejeição de forma compacta -m<modulo>
+            if arg.startswith("-m"):
+                raise VerificationSecurityError("Forma compacta de flag '-m' não permitida. Use '-m <modulo>'.")
+
+            # Opções do interpretador com argumento: -W <spec> ou -W<spec>, -X <opt> ou -X<opt>
+            if arg in ("-W", "-X"):
+                if idx + 1 >= len(args):
+                    raise VerificationSecurityError(f"Opção '{arg}' requer especificação de argumento.")
+                idx += 2
+                continue
+            if arg.startswith("-W") or arg.startswith("-X"):
+                idx += 1
+                continue
+
+            # Opções seguras sem argumento (suporta flags isoladas ou agrupadas, ex: -u, -B, -uB)
+            if arg.startswith("-"):
+                flag_chars = arg[1:]
+                if not flag_chars:
+                    raise VerificationSecurityError("Opção inválida '-' em comando Python.")
+                for ch_flag in flag_chars:
+                    if ch_flag in ("c", "i", "e"):
+                        raise VerificationSecurityError(f"Flag proibida em comando Python: '-{ch_flag}'.")
+                    if f"-{ch_flag}" not in ALLOWED_PYTHON_FLAGS_NO_ARG:
+                        raise VerificationSecurityError(f"Opção do interpretador Python não autorizada: '{arg}'.")
+                idx += 1
+                continue
+
+            # Se não começa com '-', é o alvo de script regular
+            target_kind = "script"
+            target_val = arg
+            break
+
+        if target_kind is None:
+            raise VerificationSecurityError("Invocação de Python sem script alvo ou módulo (-m).")
+
+        if target_kind == "script":
+            script_path_str = target_val
             if Path(script_path_str).is_absolute():
                 raise VerificationSecurityError("Caminho absoluto de script não permitido em 'ch verify'.")
             if ".." in Path(script_path_str).parts:
@@ -312,6 +374,10 @@ def parse_and_validate_command(cmd_str: str, project_root: Path, sanitized_path:
             resolved_script = (project_root / script_path_str).resolve()
             if not resolved_script.is_relative_to(project_root.resolve()):
                 raise VerificationSecurityError("Script reside fora da raiz do projeto.")
+            if not resolved_script.exists():
+                raise VerificationSecurityError(f"Script Python não encontrado no projeto: '{script_path_str}'.")
+            if not resolved_script.is_file():
+                raise VerificationSecurityError(f"Alvo Python deve ser um arquivo regular: '{script_path_str}'.")
 
     # 3. Validação de npm / pnpm / yarn (incluindo fechamento de npm run <script>)
     elif bin_name in ("npm", "pnpm", "yarn"):
@@ -397,6 +463,41 @@ def execute_single_command(
     sanitized_cmd = sanitize_output(cmd_str)
     start_time = time.perf_counter()
     is_posix = (os.name != "nt")
+
+    # 0. Interceptação segura de comandos internos do ch
+    # Executa in-process utilizando o módulo confiável chdevflow já importado,
+    # prevenindo shadowing por pacotes/módulos locais na raiz ou em src/ do target.
+    if tokens[0] == sys.executable and len(tokens) >= 3 and tokens[1:3] == ["-m", "chdevflow.cli"]:
+        from chdevflow.cli import main as cli_main
+        cli_subargs = list(tokens[3:])
+        # Garante que o comando inspecione o target correto sem depender de cwd
+        if cli_subargs and cli_subargs[0] in ("status", "tree"):
+            if "--path" not in cli_subargs:
+                cli_subargs.extend(["--path", str(project_root)])
+
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            try:
+                ret = cli_main(cli_subargs)
+                exit_code = ret if isinstance(ret, int) else (0 if ret is None else 1)
+            except SystemExit as se:
+                exit_code = se.code if isinstance(se.code, int) else (0 if se.code is None else 1)
+            except Exception as exc:
+                stderr_buf.write(f"Erro na execução interna do ch: {exc}\n")
+                exit_code = 1
+
+        duration = time.perf_counter() - start_time
+        out_str = stdout_buf.getvalue()
+        err_str = stderr_buf.getvalue()
+        return CommandResult(
+            command=sanitized_cmd,
+            state="PASS" if exit_code == 0 else "FAIL",
+            exit_code=exit_code,
+            duration_seconds=duration,
+            stdout=sanitize_output(out_str),
+            stderr=sanitize_output(err_str),
+        )
 
     try:
         proc = subprocess.Popen(

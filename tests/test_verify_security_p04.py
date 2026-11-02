@@ -610,6 +610,195 @@ time.sleep(100)
         with self.assertRaises(ProcessLookupError):
             os.kill(child_pid, 0)
 
+    # -------------------------------------------------------------------------
+    # TESTES DE REGRESSÃO OBRIGATÓRIOS DO CICLO R2 (AUD-GERAL-P0-04)
+    # -------------------------------------------------------------------------
+
+    def test_r2_01_no_shadowing_of_chdevflow_package_by_local_package(self) -> None:
+        """R2-01: Pacote chdevflow local na raiz ou em src/ não é executado antes do gate de trust."""
+        # Cria pacote sombra local na raiz e em src/
+        sentinel_root = self.root / "shadow_root.sentinel"
+        sentinel_src = self.root / "shadow_src.sentinel"
+
+        pkg_root = self.root / "chdevflow"
+        pkg_root.mkdir(parents=True, exist_ok=True)
+        (pkg_root / "__init__.py").write_text(f"from pathlib import Path\nPath(r'{sentinel_root}').write_text('SHADOW_ROOT')\n", encoding="utf-8")
+        (pkg_root / "cli.py").write_text(f"from pathlib import Path\nPath(r'{sentinel_root}').write_text('SHADOW_ROOT_CLI')\n", encoding="utf-8")
+
+        pkg_src = self.root / "src" / "chdevflow"
+        pkg_src.mkdir(parents=True, exist_ok=True)
+        (pkg_src / "__init__.py").write_text(f"from pathlib import Path\nPath(r'{sentinel_src}').write_text('SHADOW_SRC')\n", encoding="utf-8")
+        (pkg_src / "cli.py").write_text(f"from pathlib import Path\nPath(r'{sentinel_src}').write_text('SHADOW_SRC_CLI')\n", encoding="utf-8")
+
+        # Manifesto com comando de verificação interno ch status --strict e comando de projeto
+        self.manifest["verification"]["commands"] = ["ch status --strict", "python3 -m unittest"]
+        save_manifest(self.manifest_file, self.manifest)
+
+        # Executa sem trust prévio (trust=False)
+        ev = run_verification(self.root, persist=False, trust=False)
+
+        # O comando interno ch status --strict deve rodar in-process sem importar o pacote sombra local
+        self.assertFalse(sentinel_root.exists(), "Pacote sombra na raiz não deve ser importado.")
+        self.assertFalse(sentinel_src.exists(), "Pacote sombra em src/ não deve ser importado.")
+
+        # O comando de projeto deve ser bloqueado pela política de confiança
+        self.assertEqual(ev.overall_state, "FAIL")
+        self.assertEqual(len(ev.commands), 2)
+        self.assertEqual(ev.commands[1].state, "FAIL")
+        self.assertEqual(ev.commands[1].exit_code, -4)
+        self.assertIn("bloqueada pela política de confiança", ev.commands[1].stderr)
+
+    def test_r2_01_no_shadowing_by_single_module_chdevflow_py(self) -> None:
+        """R2-01: Módulo único chdevflow.py na raiz do target não é importado."""
+        sentinel = self.root / "shadow_single.sentinel"
+        (self.root / "chdevflow.py").write_text(
+            f"from pathlib import Path\nPath(r'{sentinel}').write_text('SHADOW_MODULE')\n",
+            encoding="utf-8",
+        )
+        res = execute_single_command("ch status --strict", cwd=self.root)
+        self.assertFalse(sentinel.exists(), "Módulo chdevflow.py local não deve ser executado.")
+        self.assertIn(res.state, ("PASS", "FAIL"))
+
+    def test_r2_02_modification_in_docs_probe_py_invalidates_trust(self) -> None:
+        """R2-02: Adulteração de script Python em docs/ altera fingerprint e invalida trust."""
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        probe_script = docs_dir / "probe.py"
+        probe_script.write_text("print('probe_v1')\n", encoding="utf-8")
+
+        # Concede trust
+        grant_trust(self.root, declaration="trust_docs_probe")
+        is_ok_v1, _ = check_trust(self.root)
+        self.assertTrue(is_ok_v1, "Trust deve ser válido na versão inicial.")
+
+        # Modifica o script sob docs/
+        probe_script.write_text("print('probe_v2_payload_modificado')\n", encoding="utf-8")
+        is_ok_v2, reason_v2 = check_trust(self.root)
+        self.assertFalse(is_ok_v2, "Modificação em docs/probe.py DEVE invalidar a confiança.")
+        self.assertIn("Confiança invalidada", reason_v2)
+
+    def test_r2_02_script_with_text_extension_and_without_extension_invalids_trust(self) -> None:
+        """R2-02: Script regular sem extensão ou com extensão .txt em docs/ invalida trust ao ser modificado."""
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        probe_txt = docs_dir / "probe.txt"
+        probe_no_ext = docs_dir / "probe_runner"
+
+        probe_txt.write_text("print('txt_v1')\n", encoding="utf-8")
+        probe_no_ext.write_text("print('no_ext_v1')\n", encoding="utf-8")
+
+        self.manifest["verification"]["commands"] = ["python3 docs/probe.txt", "python3 docs/probe_runner"]
+        save_manifest(self.manifest_file, self.manifest)
+
+        grant_trust(self.root, declaration="trust_probes")
+        self.assertTrue(check_trust(self.root)[0])
+
+        # Modifica docs/probe.txt
+        probe_txt.write_text("print('txt_v2_mod')\n", encoding="utf-8")
+        is_ok_txt, reason_txt = check_trust(self.root)
+        self.assertFalse(is_ok_txt, "Modificação em docs/probe.txt DEVE invalidar trust.")
+        self.assertIn("Confiança invalidada", reason_txt)
+
+        # Re-concede e modifica docs/probe_runner (sem extensão)
+        grant_trust(self.root, declaration="trust_regranted")
+        self.assertTrue(check_trust(self.root)[0])
+        probe_no_ext.write_text("print('no_ext_v2_mod')\n", encoding="utf-8")
+        is_ok_noext, reason_noext = check_trust(self.root)
+        self.assertFalse(is_ok_noext, "Modificação em script sem extensão DEVE invalidar trust.")
+        self.assertIn("Confiança invalidada", reason_noext)
+
+    def test_r2_02_evidence_persistence_under_dot_ch_does_not_invalidate_trust(self) -> None:
+        """R2-02: Relatórios de evidência gerados em .ch/evidence/ não invalidam trust do projeto."""
+        grant_trust(self.root, declaration="trust_clean")
+        self.assertTrue(check_trust(self.root)[0])
+
+        # Executa verificação com persistência de evidência
+        ev = run_verification(self.root, persist=True, trust=False)
+        self.assertTrue(Path(ev.evidence_file).is_file())
+
+        # O trust deve permanecer íntegro (evidência sob .ch/ não se auto-invalida)
+        is_ok, reason = check_trust(self.root)
+        self.assertTrue(is_ok, f"Persistência em .ch/evidence/ não deve invalidar trust: {reason}")
+
+    def test_r2_02_non_git_workspace_detects_changes(self) -> None:
+        """R2-02: Projeto fora do Git calcula fingerprint conservador sobre arquivos do workspace."""
+        non_git_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(non_git_tmp.cleanup)
+        non_git_root = Path(non_git_tmp.name).resolve()
+        run_init(non_git_root, profile="generic", apply=True)
+
+        fp1, _ = compute_project_fingerprint(non_git_root)
+        grant_trust(non_git_root, declaration="trust_nongit")
+        self.assertTrue(check_trust(non_git_root)[0])
+
+        # Adiciona/modifica arquivo de script no workspace sem Git
+        scripts_dir = non_git_root / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        (scripts_dir / "probe.py").write_text("print('Modificado no non-git')\n", encoding="utf-8")
+        fp2, _ = compute_project_fingerprint(non_git_root)
+        self.assertNotEqual(fp1, fp2, "Fingerprint fora do Git deve mudar com alteração de arquivo.")
+        is_ok, reason = check_trust(non_git_root)
+        self.assertFalse(is_ok)
+        self.assertIn("Confiança invalidada", reason)
+
+    def test_r2_03_compact_forbidden_flags_rejected(self) -> None:
+        """R2-03: Formas compactas de flags proibidas (-cprint(42), -e..., -i...) são rejeitadas."""
+        sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
+        bad_commands = [
+            "python3 -cprint(42)",
+            "python3 -c'import os'",
+            "python3 -e'some_expr'",
+            "python3 -i tests/test_smoke.py",
+            "python3 -c 'print(42)'",
+            "python3 -u -c 'print(42)'",
+            "python3 -uc",
+        ]
+        for cmd in bad_commands:
+            with self.assertRaises(VerificationSecurityError, msg=f"Deveria rejeitar: {cmd}") as ctx:
+                parse_and_validate_command(cmd, self.root, sanitized_path)
+            self.assertIn("Flag proibida em comando Python", str(ctx.exception))
+
+    def test_r2_03_stdin_execution_rejected(self) -> None:
+        """R2-03: Execução de Python via stdin ('python3 -') é rejeitada fail-closed."""
+        sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
+        with self.assertRaises(VerificationSecurityError) as ctx:
+            parse_and_validate_command("python3 -", self.root, sanitized_path)
+        self.assertIn("stdin", str(ctx.exception))
+
+    def test_r2_03_nonexistent_script_or_directory_target_rejected(self) -> None:
+        """R2-03: Script inexistente ou alvo que é diretório são rejeitados."""
+        sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
+        with self.assertRaises(VerificationSecurityError) as ctx1:
+            parse_and_validate_command("python3 nonexistent_script.py", self.root, sanitized_path)
+        self.assertIn("Script Python não encontrado", str(ctx1.exception))
+
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        with self.assertRaises(VerificationSecurityError) as ctx2:
+            parse_and_validate_command("python3 docs", self.root, sanitized_path)
+        self.assertIn("arquivo regular", str(ctx2.exception))
+
+    def test_r2_03_allowed_options_before_module_and_script(self) -> None:
+        """R2-03: Opções seguras do interpretador (-u, -B, etc.) antes de módulo ou script são aceitas."""
+        sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
+
+        # Opções antes de -m
+        tokens_mod = parse_and_validate_command("python3 -u -B -m unittest discover -v -k test_smoke", self.root, sanitized_path)
+        self.assertIn("-m", tokens_mod)
+        self.assertIn("unittest", tokens_mod)
+        self.assertIn("-v", tokens_mod)
+
+        # Opções antes de script regular existente
+        scripts_dir = self.root / "scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        probe = scripts_dir / "probe.py"
+        probe.write_text("print('ok')\n", encoding="utf-8")
+
+        tokens_script = parse_and_validate_command("python3 -u -B scripts/probe.py --custom-flag -c-arg", self.root, sanitized_path)
+        self.assertIn("scripts/probe.py", tokens_script)
+        self.assertIn("--custom-flag", tokens_script)
+        self.assertIn("-c-arg", tokens_script)
+
 
 if __name__ == "__main__":
     unittest.main()

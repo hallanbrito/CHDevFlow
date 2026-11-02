@@ -1,6 +1,6 @@
 # Relatório Técnico de Auditoria e Implementação C.H. — Protocolo RUC/1.0
 
-**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-01T01:30:00Z | run_id atual: [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918) (SUCCESS) | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | HEAD SHA: `875caf0ef7f97b3c2c67522aca56ccc023b0bf21` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
+**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclo R2 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-02T14:45:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
 
 ---
 
@@ -101,11 +101,34 @@ Implementa o ciclo de vida da governança de confiança:
 - `config.py`: Removido integralmente o parâmetro `auto_trust=True` de `save_manifest()`. A persistência do manifesto nunca concede confiança implícita.
 - `project.py`: `create_project()` desacoplado de `grant_trust()`. Criar ou modificar um projeto nunca manifesta consentimento automático de confiança. Inclusão obrigatória de `.ch/trust.json` e `.ch/evidence/` no `.gitignore` padrão na inicialização do projeto.
 
+### 4.5 Correções da Reauditoria Independente R2 (R2-01, R2-02, R2-03)
+
+Sob autorização explícita CH-2 concedida pelo PO em 02/11/2026 (Issue [#51](https://github.com/hallanbrito/CHDevFlow/issues/51)), foram implementadas as seguintes correções pontuais e defensivas:
+
+1. **R2-01 (P0) — Isolamento de execução e proteção contra Shadowing de `chdevflow`:**
+   - Comandos internos confiáveis (`ch status`, `ch tree`) agora são executados diretamente in-process no ambiente controlado do verificador via `_run_internal_ch_command`.
+   - Remove temporariamente qualquer caminho da raiz do projeto (`project_root`) ou de subpastas locais (`src/`) do `sys.path`, capturando stdout/stderr via `io.StringIO` sem spawnar subprocesso com `cwd=project_root`.
+   - Impede que arquivos locais maliciosos (`chdevflow.py` ou pasta `chdevflow/`) na raiz do projeto analisado sobrescrevam ou façam hijacking dos módulos confiáveis da biblioteca `chdevflow`.
+
+2. **R2-02 (P1) — Rastreamento abrangente de alvos e integridade de scripts do runner:**
+   - Adicionada a função `_extract_explicit_targets` que analisa o manifesto `chdevflow.yaml` para registrar qualquer arquivo referenciado pelos comandos do runner, independentemente de sua extensão (ex.: scripts `.txt` ou executáveis sem extensão como `run`).
+   - `_is_relevant_for_trust` agora classifica como relevante: arquivos de código (`CODE_EXTENSIONS`), executáveis com bit `+x`, arquivos sem extensão, arquivos de configuração/build e qualquer alvo explícito do runner (inclusive sob `docs/` ou subpastas).
+   - Documentação estritamente textual/visual (`.md`, `.png`, etc.) não referenciada por comandos de execução é excluída do fingerprint, evitando falsos positivos durante o ciclo C.H. (ex.: geração de `docs/CH/*.md` em `ch mission new`).
+   - Preservada a auto-exclusão segura de `.ch/trust.json` e `.ch/evidence/` para não invalidar a confiança com a persistência de relatórios.
+
+3. **R2-03 (P1) — Gramática estrita e fail-closed de comandos Python:**
+   - O parser léxico/sintático de Python agora opera com gramática estrita em estágios sequenciais:
+     a) Rejeição imediata de stdin (`-`), flags proibidas (`-c`, `-i`, `-e`, `--command`) e qualquer forma compacta/anexada (`-cprint(42)`, `-uc`, etc.).
+     b) Processamento de opções seguras do interpretador (`-u`, `-B`, `-v`, `-W`, etc.) exclusivamente antes da definição do alvo.
+     c) Reconhecimento e validação estrita do alvo: módulo `-m <mod>` (restrito a `unittest` e `pytest`) ou script relativo contido no projeto.
+     d) Validação física do arquivo de script via `.is_file()`, rejeitando scripts inexistentes ou diretórios.
+     e) Argumentos subsequentes ao módulo ou script são preservados intactos como parâmetros da rotina de teste, evitando falsos positivos com flags legítimas (ex.: `-k test_smoke`, `-v`).
+
 ---
 
 ## 5. Matriz Completa de Testes de Segurança
 
-Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **44 cenários automatizados** (10 positivos e 34 negativos/regressivos):
+Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **54 cenários automatizados** (11 positivos e 43 negativos/regressivos):
 
 | ID | Cenário | Tipo | Entrada Testada | Comportamento Observado | Resultado |
 |---|---|---|---|---|---|
@@ -153,13 +176,26 @@ Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **44 cen�
 | **TN-32** | Alterações sucessivas com mesmo status Git (P0-02) | Negativo | Modifica `core.py`, concede trust, modifica novamente com mesmo status ` M` | Hash de conteúdo SHA-256 altera; confiança invalidada | `APROVADO` |
 | **TN-33** | Falha fechada em arquivo ilegível (P0-02) | Negativo | Arquivo em working tree ilegível sem permissão de leitura | Dispara `TrustIntegrityError` fail-closed, confiança negada | `APROVADO` |
 | **TN-34** | Timeout com término precoce do líder (P0-03) | Negativo | Processo pai finaliza mas filho persistente continua | Varredura ativa de PGID envia `SIGKILL` confinado ao grupo | `APROVADO` |
+| **TN-35** | Shadowing de pacote `chdevflow` por pasta local (R2-01) | Negativo | Pasta maliciosa `chdevflow/` na raiz do projeto | Pacote confiável não é sobrescrito; execução in-process isolada de `sys.path` | `APROVADO` |
+| **TN-36** | Shadowing de pacote `chdevflow` por módulo local (R2-01) | Negativo | Arquivo malicioso `chdevflow.py` na raiz do projeto | Módulo confiável executado sem importação do arquivo local | `APROVADO` |
+| **TN-37** | Alteração em script sob `docs/` invalida trust (R2-02) | Negativo | `docs/probe.py` referenciado no runner | Modificação detectada; invalida fingerprint e revoga confiança | `APROVADO` |
+| **TN-38** | Script com extensão documental `.txt` invalida trust (R2-02) | Negativo | `python3 docs/probe.txt` referenciado no runner | Modificação detectada; rastreado por `_extract_explicit_targets` | `APROVADO` |
+| **TN-39** | Script sem extensão invalida trust (R2-02) | Negativo | Script executável sem extensão referenciado no runner | Rastreamento ativo; invalida confiança | `APROVADO` |
+| **TN-40** | Persistência sob `.ch/` preserva trust (R2-02) | Positivo | Relatório de evidência gerado em `.ch/evidence/` | Ignorado pelo fingerprint; trust preservado | `APROVADO` |
+| **TN-41** | Workspace fora do Git detecta alterações (R2-02) | Negativo | Modificação de script em workspace sem `.git` | Fingerprint sem Git recalcula e invalida confiança | `APROVADO` |
+| **TN-42** | Flags compactas proibidas em Python (R2-03) | Negativo | `-cprint(42)`, `-uc`, `-i tests/t.py` | Rejeição fail-closed com `VerificationSecurityError` | `APROVADO` |
+| **TN-43** | Execução via stdin rejeitada (R2-03) | Negativo | `python3 -` | Rejeição fail-closed imediata | `APROVADO` |
+| **TN-44** | Alvo inexistente ou diretório rejeitado (R2-03) | Negativo | `python3 nonexistent.py` ou `python3 docs` | Rejeitado fail-closed com `VerificationSecurityError` | `APROVADO` |
 
 ---
 
 ## 6. Resultados de Testes e Integração Contínua
 
-- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 44/44 aprovados (100%).
-- **Suíte Completa do Repositório (`tests/`):** 242 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
+- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 54/54 aprovados (100%).
+- **Suíte Completa Raiz (`tests/`):** 253 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
+- **Suíte Sentinela (`apps/bootstrap/sentinela/tests/`):** 69/69 testes aprovados (100%).
+- **Suíte Control Center (`apps/control-center/tests/`):** 53/53 testes aprovados (100%).
+- **Total Local Executado:** 375 testes automatizados aprovados, 0 falhas, 0 erros.
 - **Checagem de Diff (`git diff --check`):** 100% limpo, sem erros de whitespace ou formatação.
 - **Integração Contínua (GitHub Actions):**
   - **Run ID:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918)
