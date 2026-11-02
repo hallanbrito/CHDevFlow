@@ -51,6 +51,7 @@ from chdevflow.core.trust import (
     grant_trust,
     invalidate_trust,
     TRUST_FILE_REL,
+    TrustIntegrityError,
 )
 
 
@@ -725,19 +726,20 @@ time.sleep(100)
         non_git_tmp = tempfile.TemporaryDirectory()
         self.addCleanup(non_git_tmp.cleanup)
         non_git_root = Path(non_git_tmp.name).resolve()
-        run_init(non_git_root, profile="generic", apply=True)
+        create_project("nongit_test", non_git_root, "python")
+        non_git_proj = non_git_root / "nongit_test"
 
-        fp1, _ = compute_project_fingerprint(non_git_root)
-        grant_trust(non_git_root, declaration="trust_nongit")
-        self.assertTrue(check_trust(non_git_root)[0])
+        fp1, _ = compute_project_fingerprint(non_git_proj)
+        grant_trust(non_git_proj, declaration="trust_nongit")
+        self.assertTrue(check_trust(non_git_proj)[0])
 
         # Adiciona/modifica arquivo de script no workspace sem Git
-        scripts_dir = non_git_root / "scripts"
+        scripts_dir = non_git_proj / "scripts"
         scripts_dir.mkdir(parents=True, exist_ok=True)
         (scripts_dir / "probe.py").write_text("print('Modificado no non-git')\n", encoding="utf-8")
-        fp2, _ = compute_project_fingerprint(non_git_root)
+        fp2, _ = compute_project_fingerprint(non_git_proj)
         self.assertNotEqual(fp1, fp2, "Fingerprint fora do Git deve mudar com alteração de arquivo.")
-        is_ok, reason = check_trust(non_git_root)
+        is_ok, reason = check_trust(non_git_proj)
         self.assertFalse(is_ok)
         self.assertIn("Confiança invalidada", reason)
 
@@ -798,6 +800,140 @@ time.sleep(100)
         self.assertIn("scripts/probe.py", tokens_script)
         self.assertIn("--custom-flag", tokens_script)
         self.assertIn("-c-arg", tokens_script)
+
+    def test_r3_01_non_git_workspace_dot_ch_runner_invalidates_trust(self) -> None:
+        """R3-01: Alvo aceito em pasta .ch/ (.ch/runner.py) em workspace sem Git invalida trust ao ser alterado."""
+        non_git_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(non_git_tmp.cleanup)
+        non_git_root = Path(non_git_tmp.name).resolve()
+        create_project("nongit_test", non_git_root, "python")
+        non_git_proj = non_git_root / "nongit_test"
+
+        ch_dir = non_git_proj / ".ch"
+        ch_dir.mkdir(parents=True, exist_ok=True)
+        runner_py = ch_dir / "runner.py"
+        runner_py.write_text("print('runner v1')\n", encoding="utf-8")
+
+        # Configura manifesto apontando para o runner sob .ch/
+        m_path = non_git_proj / "chdevflow.yaml"
+        m_data = load_manifest(m_path)
+        m_data["verification"]["commands"] = ["python3 .ch/runner.py"]
+        save_manifest(m_path, m_data)
+
+        grant_trust(non_git_proj, declaration="trust_dot_ch_runner")
+        self.assertTrue(check_trust(non_git_proj)[0])
+
+        # Edita texto inofensivo do runner v1 -> v2
+        runner_py.write_text("print('runner v2 modificado')\n", encoding="utf-8")
+        is_ok, reason = check_trust(non_git_proj)
+        self.assertFalse(is_ok, "Alteração em .ch/runner.py deve invalidar trust")
+        self.assertIn("Confiança invalidada", reason)
+
+    def test_r3_01_git_repo_ignored_build_probe_invalidates_trust(self) -> None:
+        """R3-01: Alvo em diretório ignorado pelo Git (build/probe.py) invalida trust ao ser alterado."""
+        build_dir = self.root / "build"
+        build_dir.mkdir(parents=True, exist_ok=True)
+        probe_py = build_dir / "probe.py"
+        probe_py.write_text("print('build probe v1')\n", encoding="utf-8")
+
+        # Adiciona build/ ao .gitignore
+        gitignore = self.root / ".gitignore"
+        gitignore.write_text(".ch/\nbuild/\n", encoding="utf-8")
+
+        m_path = self.root / "chdevflow.yaml"
+        m_data = load_manifest(m_path)
+        m_data["verification"]["commands"] = ["python3 build/probe.py"]
+        save_manifest(m_path, m_data)
+
+        # Commita apenas chdevflow.yaml e .gitignore (build/probe.py permanece untracked e ignorado)
+        subprocess.run(["git", "-C", str(self.root), "add", "chdevflow.yaml", ".gitignore"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-m", "add build runner"], check=True)
+
+        grant_trust(self.root, declaration="trust_ignored_build")
+        self.assertTrue(check_trust(self.root)[0])
+
+        # Modifica build/probe.py v1 -> v2
+        probe_py.write_text("print('build probe v2 modificado')\n", encoding="utf-8")
+        is_ok, reason = check_trust(self.root)
+        self.assertFalse(is_ok, "Alteração em arquivo ignorado do runner deve invalidar trust")
+        self.assertIn("Confiança invalidada", reason)
+
+    def test_r3_01_git_repo_symlink_target_change_invalidates_trust(self) -> None:
+        """R3-01: Alvo que é symlink interno (docs/entry.md -> body.txt) invalida trust ao alterar o arquivo apontado."""
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        body_txt = docs_dir / "body.txt"
+        body_txt.write_text("print('body v1')\n", encoding="utf-8")
+
+        entry_sym = docs_dir / "entry.md"
+        if entry_sym.exists() or entry_sym.is_symlink():
+            entry_sym.unlink()
+        entry_sym.symlink_to("body.txt")
+
+        m_path = self.root / "chdevflow.yaml"
+        m_data = load_manifest(m_path)
+        m_data["verification"]["commands"] = ["python3 docs/entry.md"]
+        save_manifest(m_path, m_data)
+
+        subprocess.run(["git", "-C", str(self.root), "add", "chdevflow.yaml", "docs/body.txt", "docs/entry.md"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "commit", "-m", "add symlink runner"], check=True)
+
+        grant_trust(self.root, declaration="trust_symlink_target")
+        self.assertTrue(check_trust(self.root)[0])
+
+        # Altera somente o arquivo físico body.txt (symlink e commit permanecem intocados)
+        body_txt.write_text("print('body v2 modificado')\n", encoding="utf-8")
+        is_ok, reason = check_trust(self.root)
+        self.assertFalse(is_ok, "Alteração no destino físico do symlink deve invalidar trust")
+        self.assertIn("Confiança invalidada", reason)
+
+    def test_r3_01_symlink_repointing_destination_invalidates_trust(self) -> None:
+        """R3-01: Reapontamento de symlink para outro arquivo regular invalida trust."""
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        body1 = docs_dir / "body1.txt"
+        body1.write_text("print('body 1')\n", encoding="utf-8")
+        body2 = docs_dir / "body2.txt"
+        body2.write_text("print('body 2')\n", encoding="utf-8")
+
+        entry_sym = docs_dir / "runner_sym.py"
+        if entry_sym.exists() or entry_sym.is_symlink():
+            entry_sym.unlink()
+        entry_sym.symlink_to("body1.txt")
+
+        m_path = self.root / "chdevflow.yaml"
+        m_data = load_manifest(m_path)
+        m_data["verification"]["commands"] = ["python3 docs/runner_sym.py"]
+        save_manifest(m_path, m_data)
+
+        grant_trust(self.root, declaration="trust_sym_repoint")
+        self.assertTrue(check_trust(self.root)[0])
+
+        # Reaponta o symlink para body2.txt
+        entry_sym.unlink()
+        entry_sym.symlink_to("body2.txt")
+        is_ok, reason = check_trust(self.root)
+        self.assertFalse(is_ok, "Reapontar symlink deve invalidar trust")
+        self.assertIn("Confiança invalidada", reason)
+
+    def test_r3_01_symlink_broken_or_outside_fails_closed(self) -> None:
+        """R3-01: Symlink quebrado ou apontando para fora do projeto falha fechado."""
+        docs_dir = self.root / "docs"
+        docs_dir.mkdir(parents=True, exist_ok=True)
+        broken_sym = docs_dir / "broken.py"
+        if broken_sym.exists() or broken_sym.is_symlink():
+            broken_sym.unlink()
+        broken_sym.symlink_to("nonexistent.py")
+
+        m_path = self.root / "chdevflow.yaml"
+        m_data = load_manifest(m_path)
+        m_data["verification"]["commands"] = ["python3 docs/broken.py"]
+        save_manifest(m_path, m_data)
+
+        # compute_project_fingerprint deve disparar TrustIntegrityError
+        with self.assertRaises(TrustIntegrityError) as ctx:
+            compute_project_fingerprint(self.root)
+        self.assertIn("quebrado", str(ctx.exception).lower())
 
 
 if __name__ == "__main__":

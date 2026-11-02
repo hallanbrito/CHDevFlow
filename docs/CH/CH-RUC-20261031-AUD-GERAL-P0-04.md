@@ -1,6 +1,6 @@
 # Relatório Técnico de Auditoria e Implementação C.H. — Protocolo RUC/1.0
 
-**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclo R2 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-02T14:45:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
+**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclos R2/R3 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-02T15:20:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | reauditoria R3 SHA: `e02a2fb236fc2582935c4bfabb3e45645b1a4baa` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
 
 ---
 
@@ -105,10 +105,9 @@ Implementa o ciclo de vida da governança de confiança:
 
 Sob autorização explícita CH-2 concedida pelo PO em 02/11/2026 (Issue [#51](https://github.com/hallanbrito/CHDevFlow/issues/51)), foram implementadas as seguintes correções pontuais e defensivas:
 
-1. **R2-01 (P0) — Isolamento de execução e proteção contra Shadowing de `chdevflow`:**
-   - Comandos internos confiáveis (`ch status`, `ch tree`) agora são executados diretamente in-process no ambiente controlado do verificador via `_run_internal_ch_command`.
-   - Remove temporariamente qualquer caminho da raiz do projeto (`project_root`) ou de subpastas locais (`src/`) do `sys.path`, capturando stdout/stderr via `io.StringIO` sem spawnar subprocesso com `cwd=project_root`.
-   - Impede que arquivos locais maliciosos (`chdevflow.py` ou pasta `chdevflow/`) na raiz do projeto analisado sobrescrevam ou façam hijacking dos módulos confiáveis da biblioteca `chdevflow`.
+1. **R2-01 (P0) — Interceptação in-process e proteção contra Shadowing de `chdevflow`:**
+   - Comandos internos confiáveis (`ch status`, `ch tree`) são interceptados in-process no laço de execução de comandos de `src/chdevflow/core/evidence.py` (L470–500), despachando a chamada diretamente para `chdevflow.cli.main` com captura de `stdout`/`stderr` via `contextlib.redirect_stdout`/`redirect_stderr` em `io.StringIO` e garantindo o argumento `--path <project_root>`, sem spawnar subprocesso com `cwd=project_root`.
+   - Como o módulo `chdevflow.cli` já está carregado pelo interpretador ativo no ambiente seguro, arquivos ou módulos locais na raiz do projeto (`chdevflow.py` ou pasta `chdevflow/`) não são importados nem provocam shadowing do CLI confiável.
 
 2. **R2-02 (P1) — Rastreamento abrangente de alvos e integridade de scripts do runner:**
    - Adicionada a função `_extract_explicit_targets` que analisa o manifesto `chdevflow.yaml` para registrar qualquer arquivo referenciado pelos comandos do runner, independentemente de sua extensão (ex.: scripts `.txt` ou executáveis sem extensão como `run`).
@@ -124,11 +123,25 @@ Sob autorização explícita CH-2 concedida pelo PO em 02/11/2026 (Issue [#51](h
      d) Validação física do arquivo de script via `.is_file()`, rejeitando scripts inexistentes ou diretórios.
      e) Argumentos subsequentes ao módulo ou script são preservados intactos como parâmetros da rotina de teste, evitando falsos positivos com flags legítimas (ex.: `-k test_smoke`, `-v`).
 
+### 4.6 Correções da Reauditoria Independente R3 (R3-01, R3-02)
+
+Sob a mesma autorização CH-2 (Issue [#51](https://github.com/hallanbrito/CHDevFlow/issues/51)), foram solucionadas as pendências residuais de alvos aceitos:
+
+1. **R3-01 (P1) — Componente Canônico `TARGETS` e Rastreamento Integral de Alvos e Symlinks:**
+   - `compute_project_fingerprint` em `src/chdevflow/core/trust.py` passa a computar um componente dedicado `TARGETS` incorporando diretamente o hash de conteúdo SHA-256 e a identidade canônica de cada alvo de execução aceito pelo runner, independentemente de status Git, `.gitignore`, diretório ou extensão.
+   - Refinamento de `_extract_explicit_targets`: mapeia alvos de scripts em Python (respeitando flags seguras como `-u`, `-B`, `-W`), scripts de shell (`sh`, `bash`) e binários relativos diretos, resolvendo symlinks internos para incluir tanto o caminho do link quanto o destino físico canônico.
+   - Resolução rigorosa de symlinks: valida se o destino reside estritamente dentro da raiz do projeto, se é um arquivo regular existente e se permanece íntegro; reapontamentos de symlink ou alterações de conteúdo no destino invalidam deterministicamente a confiança. Symlinks quebrados ou com destino externo disparam `TrustIntegrityError` fail-closed.
+   - Monitoramento compulsório de diretórios gerenciados: scripts situados sob `.ch/` (ex.: `.ch/runner.py`) ou diretórios ignorados pelo Git (ex.: `build/probe.py`) são obrigatoriamente monitorados quando configurados como alvos do runner, invalidando o trust caso sejam alterados. Metadados e relatórios de evidência comuns sob `.ch/` continuam isentos de auto-invalidação.
+
+2. **R3-02 — Precisão Factual da Documentação e Metadados do PR:**
+   - Adequação rigorosa do texto do RUC e do corpo do Draft PR [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) descrevendo exatamente o mecanismo em código (interceptação inline com chamada a `cli_main` e `--path`), eliminando referências fictícias a funções ou expurgos inexistentes de `sys.path`.
+   - Atualização completa do corpo do PR refletindo o histórico e contagens acumuladas dos ciclos R1, R2 e R3.
+
 ---
 
 ## 5. Matriz Completa de Testes de Segurança
 
-Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **54 cenários automatizados** (11 positivos e 43 negativos/regressivos):
+Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **59 cenários automatizados** (11 positivos e 48 negativos/regressivos):
 
 | ID | Cenário | Tipo | Entrada Testada | Comportamento Observado | Resultado |
 |---|---|---|---|---|---|
@@ -186,21 +199,25 @@ Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **54 cen�
 | **TN-42** | Flags compactas proibidas em Python (R2-03) | Negativo | `-cprint(42)`, `-uc`, `-i tests/t.py` | Rejeição fail-closed com `VerificationSecurityError` | `APROVADO` |
 | **TN-43** | Execução via stdin rejeitada (R2-03) | Negativo | `python3 -` | Rejeição fail-closed imediata | `APROVADO` |
 | **TN-44** | Alvo inexistente ou diretório rejeitado (R2-03) | Negativo | `python3 nonexistent.py` ou `python3 docs` | Rejeitado fail-closed com `VerificationSecurityError` | `APROVADO` |
+| **TN-45** | Alvo em `.ch/runner.py` em workspace sem Git invalida trust (R3-01) | Negativo | `.ch/runner.py` alterado de v1 para v2 | `TARGETS` detecta mudança; confiança invalidada | `APROVADO` |
+| **TN-46** | Alvo ignorado pelo Git (`build/probe.py`) invalida trust (R3-01) | Negativo | `build/probe.py` alterado com `build/` no `.gitignore` | `TARGETS` rastreia diretamente; confiança invalidada | `APROVADO` |
+| **TN-47** | Symlink interno (`docs/entry.md -> body.txt`) invalida trust (R3-01) | Negativo | `docs/body.txt` alterado de v1 para v2 | Conteúdo físico canônico monitorado; confiança invalidada | `APROVADO` |
+| **TN-48** | Reapontamento de symlink para outro arquivo invalida trust (R3-01) | Negativo | Symlink repontado de `body1.txt` para `body2.txt` | Identidade do link alterada; confiança invalidada | `APROVADO` |
+| **TN-49** | Symlink quebrado ou destino fora do projeto falha fechado (R3-01) | Negativo | `broken.py` apontando para arquivo inexistente | Dispara `TrustIntegrityError` fail-closed | `APROVADO` |
 
 ---
 
 ## 6. Resultados de Testes e Integração Contínua
 
-- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 54/54 aprovados (100%).
-- **Suíte Completa Raiz (`tests/`):** 253 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
+- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 59/59 aprovados (100%).
+- **Suíte Completa Raiz (`tests/`):** 258 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
 - **Suíte Sentinela (`apps/bootstrap/sentinela/tests/`):** 69/69 testes aprovados (100%).
 - **Suíte Control Center (`apps/control-center/tests/`):** 53/53 testes aprovados (100%).
-- **Total Local Executado:** 375 testes automatizados aprovados, 0 falhas, 0 erros.
+- **Total Local Executado:** 380 testes automatizados aprovados, 0 falhas, 0 erros.
 - **Checagem de Diff (`git diff --check`):** 100% limpo, sem erros de whitespace ou formatação.
 - **Integração Contínua (GitHub Actions):**
-  - **Run ID:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918)
-  - **Job:** `python-checks`
-  - **Status:** `completed` / `conclusion: success` (Tempo de execução: 51s).
+  - **Run ID:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918) (SUCCESS)
+  - **Run ID R2:** [41464641128](https://github.com/hallanbrito/CHDevFlow/actions/runs/41464641128) (SUCCESS)
   - Cobriu integralmente: Compilação sintática de todos os componentes, testes de governança W1, testes da raiz CLI (`tests/`), testes do Sentinela (`apps/bootstrap/sentinela/tests/`) e testes do Control Center (`apps/control-center/tests/`).
 
 ---
