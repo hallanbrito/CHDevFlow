@@ -173,7 +173,7 @@ Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de 
 
 | Componente / Elemento | Classificação | Evidência Canônica / Situação Observada |
 |---|---|---|
-| **Contratos Mínimos (`Mission`, `Worker`, `Supervisor`)** | `PARCIAL` | Especificados formalmente no BOOT-00; adotados operacionalmente na Sentinela (`apps/bootstrap/sentinela/domain.py`) e CLI (`ch mission`, `ch ruc`). Integração com worker IA real continua pendente. |
+| **Contratos Mínimos (`Mission`, `Worker`, `Supervisor`)** | `PARCIAL` | Especificados formalmente no BOOT-00; adotados operacionalmente na Sentinela (`apps/bootstrap/sentinela/src/ch_sentinela/contracts.py`) e CLI (`ch mission`, `ch ruc`). Integração com worker IA real continua pendente. |
 | **Sentinela Python com FakeWorker (BOOT-01)** | `IMPLEMENTADO` | Implementada em `apps/bootstrap/sentinela/` ([PR #26](https://github.com/hallanbrito/CHDevFlow/pull/26), [Issue #27](https://github.com/hallanbrito/CHDevFlow/issues/27)), validada por testes e integrada na `main`. |
 | **CHDevFlow CLI v0.1 (`src/chdevflow/`)** | `IMPLEMENTADO` | Implementada e integrada na `main` ([PR #39](https://github.com/hallanbrito/CHDevFlow/pull/39), [Issues #32–#38](https://github.com/hallanbrito/CHDevFlow/issues/32)), fornecendo comandos operacionais do C.H. |
 | **Estabilizações P0 (P0-01 a P0-04, CI, Access)** | `IMPLEMENTADO` | Totalmente integradas na `main` ([PRs #42, #44, #46, #48, #50, #52](https://github.com/hallanbrito/CHDevFlow/pull/52)), garantindo status estrito, empacotamento, CI integral e modelo seguro de verificação. |
