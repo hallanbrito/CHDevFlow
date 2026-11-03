@@ -2,55 +2,71 @@
 
 ## 1. Identificação
 
-- Data: 22/10/2026 (America/Fortaleza).
-- Executor declarado: ChatGPT / Codex; revisão própria, sem alegação de auditoria independente.
+- Data inicial: 22/10/2026 (America/Fortaleza).
+- Executor declarado inicial: ChatGPT / Codex; revisão própria, sem alegação de auditoria independente.
+- Reauditoria técnica: 03/11/2026 por AGY (Antigravity), autonomia CH-2, autorizada pelo PO em 03/11/2026 ([PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31#issuecomment-6614342106) / [Issue #53](https://github.com/hallanbrito/CHDevFlow/issues/53#issuecomment-6614350576)).
 - Origem: teste manual acompanhado do PO Hallan no Control Center integrado pelo PR #30.
-- Baseline: `b192ebb6daa3798fce3620d56cfec44bc8d6b118`.
+- Baseline histórica da branch: `b192ebb6daa3798fce3620d56cfec44bc8d6b118`.
+- Baseline canônica de alinhamento (`main`): `a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`.
 - Branch: `chatgpt/cc01-correcao-leitura-live`.
+- HEAD inicial da reauditoria: `ffb38d74805594e60970b61944b60296a074c342`.
 
 ## 2. Resumo executivo
 
-O PO observou 17 itens recebidos do GitHub e zero missões reconhecidas. A causa
-foi a incompatibilidade entre o JSON nativo e a fixture: `labels` fica na raiz,
+O PO observou 17 itens recebidos do GitHub e zero missões reconhecidas em 22/10. A causa
+foi a incompatibilidade entre o JSON nativo do GitHub Project e a fixture legada: `labels` fica na raiz,
 e os campos personalizados chamam-se `etapa CH` e `autonomia CH`.
 A correção mantém o filtro exato `ch:workflow`, limita a Issues do repositório
 canônico e preserva compatibilidade com a demonstração.
+Na reauditoria de 03/11/2026 (Missão AGY-CC01-R1), a leitura ao vivo contra o snapshot
+atual do Project #2 foi retestada em modo estritamente somente leitura, comprovando
+26 itens recebidos, 26 missões reconhecidas, 0 itens fora do filtro, 20 com etapa de conclusão observada,
+6 bloqueadas por dados insuficientes e 0 elegíveis (sem invenção de dependências fictícias).
 
 ## 3. Consultas e atividades
 
-Leitura do código, RFC e template de PR; clone isolado da baseline; reprodução
+Leitura do código, RFC e template de PR; inspeção do clone isolado da baseline; reprodução
 offline com 17 itens sintéticos na estrutura informada pelo PO; correção da
 normalização, apresentação de dados insuficientes e aviso de falha de leitura.
+Reconciliação estrutural contra a `main` atual (`a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`)
+comprovando compatibilidade total (zero conflitos via `git merge-tree`).
 Nenhum snapshot privado ou credencial do notebook foi copiado.
 
 ## 4. Evidências
 
-- DECLARADO PELO PO: consulta local retornou 17 itens / 0 missões; nomes das
-  chaves nativas foram apresentados na conversa.
-- RETESTE VISUAL DO PO no head `14d7ed0`: as capturas
-  `Captura_de_tela_20261022_103101.png` e `Captura_de_tela_20261022_103232.png`
-  mostram LIVE_GITHUB com 17 missões reconhecidas, zero itens fora do filtro,
-  12 com etapa de conclusão observada e 5 bloqueadas por dados insuficientes.
-  O aviso de dependências não informadas permanece nas 17 missões.
-- A captura `image(20261022-133315).png` revelou etiquetas saindo dos cartões
-  do grafo devido aos IDs nativos longos. Ajustados quebra de linha, limites
-  de largura e alinhamento dos cartões; legendas dos contadores agora dizem
-  "Etapa de conclusão observada" e "Dependências ou dados insuficientes".
-- OBSERVADO LOCALMENTE: o normalizador da baseline retorna 0 para os 17 itens
-  sintéticos; o corrigido retorna 17, sem modificar o snapshot.
-- Testes locais: **212 aprovados** (68 do painel, 67 da Sentinela, 77 da raiz),
-  além de 11 subtestes; `git diff --check` limpo.
-- Os 15 novos casos cobrem formato nativo, etiquetas string/objeto, exclusão
-  de outros repositórios/DraftIssues/etiquetas parecidas, campos ausentes,
-  dependências inválidas, bloqueios propagados, etapa homologada observada,
-  renderização/filtros, erro sanitizado com HTTP 503, projeto vazio legítimo
-  e renderização dos 11 cartões da demonstração.
-- Após o ajuste de CSS/legendas: os 68 testes do painel passaram novamente.
-  A tentativa de verificação visual automatizada não pôde ser concluída:
-  o download do Chromium retornou um arquivo inválido. HTML com IDs longos
-  foi renderizado via ASGI, mas não equivale a uma captura de navegador.
-- O CI existente executa somente os testes da raiz. Os testes novos foram
-  executados localmente; nenhuma alteração de workflow foi realizada.
+### 4.1 DECLARADO PELO PO (Histórico de 22/10/2026)
+- Consulta local no notebook retornou 17 itens / 0 missões; nomes das chaves nativas foram apresentados na conversa.
+- Reteste visual no head `14d7ed0`: capturas `Captura_de_tela_20261022_103101.png` e `Captura_de_tela_20261022_103232.png` mostraram LIVE_GITHUB com 17 missões reconhecidas, zero itens fora do filtro, 12 com etapa de conclusão observada e 5 bloqueadas por dados insuficientes.
+- Captura `image(20261022-133315).png` revelou etiquetas saindo dos cartões do grafo devido aos IDs nativos longos. Ajustados quebra de linha, limites de largura e alinhamento dos cartões; legendas dos contadores agora dizem "Etapa de conclusão observada" e "Dependências ou dados insuficientes".
+
+### 4.2 LIVE_GITHUB (Observado ao vivo em 03/11/2026)
+- Consulta somente leitura realizada via `SentinelFacade().obter_snapshot_ao_vivo()` sobre o GitHub Project #2 (`hallanbrito/CHDevFlow`):
+  - Total recebidos (`total_recebidos` / `totalCount`): **26 itens**.
+  - Total de missões reconhecidas com `ch:workflow` e `repository == 'hallanbrito/CHDevFlow'`: **26 missões**.
+  - Total fora do filtro (`total_ignorados`): **0 itens**.
+  - Total com etapa de conclusão observada (`INTEGRADA` ou `HOMOLOGADA`): **20 missões**.
+  - Total bloqueadas por dados insuficientes (`BLOQUEADA_DADOS`): **6 missões** (#5, #6, #10, #24, #32, #40).
+  - Total elegíveis (`ELEGIVEL`): **0 missões**.
+  - Total de ciclos detectados: **0**.
+  - Total de dependências órfãs: **0**.
+  - Total com dados insuficientes (`total_dados_insuficientes`): **26 missões** (ausência de campo estruturado de dependências no Project nativo; grafo mantido parcial sem inventar arestas ou elegibilidade falsa).
+
+### 4.3 FIXTURE_OFFLINE (Testes locais executados em 03/11/2026)
+- Suíte do Control Center (`apps/control-center/tests/`): **68 testes PASS** (1.57s).
+  - `test_live_github_regression.py`: 15 testes aprovados cobrindo formato nativo, etiquetas string/objeto, exclusão de repositórios externos/DraftIssues, campos ausentes, dependências inválidas, bloqueios propagados, etapa homologada observada, erro 503 sanitizado, projeto vazio e 11 cartões demo.
+  - `test_dag_engine.py`: 10 testes aprovados.
+  - `test_mission_service.py`: 6 testes aprovados.
+  - `test_project_service.py`: 5 testes aprovados.
+  - `test_routes_read_only.py`: 22 testes aprovados.
+  - `test_sentinela_adapter.py`: 6 testes aprovados (com isolamento de credencial).
+  - `test_server_security.py`: 4 testes aprovados.
+- Suíte da Sentinela Python (`apps/bootstrap/sentinela/tests/`): **67 testes PASS** (0.32s).
+- Suíte do repositório raiz (`tests/`): **77 testes PASS** (0.097s).
+- **Total consolidado de testes locais executados: 212 testes PASS.**
+
+### 4.4 NÃO_EXECUTADO / LIMITAÇÕES VERIFICADAS
+- `CI_NAO_VERIFICADA`: O workflow `.github/workflows/w1-checks.yml` restringe a execução por path (`scripts/**`, `tests/**`, `.github/workflows/**`). Como o PR #31 altera apenas `apps/control-center/` e `docs/`, a CI remota não dispara automaticamente. Em conformidade com a política, o workflow não foi alterado.
+- Captura de tela visual automatizada via navegador headless não pôde ser executada localmente devido à ausência de binário do navegador no ambiente.
 
 ## 5. Alterações
 
@@ -71,13 +87,12 @@ Nenhum snapshot privado ou credencial do notebook foi copiado.
 
 ## 6. Limitações e riscos
 
-O reteste real confirmou que os 17 itens observados satisfazem o filtro
+O reteste real confirmou que os itens observados satisfazem o filtro
 canônico e carregam na listagem/dashboard. O Project observado não oferece `dependencies`:
 o grafo real fica explicitamente parcial até existir uma fonte estruturada
 validada. Resolver essa fonte é trabalho posterior; não ler referências
 genéricas no corpo da Issue como se fossem contratos de dependência.
-O reteste do ajuste de layout no navegador do PO permanece pendente; o registro
-das capturas recebidas acima se refere ao head anterior ao ajuste de layout.
+O reteste do ajuste de layout no navegador do PO permanece dependente de conferência visual humana.
 
 ## 7. Segurança, custo e exclusões
 
@@ -99,7 +114,7 @@ e iniciar novamente; nenhum dado remoto precisa ser restaurado.
 
 ## 9. Estado e decisões do PO
 
-Preparado para revisão em branch isolada / Draft PR #31. Sem merge.
-Leitura real confirmada nas capturas do teste acompanhado; reteste de layout e decisão de integração pendentes. Não declarar
-o modo ao vivo integralmente homologado enquanto faltarem o reteste e uma
-fonte verificada das dependências.
+- **Estado:** `AGUARDANDO_AUDITORIA_CHATGPT / AGUARDANDO_PO / SEM_MERGE`.
+- Preparado para revisão em branch isolada / Draft PR #31. Sem merge.
+- Leitura real confirmada com 26 itens; zero conflitos com a `main` canônica (`a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`).
+- Nenhuma auto-homologação declarada. Decisão final de integração cabe exclusivamente ao PO Hallan.
