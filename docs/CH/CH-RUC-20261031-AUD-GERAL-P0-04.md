@@ -1,6 +1,6 @@
 # Relatório Técnico de Auditoria e Implementação C.H. — Protocolo RUC/1.0
 
-**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclos R2/R3/R4/R5 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-03T00:50:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | reauditoria R3 SHA: `e02a2fb236fc2582935c4bfabb3e45645b1a4baa` | reauditoria R4 SHA: `cc9b996265cbefccb05def5a6a71a22ba556ffa4` | reauditoria R5 (apontamento): `cc9b996265cbefccb05def5a6a71a22ba556ffa4` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
+**Cabeçalho:** missão/Issue: [#51](https://github.com/hallanbrito/CHDevFlow/issues/51) | Épico: [#40](https://github.com/hallanbrito/CHDevFlow/issues/40) | Draft PR: [#52](https://github.com/hallanbrito/CHDevFlow/pull/52) | executor declarado: Google Antigravity (AGY) | auditoria independente: ChatGPT | PO: Hallan de Sousa Brito | autonomia e prova: CH-2 restrita à implementação, testes e Draft PR autorizada pelo PO em 31/10/2026 e ratificada em 02/11/2026 para ciclos R2/R3/R4/R5/R6 na Issue #51 | ambiente: Linux x86_64 / Python 3.14 (local) / Python 3.12 (CI) / GitHub CLI (gh) 2.67.0 | fonte: LIVE_GITHUB / WORKTREE_LOCAL | timestamp ISO 8601: 2026-11-03T01:21:00Z | baseline SHA: `f589da98f0ab50961c655b035816a776a56e1c9c` | reauditoria R2 SHA: `33dfe0994fc247539d294bc80c6e32cad3719ad2` | reauditoria R3 SHA: `e02a2fb236fc2582935c4bfabb3e45645b1a4baa` | reauditoria R4 SHA: `cc9b996265cbefccb05def5a6a71a22ba556ffa4` | reauditoria R5 SHA: `3929f142ef12d482177b77bb670437f6e1c66557` | reauditoria R6 (apontamento): `3929f142ef12d482177b77bb670437f6e1c66557` | branch: `agy/p0-04-safe-verify-model` | resultado técnico: IMPLEMENTADO_AGUARDANDO_REAUDITORIA_CHATGPT_E_DECISAO_PO.
 
 ---
 
@@ -156,11 +156,21 @@ Sob a mesma autorização CH-2 mantida pelo PO (Issue [#51](https://github.com/h
    - Tratamento completo de renomeações e cópias (`R` ou `C` no status Git): consome o par de caminhos NUL-delimitados (`target_path` e `orig_path`), valida a relevância de ambas as extremidades (assegurando que renomeações envolvendo código sejam capturadas mesmo quando o destino ou origem parecer documental), confina ambos os caminhos à raiz do projeto e registra a transição canônica (`orig_path->target_path:content_hash`).
    - Alterações sucessivas sob o status `M` em arquivos acentuados ou renomeados agora recalculam deterministicamente o digest SHA-256 de conteúdo e invalidam de forma fail-closed o Project Trust.
 
+### 4.9 Correção da Reauditoria Independente R6 (R6-01)
+
+Sob a mesma autorização CH-2 mantida pelo PO (Issue [#51](https://github.com/hallanbrito/CHDevFlow/issues/51)):
+
+1. **R6-01 (P1) — Eliminação de Colisão na Serialização do Estado Git via Serialização Canônica Estruturada:**
+   - A fórmula anterior de serialização em `get_git_state()` (`src/chdevflow/core/trust.py`) concatenava os campos por string delimitada (`f"{status_code}:{entry_path}:{content_hash}"`), onde `entry_path` recebia `f"{orig_path_str}->{target_path_str}"` em casos de renomeação. Essa concatenação continha ambiguidade estrutural: por exemplo, renomear `'a.py'` para `'b->c.py'` e renomear `'a.py->b'` para `'c.py'` geravam strings idênticas (`"R :a.py->b->c.py:<hash>"`), produzindo colisão de fingerprint e mantendo o trust indevidamente válido.
+   - A serialização foi refatorada para uma representação canônica formal: cada entrada relevante é armazenada como um objeto estruturado com chaves explícitas e tipadas (`status`, `orig`, `target`, `hash`).
+   - A lista de registros é ordenada deterministicamente por chave quádrupla `(target, orig, status, hash)` e convertida em JSON canônico estrito (`json.dumps(sorted_records, sort_keys=True, separators=(',', ':'), ensure_ascii=False)`), garantindo representação inequívoca mesmo diante de dois-pontos (`:`), setas (`->`), quebras de linha (`\n`), aspas (`"`) ou barras invertidas (`\\`).
+   - Demonstração matemática e teste de regressão adicionados no cenário `TN-53`, comprovando que os estados que anteriormente colidiam agora geram fingerprints distintos e invalidam deterministicamente o `check_trust()`.
+
 ---
 
 ## 5. Matriz Completa de Testes de Segurança
 
-Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **62 cenários automatizados** (11 positivos e 51 negativos/regressivos):
+Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **63 cenários automatizados** (11 positivos e 52 negativos/regressivos):
 
 | ID | Cenário | Tipo | Entrada Testada | Comportamento Observado | Resultado |
 |---|---|---|---|---|---|
@@ -226,23 +236,24 @@ Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **62 cen�
 | **TN-50** | Variantes de casing de Python invalidam trust (R4-01) | Negativo | Comandos com `Python3`, `PYTHON3`, `PyThOn3` alterando script | Alvo extraído; alteração de script invalida trust | `APROVADO` |
 | **TN-51** | Arquivo Unicode acentuado fora de TARGETS invalida trust (R5-01) | Negativo | Modificações sucessivas em `módulo_segurança.py` sob status M | SHA-256 recalculado via -z; trust invalidado | `APROVADO` |
 | **TN-52** | Renomeações com acentos/espaços e caracteres especiais invalidam trust (R5-01) | Negativo | `git mv` com acentos/espaços e arquivo com aspas no nome | Rastreamento inequívoco de -z; trust invalidado | `APROVADO` |
+| **TN-53** | Serialização canônica de estado Git elimina colisões (R6-01) | Negativo | Dois estados de renomeação com '->' que antes colidiam | Fingerprints distintos; trust invalidado | `APROVADO` |
 
 ---
 
 ## 6. Resultados de Testes e Integração Contínua
 
-- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 62/62 aprovados (100%).
-- **Suíte Completa Raiz (`tests/`):** 261 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
+- **Testes de Segurança Locais (`test_verify_security_p04.py`):** 63/63 aprovados (100%).
+- **Suíte Completa Raiz (`tests/`):** 262 testes aprovados, 1 pulado (pytest opcional localmente), 0 falhas, 0 erros.
 - **Suíte Sentinela (`apps/bootstrap/sentinela/tests/`):** 69/69 testes aprovados (100%).
 - **Suíte Control Center (`apps/control-center/tests/`):** 53/53 testes aprovados (100%).
-- **Total Local Executado:** 383 testes automatizados aprovados, 0 falhas, 0 erros.
+- **Total Local Executado:** 384 testes automatizados aprovados, 0 falhas, 0 erros.
 - **Checagem de Diff (`git diff --check`):** 100% limpo, sem erros de whitespace ou formatação.
 - **Integração Contínua (GitHub Actions):**
   - **Run ID R1:** [41261101918](https://github.com/hallanbrito/CHDevFlow/actions/runs/41261101918) (SUCCESS)
   - **Run ID R2:** [41464641128](https://github.com/hallanbrito/CHDevFlow/actions/runs/41464641128) (SUCCESS)
   - **Run ID R3:** [41469711221](https://github.com/hallanbrito/CHDevFlow/actions/runs/41469711221) (SUCCESS)
   - **Run ID R4:** [41475958484](https://github.com/hallanbrito/CHDevFlow/actions/runs/41475958484) (SUCCESS)
-  - **Run ID R5:** [41555692622](https://github.com/hallanbrito/CHDevFlow/actions/runs/41555692622) (SUCCESS)
+  - **Run ID R5:** [41555851698](https://github.com/hallanbrito/CHDevFlow/actions/runs/41555851698) (SUCCESS)
   - Cobriu integralmente: Compilação sintática de todos os componentes, testes de governança W1, testes da raiz CLI (`tests/`), testes do Sentinela (`apps/bootstrap/sentinela/tests/`) e testes do Control Center (`apps/control-center/tests/`).
 
 ---

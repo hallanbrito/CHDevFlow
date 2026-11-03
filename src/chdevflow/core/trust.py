@@ -267,7 +267,7 @@ def get_git_state(project_root: Path) -> str:
         if tokens and tokens[-1] == b"":
             tokens.pop()
 
-        relevant_entries: list[str] = []
+        relevant_records: list[dict[str, str | None]] = []
         i = 0
         while i < len(tokens):
             token = tokens[i]
@@ -315,10 +315,24 @@ def get_git_state(project_root: Path) -> str:
             else:
                 content_hash = "NON_REGULAR"
 
-            entry_path = f"{orig_path_str}->{target_path_str}" if orig_path_str else target_path_str
-            relevant_entries.append(f"{status_code}:{entry_path}:{content_hash}")
+            relevant_records.append({
+                "status": status_code,
+                "orig": orig_path_str,
+                "target": target_path_str,
+                "hash": content_hash,
+            })
 
-        filtered_porcelain = "\n".join(sorted(relevant_entries))
+        # Serialização canônica estruturada (ordenação determinística e campos delimitados de forma inequívoca)
+        sorted_records = sorted(
+            relevant_records,
+            key=lambda r: (r["target"] or "", r["orig"] or "", r["status"] or "", r["hash"] or ""),
+        )
+        serialized_entries = json.dumps(
+            sorted_records,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
 
         proc_rev = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -329,7 +343,7 @@ def get_git_state(project_root: Path) -> str:
         )
         head_sha = proc_rev.stdout.strip() if proc_rev.returncode == 0 else "EMPTY_HEAD"
 
-        combined = f"HEAD:{head_sha}\nPORCELAIN_WITH_CONTENT:\n{filtered_porcelain}"
+        combined = f"HEAD:{head_sha}\nCANONICAL_GIT_ENTRIES:\n{serialized_entries}"
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
     except subprocess.TimeoutExpired:
         raise TrustIntegrityError("Timeout excedido ao verificar estado do Git.")

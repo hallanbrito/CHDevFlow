@@ -48,6 +48,7 @@ from chdevflow.core.submit import validate_and_submit, SubmitError
 from chdevflow.core.trust import (
     check_trust,
     compute_project_fingerprint,
+    get_git_state,
     grant_trust,
     invalidate_trust,
     TRUST_FILE_REL,
@@ -1061,6 +1062,57 @@ time.sleep(100)
         is_ok_quote, reason_quote = check_trust(work_dir)
         self.assertFalse(is_ok_quote, f"Modificação de arquivo com aspas deve invalidar trust: {reason_quote}")
         self.assertIn("Confiança invalidada", reason_quote)
+
+    def test_tn_53_canonical_git_state_serialization_prevents_collisions(self) -> None:
+        """TN-53 (R6-01): Serialização canônica estruturada elimina colisões de estado Git e invalida trust."""
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        proj_root = Path(tmp_dir.name).resolve()
+        create_project("proj_tn53", proj_root, "python")
+        work_dir = proj_root / "proj_tn53"
+
+        subprocess.run(["git", "-C", str(work_dir), "init", "-b", "main"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        # Prepara dois arquivos com o mesmo conteúdo
+        (work_dir / "a.py").write_text("print('shared_code')\n", encoding="utf-8")
+        (work_dir / "a.py->b").write_text("print('shared_code')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(work_dir), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "commit", "-m", "init"], check=True, capture_output=True)
+
+        # Estado 1: renomear 'a.py' para 'b->c.py'
+        # No formato anterior (f"{status}:{orig}->{target}:{hash}"), produzia: "R :a.py->b->c.py:<hash>"
+        subprocess.run(["git", "-C", str(work_dir), "mv", "a.py", "b->c.py"], check=True, capture_output=True)
+        fp1 = get_git_state(work_dir)
+        grant_trust(work_dir, declaration="trust_state_1")
+        is_ok1, reason1 = check_trust(work_dir)
+        self.assertTrue(is_ok1, f"Estado 1 deve ser válido: {reason1}")
+
+        # Demonstração da fórmula antiga:
+        # Estado 1: orig="a.py", target="b->c.py" -> "a.py->b->c.py"
+        # Estado 2: orig="a.py->b", target="c.py" -> "a.py->b->c.py"
+        old_format_1 = f"R :{'a.py'}->{'b->c.py'}:dummy_hash"
+        old_format_2 = f"R :{'a.py->b'}->{'c.py'}:dummy_hash"
+        self.assertEqual(old_format_1, old_format_2, "Demonstração de colisão no formato anterior")
+
+        # Muda para Estado 2: reseta e renomeia 'a.py->b' para 'c.py'
+        subprocess.run(["git", "-C", str(work_dir), "reset", "--hard", "HEAD"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "mv", "a.py->b", "c.py"], check=True, capture_output=True)
+        fp2 = get_git_state(work_dir)
+
+        # Com serialização canônica estruturada, fingerprints DEVEM ser diferentes
+        self.assertNotEqual(fp1, fp2, "Serialização canônica estruturada deve produzir fingerprints diferentes")
+
+        # Confirma que a mudança para o Estado 2 invalida check_trust()
+        is_ok2, reason2 = check_trust(work_dir)
+        self.assertFalse(is_ok2, "Transição para o Estado 2 deve invalidar o trust concedido no Estado 1")
+        self.assertIn("Confiança invalidada", reason2)
+
+        # Validação adicional com nomes contendo ':', '->'
+        (work_dir / "mod:colon.py").write_text("print('colon')\n", encoding="utf-8")
+        fp_colon = get_git_state(work_dir)
+        self.assertNotEqual(fp2, fp_colon)
 
 
 if __name__ == "__main__":
