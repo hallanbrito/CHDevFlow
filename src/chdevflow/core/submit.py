@@ -146,7 +146,8 @@ def validate_and_submit(
                 "O modo --no-verify permanece BLOQUEADO."
             )
     else:
-        ev = run_verification(target, fail_fast=True)
+        # Execução estrita de verificação sem concessão automática de confiança (trust=False)
+        ev = run_verification(target, fail_fast=True, trust=False)
         verify_state = ev.overall_state
         if ev.overall_state != "PASS":
             raise SubmitError(

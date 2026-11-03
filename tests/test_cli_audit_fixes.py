@@ -34,6 +34,7 @@ from chdevflow.core.evidence import (
 )
 from chdevflow.core.init import run_init
 from chdevflow.core.tree import generate as generate_tree
+from chdevflow.core.trust import grant_trust
 from chdevflow.core.project import create_project, validate_project_name
 from chdevflow.core.ruc import generate_ruc_text
 from chdevflow.core.submit import (
@@ -182,14 +183,19 @@ class TestCliAuditFixes(unittest.TestCase):
         subprocess.run(["git", "-C", str(target), "init", "-b", "agy/test-nondraft"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.name", "Tester"], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+        run_init(target, apply=True)
+        generate_tree(target)
         manifest = create_manifest_data("NonDraftRepo")
         manifest["verification"]["commands"] = ["echo 'ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
+        (target / ".gitignore").write_text(".ch/\n", encoding="utf-8")
         (target / "committed.txt").write_text("clean", encoding="utf-8")
         subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "commit", "-m", "initial"], check=True, capture_output=True)
+        grant_trust(target)
 
         # Mock gh auth status OK e gh pr view retornando isDraft = False
+        orig_run = subprocess.run
         with patch("subprocess.run") as mock_run:
             def custom_run(cmd, *args, **kwargs):
                 cmd_str = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
@@ -199,12 +205,12 @@ class TestCliAuditFixes(unittest.TestCase):
                     return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
                 if "git status --porcelain" in cmd_str:
                     return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-                if "git push" in cmd_str:
+                if "git" in cmd_str and "push" in cmd_str:
                     return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
                 if "gh pr view" in cmd_str:
                     # Retorna PR existente que NÃO é draft
                     return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"url": "https://github.com/pr/1", "isDraft": False, "state": "OPEN"}), stderr="")
-                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+                return orig_run(cmd, *args, **kwargs)
 
             mock_run.side_effect = custom_run
             with self.assertRaises(SubmitSecurityError) as cm:
@@ -294,12 +300,13 @@ class TestCliAuditFixes(unittest.TestCase):
         manifest["verification"]["commands"] = ["echo 'verify ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
 
-        (target / ".gitignore").write_text(".ch/evidence/\n", encoding="utf-8")
+        (target / ".gitignore").write_text(".ch/\n", encoding="utf-8")
         (target / "app.py").write_text("print('feature!')\n", encoding="utf-8")
 
         # Commita tudo: árvore de trabalho fica 100% LIMPA
         subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "commit", "-m", "feat: implementacao inicial"], check=True, capture_output=True)
+        grant_trust(target)
 
         # Mocks para comandos remotos e simulação de 1 commit à frente
         executed_calls: list[str] = []
@@ -375,11 +382,12 @@ class TestCliAuditFixes(unittest.TestCase):
         manifest = create_manifest_data("NewPrRepo")
         manifest["verification"]["commands"] = ["echo 'ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
-        (target / ".gitignore").write_text(".ch/evidence/\n", encoding="utf-8")
+        (target / ".gitignore").write_text(".ch/\n", encoding="utf-8")
         (target / "code.py").write_text("x = 1\n", encoding="utf-8")
 
         subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "commit", "-m", "feat: initial commit"], check=True, capture_output=True)
+        grant_trust(target)
 
         executed_calls: list[str] = []
         captured_body: list[str] = []
@@ -592,11 +600,12 @@ class TestCliAuditFixes(unittest.TestCase):
         manifest = create_manifest_data("ExistingRichPrRepo")
         manifest["verification"]["commands"] = ["echo 'ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
-        (target / ".gitignore").write_text(".ch/evidence/\n", encoding="utf-8")
+        (target / ".gitignore").write_text(".ch/\n", encoding="utf-8")
         (target / "app.py").write_text("print(1)\n", encoding="utf-8")
 
         subprocess.run(["git", "-C", str(target), "add", "."], check=True, capture_output=True)
         subprocess.run(["git", "-C", str(target), "commit", "-m", "initial commit"], check=True, capture_output=True)
+        grant_trust(target)
 
         existing_pr_body = (
             "## Resumo da Entrega\n\n"

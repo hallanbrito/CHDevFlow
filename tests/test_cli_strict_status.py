@@ -278,7 +278,7 @@ class TestCliStrictStatus(unittest.TestCase):
         base = Path(self.test_dir)
         proj = create_project("RealCmdApp", base_dir=base)
         manifest = load_manifest(proj / "chdevflow.yaml")
-        manifest["verification"]["commands"] = ["python3 -c 'import sys; sys.exit(0)'"]
+        manifest["verification"]["commands"] = ["echo 'simulado ok'"]
         save_manifest(proj / "chdevflow.yaml", manifest)
 
         # Remove AGENTS.md
@@ -298,7 +298,7 @@ class TestCliStrictStatus(unittest.TestCase):
         manifest["verification"]["commands"] = ["echo 'custom build ok'", "echo 'custom test ok'"]
         save_manifest(proj / "chdevflow.yaml", manifest)
 
-        ev = run_verification(proj, persist=False)
+        ev = run_verification(proj, persist=False, trust=True)
         self.assertEqual(ev.overall_state, "PASS")
         self.assertEqual(len(ev.commands), 3)
         self.assertEqual(ev.commands[0].command, "ch status --strict")
@@ -308,7 +308,7 @@ class TestCliStrictStatus(unittest.TestCase):
 
         buf = io.StringIO()
         with patch("sys.stdout", buf):
-            code = cli_main(["verify", "--path", str(proj)])
+            code = cli_main(["verify", "--path", str(proj), "--trust"])
         self.assertEqual(code, 0)
         self.assertIn("PASS", buf.getvalue())
 
@@ -321,7 +321,7 @@ class TestCliStrictStatus(unittest.TestCase):
         manifest["verification"]["commands"] = ["ch status --strict", "echo 'teste ok'"]
         save_manifest(proj / "chdevflow.yaml", manifest)
 
-        ev = run_verification(proj, persist=False)
+        ev = run_verification(proj, persist=False, trust=True)
         self.assertEqual(ev.overall_state, "PASS")
         # Não deve haver duplicata de ch status --strict
         strict_cmds = [c for c in ev.commands if c.command == "ch status --strict"]

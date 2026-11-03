@@ -216,8 +216,25 @@ def validate_manifest(manifest: dict[str, Any]) -> list[str]:
 
     if "verification" not in manifest or not isinstance(manifest["verification"], dict):
         errors.append("Campo 'verification' deve ser um mapeamento.")
-    elif not isinstance(manifest["verification"].get("commands", []), list):
-        errors.append("Campo 'verification.commands' deve ser uma lista.")
+    else:
+        cmds = manifest["verification"].get("commands")
+        if not isinstance(cmds, list):
+            errors.append("Campo 'verification.commands' deve ser uma lista.")
+        else:
+            for i, cmd in enumerate(cmds):
+                if not isinstance(cmd, str):
+                    errors.append(f"Item {i} em 'verification.commands' deve ser uma string.")
+                elif not cmd.strip():
+                    errors.append(f"Item {i} em 'verification.commands' não pode ser vazio.")
+                else:
+                    cmd_str = cmd.strip()
+                    if "\n" in cmd_str or "\r" in cmd_str:
+                        errors.append(f"Item {i} em 'verification.commands' não pode conter quebra de linha.")
+                    for op in (";", "&&", "||", "|", "&", ">", "<", "$(", "`"):
+                        if op in cmd_str:
+                            errors.append(
+                                f"Item {i} em 'verification.commands' contém operador de shell proibido: '{op}'."
+                            )
 
     if "workflow" not in manifest or not isinstance(manifest["workflow"], dict):
         errors.append("Campo 'workflow' deve ser um mapeamento.")
@@ -239,7 +256,7 @@ def load_manifest(manifest_path: Path) -> dict[str, Any]:
 
 
 def save_manifest(manifest_path: Path, data: dict[str, Any]) -> None:
-    """Valida e grava o manifesto em chdevflow.yaml."""
+    """Valida e grava o manifesto em chdevflow.yaml sem concessão de confiança automática."""
     errors = validate_manifest(data)
     if errors:
         raise ManifestError("Não é possível salvar manifesto inválido: " + "; ".join(errors))

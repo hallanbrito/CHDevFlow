@@ -97,7 +97,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         manifest = create_manifest_data("RucApp")
         manifest["verification"]["commands"] = ["echo 'teste aprovado'"]
         save_manifest(target / "chdevflow.yaml", manifest)
-        run_verification(target, persist=True)
+        run_verification(target, persist=True, trust=True)
 
         dest2, content2 = generate_ruc(target)
         self.assertIn("APROVADO_TECNICAMENTE", content2)
@@ -149,6 +149,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
 
         # Modificação local para satisfazer dirty/changes
         (target / "README.md").write_text("# Repo Good", encoding="utf-8")
+        run_verification(target, trust=True)
 
         res = validate_and_submit(target, remote=False)
         self.assertEqual(res["branch"], "feature/sucesso")
@@ -171,6 +172,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         manifest["verification"]["commands"] = ["echo 'ok'"]
         save_manifest(target / "chdevflow.yaml", manifest)
         (target / "main.py").write_text("print(1)", encoding="utf-8")
+        run_verification(target, trust=True)
 
         # ch mission new
         buf = io.StringIO()

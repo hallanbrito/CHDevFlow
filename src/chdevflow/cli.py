@@ -172,6 +172,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Continua a execução dos checks subsequentes mesmo após falha.",
     )
+    parser_verify.add_argument(
+        "--trust",
+        action="store_true",
+        default=False,
+        help="Concede e registra manifestação explícita de consentimento para o estado atual do projeto.",
+    )
+    parser_verify.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=False,
+        help="Apenas valida e exibe os comandos planejados sem disparar processos.",
+    )
+    parser_verify.add_argument(
+        "--timeout",
+        type=float,
+        default=120.0,
+        help="Timeout máximo por comando de verificação em segundos (padrão: 120.0s).",
+    )
 
     # Subcomando: mission
     parser_mission = subparsers.add_parser(
@@ -376,7 +394,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "verify":
         try:
-            ev = run_verification(args.path, fail_fast=args.fail_fast)
+            ev = run_verification(
+                args.path,
+                fail_fast=args.fail_fast,
+                trust=getattr(args, "trust", False),
+                dry_run=getattr(args, "dry_run", False),
+                timeout_per_command=getattr(args, "timeout", 120.0),
+            )
             if args.json:
                 print(json.dumps(ev.to_dict(), indent=2, ensure_ascii=False))
             else:
