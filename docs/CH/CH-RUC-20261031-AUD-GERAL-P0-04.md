@@ -242,6 +242,7 @@ Criada suíte dedicada em `tests/test_verify_security_p04.py` cobrindo **62 cen�
   - **Run ID R2:** [41464641128](https://github.com/hallanbrito/CHDevFlow/actions/runs/41464641128) (SUCCESS)
   - **Run ID R3:** [41469711221](https://github.com/hallanbrito/CHDevFlow/actions/runs/41469711221) (SUCCESS)
   - **Run ID R4:** [41475958484](https://github.com/hallanbrito/CHDevFlow/actions/runs/41475958484) (SUCCESS)
+  - **Run ID R5:** [41555692622](https://github.com/hallanbrito/CHDevFlow/actions/runs/41555692622) (SUCCESS)
   - Cobriu integralmente: Compilação sintática de todos os componentes, testes de governança W1, testes da raiz CLI (`tests/`), testes do Sentinela (`apps/bootstrap/sentinela/tests/`) e testes do Control Center (`apps/control-center/tests/`).
 
 ---
