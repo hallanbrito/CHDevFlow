@@ -977,6 +977,91 @@ time.sleep(100)
                 self.assertFalse(is_ok, f"Alteração do script deve invalidar trust para variante {bin_variant}")
                 self.assertIn("Confiança invalidada", reason)
 
+    def test_tn_51_unicode_accented_paths_and_successive_modifications_invalidate_trust(self) -> None:
+        """TN-51 (R5-01): Arquivo Unicode acentuado não listado em TARGETS invalida trust em alterações sucessivas sob status M."""
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        proj_root = Path(tmp_dir.name).resolve()
+        create_project("proj_tn51", proj_root, "python")
+        work_dir = proj_root / "proj_tn51"
+
+        subprocess.run(["git", "-C", str(work_dir), "init", "-b", "main"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        m_path = work_dir / "chdevflow.yaml"
+        m_data = load_manifest(m_path)
+        m_data["verification"]["commands"] = ["echo 'default checks'"]
+        save_manifest(m_path, m_data)
+
+        # Arquivo de código com caracteres acentuados rastreado pelo Git, fora de TARGETS
+        accented_file = work_dir / "módulo_segurança.py"
+        accented_file.write_text("print('v1_base')\n", encoding="utf-8")
+
+        subprocess.run(["git", "-C", str(work_dir), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "commit", "-m", "init"], check=True, capture_output=True)
+
+        # 1ª modificação v1 -> v2 (status Git M módulo_segurança.py)
+        accented_file.write_text("print('v2_operador')\n", encoding="utf-8")
+        grant_trust(work_dir, declaration="trust_v2")
+        is_ok, reason = check_trust(work_dir)
+        self.assertTrue(is_ok, f"Trust com v2 deveria ser válido, obteve: {reason}")
+
+        # Alteração sucessiva de conteúdo v2 -> v3 sob o mesmo status Git M
+        accented_file.write_text("print('v3_malicioso_alterado')\n", encoding="utf-8")
+        is_ok_after, reason_after = check_trust(work_dir)
+        self.assertFalse(is_ok_after, "Alteração sucessiva em arquivo acentuado deve invalidar o trust")
+        self.assertIn("Confiança invalidada", reason_after)
+
+    def test_git_status_renames_and_special_characters_invalidate_trust(self) -> None:
+        """R5-01: Renomeações com acentos/espaços e arquivos com caracteres especiais invalidam trust adequadamente."""
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        proj_root = Path(tmp_dir.name).resolve()
+        create_project("proj_special", proj_root, "python")
+        work_dir = proj_root / "proj_special"
+
+        subprocess.run(["git", "-C", str(work_dir), "init", "-b", "main"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
+        # 1. Renomeação de arquivo de código com acentos e espaços
+        orig_file = work_dir / "origem_coração.py"
+        orig_file.write_text("print('orig')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(work_dir), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "commit", "-m", "init"], check=True, capture_output=True)
+
+        grant_trust(work_dir, declaration="trust_orig")
+        self.assertTrue(check_trust(work_dir)[0])
+
+        subprocess.run(["git", "-C", str(work_dir), "mv", "origem_coração.py", "dest_novo_ação com espaços.py"], check=True, capture_output=True)
+        is_ok, reason = check_trust(work_dir)
+        self.assertFalse(is_ok, f"Renomeação de código deve invalidar trust: {reason}")
+        self.assertIn("Confiança invalidada", reason)
+
+        # Concede novo trust no estado renomeado e altera o conteúdo do destino
+        grant_trust(work_dir, declaration="trust_renamed")
+        self.assertTrue(check_trust(work_dir)[0])
+
+        dest_file = work_dir / "dest_novo_ação com espaços.py"
+        dest_file.write_text("print('dest modificado')\n", encoding="utf-8")
+        is_ok_mod, reason_mod = check_trust(work_dir)
+        self.assertFalse(is_ok_mod, f"Modificação após renomeação deve invalidar trust: {reason_mod}")
+        self.assertIn("Confiança invalidada", reason_mod)
+
+        # 2. Arquivo com aspas no nome
+        quote_file = work_dir / 'script_"quote"_teste.py'
+        quote_file.write_text("print('quote v1')\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(work_dir), "add", "."], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(work_dir), "commit", "-m", "add quote file"], check=True, capture_output=True)
+        grant_trust(work_dir, declaration="trust_quote")
+        self.assertTrue(check_trust(work_dir)[0])
+
+        quote_file.write_text("print('quote v2 modificado')\n", encoding="utf-8")
+        is_ok_quote, reason_quote = check_trust(work_dir)
+        self.assertFalse(is_ok_quote, f"Modificação de arquivo com aspas deve invalidar trust: {reason_quote}")
+        self.assertIn("Confiança invalidada", reason_quote)
+
 
 if __name__ == "__main__":
     unittest.main()

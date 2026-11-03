@@ -237,7 +237,9 @@ def _is_relevant_for_trust(
 
 def get_git_state(project_root: Path) -> str:
     """
-    Captura o estado do Git local incluindo commit HEAD, modificações e novos arquivos untracked.
+    Captura o estado do Git local incluindo commit HEAD, modificações, renomeações e novos arquivos untracked.
+    Utiliza formato inequívoco NUL-terminado ('git status --porcelain=v1 -z -uall') para suporte completo
+    a nomes com caracteres Unicode/acentuação, espaços e caracteres especiais sem escape octal.
     Incorpora o hash de conteúdo de cada arquivo relevante para detectar alterações sucessivas
     mesmo quando o código de status do Git permanece idêntico.
     Falha fechado se houver erro ao ler arquivos ou executar git status.
@@ -251,35 +253,58 @@ def get_git_state(project_root: Path) -> str:
 
     try:
         proc_status = subprocess.run(
-            ["git", "-C", str(root), "status", "--porcelain=v1", "-uall"],
+            ["git", "-C", str(root), "status", "--porcelain=v1", "-z", "-uall"],
             capture_output=True,
-            text=True,
             check=False,
             timeout=10.0,
         )
         if proc_status.returncode != 0:
-            raise TrustIntegrityError(f"Falha ao executar 'git status': {proc_status.stderr.strip()}")
+            err_msg = proc_status.stderr.decode("utf-8", errors="replace").strip()
+            raise TrustIntegrityError(f"Falha ao executar 'git status': {err_msg}")
 
-        status_out = proc_status.stdout
+        raw_output = proc_status.stdout
+        tokens = raw_output.split(b"\x00")
+        if tokens and tokens[-1] == b"":
+            tokens.pop()
+
         relevant_entries: list[str] = []
-
-        for line in status_out.splitlines():
-            line_str = line.strip()
-            if not line_str:
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+            if not token:
+                i += 1
                 continue
-            status_code = line[:2]
-            content = line[3:].strip().strip('"')
-            target_path_str = content
-            if " -> " in content:
-                parts_path = content.split(" -> ")
-                target_path_str = parts_path[1].strip().strip('"')
 
-            if not _is_relevant_for_trust(target_path_str, project_root=root, explicit_targets=explicit_targets):
+            if len(token) < 3:
+                raise TrustIntegrityError(f"Entrada malformada no git status: {token!r}")
+
+            status_code = token[:2].decode("utf-8", errors="surrogateescape")
+            target_path_str = token[3:].decode("utf-8", errors="surrogateescape")
+            orig_path_str: str | None = None
+
+            if "R" in status_code or "C" in status_code:
+                i += 1
+                if i >= len(tokens):
+                    raise TrustIntegrityError(f"Caminho de origem ausente para renomeação/cópia com status '{status_code}'")
+                orig_path_str = tokens[i].decode("utf-8", errors="surrogateescape")
+
+            i += 1
+
+            is_relevant = _is_relevant_for_trust(target_path_str, project_root=root, explicit_targets=explicit_targets)
+            if orig_path_str and not is_relevant:
+                is_relevant = _is_relevant_for_trust(orig_path_str, project_root=root, explicit_targets=explicit_targets)
+
+            if not is_relevant:
                 continue
 
             file_path = (root / target_path_str).resolve()
             if not file_path.is_relative_to(root):
                 raise TrustIntegrityError(f"Arquivo relevante fora da raiz do projeto: {target_path_str}")
+
+            if orig_path_str:
+                orig_file_path = (root / orig_path_str).resolve()
+                if not orig_file_path.is_relative_to(root):
+                    raise TrustIntegrityError(f"Arquivo de origem fora da raiz do projeto: {orig_path_str}")
 
             if "D" in status_code:
                 content_hash = "DELETED"
@@ -290,7 +315,8 @@ def get_git_state(project_root: Path) -> str:
             else:
                 content_hash = "NON_REGULAR"
 
-            relevant_entries.append(f"{status_code}:{target_path_str}:{content_hash}")
+            entry_path = f"{orig_path_str}->{target_path_str}" if orig_path_str else target_path_str
+            relevant_entries.append(f"{status_code}:{entry_path}:{content_hash}")
 
         filtered_porcelain = "\n".join(sorted(relevant_entries))
 
