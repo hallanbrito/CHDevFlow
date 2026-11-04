@@ -5,11 +5,13 @@
 - Data inicial: 22/10/2026 (America/Fortaleza).
 - Executor declarado inicial: ChatGPT / Codex; revisão própria, sem alegação de auditoria independente.
 - Reauditoria técnica: 03/11/2026 por AGY (Antigravity), autonomia CH-2, autorizada pelo PO em 03/11/2026 ([PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31#issuecomment-6614342106) / [Issue #53](https://github.com/hallanbrito/CHDevFlow/issues/53#issuecomment-6614350576)).
+- Correção documental de CI: 04/11/2026 por AGY (Antigravity), Missão AGY-CC01-R2, autorizada pelo PO Hallan no parecer CH-AUD-CC01-R1.
 - Origem: teste manual acompanhado do PO Hallan no Control Center integrado pelo PR #30.
 - Baseline histórica da branch: `b192ebb6daa3798fce3620d56cfec44bc8d6b118`.
 - Baseline canônica de alinhamento (`main`): `a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`.
 - Branch: `chatgpt/cc01-correcao-leitura-live`.
 - HEAD inicial da reauditoria: `ffb38d74805594e60970b61944b60296a074c342`.
+- HEAD da reauditoria R1: `64456b63e394c42152fbe77b715ceeeb73a26920`.
 
 ## 2. Resumo executivo
 
@@ -22,6 +24,10 @@ Na reauditoria de 03/11/2026 (Missão AGY-CC01-R1), a leitura ao vivo contra o s
 atual do Project #2 foi retestada em modo estritamente somente leitura, comprovando
 26 itens recebidos, 26 missões reconhecidas, 0 itens fora do filtro, 20 com etapa de conclusão observada,
 6 bloqueadas por dados insuficientes e 0 elegíveis (sem invenção de dependências fictícias).
+Na correção documental de 04/11/2026 (Missão AGY-CC01-R2), as evidências de CI remota foram
+atualizadas com base no parecer CH-AUD-CC01-R1, registrando a aprovação com sucesso do workflow
+`CHDevFlow CI Integral` (run 41711753771, 399 testes PASS no total), distinguindo os 212 testes
+locais históricos da suíte completa integrada no CI.
 
 ## 3. Consultas e atividades
 
@@ -30,6 +36,8 @@ offline com 17 itens sintéticos na estrutura informada pelo PO; correção da
 normalização, apresentação de dados insuficientes e aviso de falha de leitura.
 Reconciliação estrutural contra a `main` atual (`a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`)
 comprovando compatibilidade total (zero conflitos via `git merge-tree`).
+Verificação da execução remota do workflow `CHDevFlow CI Integral` no GitHub Actions
+(run 41711753771, job 126181306959) e coleta dos logs de execução de testes.
 Nenhum snapshot privado ou credencial do notebook foi copiado.
 
 ## 4. Evidências
@@ -62,11 +70,25 @@ Nenhum snapshot privado ou credencial do notebook foi copiado.
   - `test_server_security.py`: 4 testes aprovados.
 - Suíte da Sentinela Python (`apps/bootstrap/sentinela/tests/`): **67 testes PASS** (0.32s).
 - Suíte do repositório raiz (`tests/`): **77 testes PASS** (0.097s).
-- **Total consolidado de testes locais executados: 212 testes PASS.**
+- **Total consolidado de testes locais históricos da branch: 212 testes PASS** (execução isolada em 03/11/2026).
 
-### 4.4 NÃO_EXECUTADO / LIMITAÇÕES VERIFICADAS
-- `CI_NAO_VERIFICADA`: O workflow `.github/workflows/w1-checks.yml` restringe a execução por path (`scripts/**`, `tests/**`, `.github/workflows/**`). Como o PR #31 altera apenas `apps/control-center/` e `docs/`, a CI remota não dispara automaticamente. Em conformidade com a política, o workflow não foi alterado.
-- Captura de tela visual automatizada via navegador headless não pôde ser executada localmente devido à ausência de binário do navegador no ambiente.
+### 4.4 CI_INTEGRAL_GITHUB (Execução remota no GitHub Actions — 03/11/2026)
+- Workflow: `CHDevFlow CI Integral` (disparado via `pull_request` no HEAD `64456b63e394c42152fbe77b715ceeeb73a26920`).
+- Run ID: `41711753771` ([Acessar Run 41711753771](https://github.com/hallanbrito/CHDevFlow/actions/runs/41711753771)).
+- Job ID: `126181306959` (`python-checks`).
+- Resultado: `success` (concluído em 1m18s).
+- Testes executados no CI integral:
+  - Testes do repositório raiz (`tests/`): **262 PASS** (`Ran 262 tests in 41.087s`).
+  - Testes da Sentinela (`apps/bootstrap/sentinela/tests/`): **69 PASS** (`Ran 69 tests in 0.053s`).
+  - Testes do Control Center (`apps/control-center/tests/`): **68 PASS** (`68 passed in 0.47s`).
+  - **Total consolidado do CI integral: 399 testes PASS.**
+
+### 4.5 DISTINÇÃO METODOLÓGICA ENTRE SUÍTES DE TESTE
+- **212 testes locais históricos (Seção 4.3):** executados localmente em 03/11/2026 no ambiente isolado da branch `chatgpt/cc01-correcao-leitura-live` cobrindo o escopo restrito da fatia (77 raiz + 67 Sentinela + 68 Control Center).
+- **399 testes do CI integral (Seção 4.4):** executados remotamente pelo GitHub Actions no commit `64456b63e394c42152fbe77b715ceeeb73a26920`, validando a integração completa da branch contra a `main` canônica atualizada (262 raiz + 69 Sentinela + 68 Control Center).
+
+### 4.6 NÃO_EXECUTADO / LIMITAÇÕES VERIFICADAS
+- Captura de tela visual automatizada via navegador headless não pôde ser executada localmente devido à ausência de binário do navegador no ambiente (permanece dependente da validação visual humana nas capturas fornecidas pelo PO).
 
 ## 5. Alterações
 
@@ -84,6 +106,9 @@ Nenhum snapshot privado ou credencial do notebook foi copiado.
   no grafo demo: `namespace` preserva o resultado fora do laço.
 - Ignorar `*.egg-info/`, gerado pela instalação editável. Nenhum arquivo
   do notebook do PO foi removido ou alterado por esta execução.
+- Atualizar documentalmente o RUC para registrar as evidências de aprovação do workflow
+  remoto `CHDevFlow CI Integral` (run 41711753771, 399 testes PASS), removendo a alegação
+  desatualizada de `CI_NAO_VERIFICADA`.
 
 ## 6. Limitações e riscos
 
@@ -117,4 +142,5 @@ e iniciar novamente; nenhum dado remoto precisa ser restaurado.
 - **Estado:** `AGUARDANDO_AUDITORIA_CHATGPT / AGUARDANDO_PO / SEM_MERGE`.
 - Preparado para revisão em branch isolada / Draft PR #31. Sem merge.
 - Leitura real confirmada com 26 itens; zero conflitos com a `main` canônica (`a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`).
+- CI integral comprovado com resultado `success` (run 41711753771, job 126181306959, 399 testes PASS).
 - Nenhuma auto-homologação declarada. Decisão final de integração cabe exclusivamente ao PO Hallan.
