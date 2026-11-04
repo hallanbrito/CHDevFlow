@@ -16,3 +16,6 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Metadados gerados pela instalação editável (uv pip install -e)
+*.egg-info/
