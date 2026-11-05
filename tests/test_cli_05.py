@@ -20,9 +20,12 @@ from chdevflow.core.config import create_manifest_data, save_manifest
 from chdevflow.core.evidence import run_verification
 from chdevflow.core.init import run_init
 from chdevflow.core.tree import generate as generate_tree
-from chdevflow.core.mission import create_mission, generate_mission_markdown, slugify
+from chdevflow.core.mission import MissionError, create_mission, generate_mission_markdown, slugify
 from chdevflow.core.ruc import generate_ruc, generate_ruc_text
 from chdevflow.core.submit import SubmitError, SubmitSecurityError, validate_and_submit
+
+
+_ORIG_SUBPROCESS_RUN = subprocess.run
 
 
 class TestCli05MissionRucSubmit(unittest.TestCase):
@@ -71,6 +74,11 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         self.assertIn("AGUARDANDO_PO", md)
         self.assertIn("PENDENTE DE AUTORIZAÇÃO HUMANA FORMAL", md)
 
+    def _init_git_repo(self, path: Path) -> None:
+        subprocess.run(["git", "-C", str(path), "init", "-b", "main"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(path), "config", "user.name", "Tester"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(path), "config", "user.email", "tester@example.com"], check=True, capture_output=True)
+
     def test_create_mission_local(self) -> None:
         target = Path(self.test_dir) / "LocalApp"
         target.mkdir()
@@ -79,6 +87,215 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         self.assertIsNotNone(mission_file)
         self.assertTrue(mission_file.exists())
         self.assertIn("MISSAO-REFATORAR-BANCO.md", mission_file.name)
+        self.assertIn("Fatia W gerada localmente em:", msg)
+        self.assertNotIn("Issue remota criada", msg)
+
+    def test_create_mission_local_cli(self) -> None:
+        target = Path(self.test_dir) / "LocalAppCli"
+        target.mkdir()
+
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = cli_main(["mission", "new", "Nova Tarefa Local", "--path", str(target)])
+        self.assertEqual(code, 0)
+        out = buf.getvalue()
+        self.assertIn("Fatia W gerada localmente em:", out)
+        self.assertNotIn("Issue remota criada", out)
+        expected_file = target / "prompts" / "MISSAO-NOVA-TAREFA-LOCAL.md"
+        self.assertTrue(expected_file.exists())
+
+    def test_create_mission_remote_success_mocked(self) -> None:
+        target = Path(self.test_dir) / "RemoteAppSuccess"
+        target.mkdir()
+        self._init_git_repo(target)
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == "gh":
+                if cmd[1:3] == ["auth", "status"]:
+                    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="Logged in to github.com\n", stderr="")
+                if cmd[1:3] == ["issue", "create"]:
+                    return subprocess.CompletedProcess(
+                        args=cmd,
+                        returncode=0,
+                        stdout="https://github.com/hallanbrito/CHDevFlow/issues/99\n",
+                        stderr="",
+                    )
+            return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run):
+            mission_file, msg = create_mission("Tarefa Remota OK", project_path=target, remote=True)
+            self.assertIsNotNone(mission_file)
+            self.assertTrue(mission_file.exists())
+            self.assertIn("MISSAO-TAREFA-REMOTA-OK.md", mission_file.name)
+            self.assertIn("Issue remota criada: https://github.com/hallanbrito/CHDevFlow/issues/99", msg)
+
+        # Também testa execução via CLI com retorno 0
+        buf_out = io.StringIO()
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), patch("sys.stdout", buf_out):
+            code = cli_main(["mission", "new", "Tarefa Remota OK CLI", "--path", str(target), "--remote"])
+        self.assertEqual(code, 0)
+        self.assertIn("Issue remota criada: https://github.com/hallanbrito/CHDevFlow/issues/99", buf_out.getvalue())
+
+    def test_create_mission_remote_auth_failure(self) -> None:
+        target = Path(self.test_dir) / "RemoteAppAuthFail"
+        target.mkdir()
+        self._init_git_repo(target)
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == "gh":
+                if cmd[1:3] == ["auth", "status"]:
+                    return subprocess.CompletedProcess(
+                        args=cmd,
+                        returncode=1,
+                        stdout="",
+                        stderr="You are not logged into any GitHub hosts. Run gh auth login to authenticate.",
+                    )
+            return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run):
+            with self.assertRaises(MissionError) as cm:
+                create_mission("Tarefa Auth Fail", project_path=target, remote=True)
+            err_msg = str(cm.exception)
+            self.assertIn("GitHub CLI (gh) não está autenticado", err_msg)
+            self.assertIn("Execute 'gh auth login' primeiro", err_msg)
+            self.assertIn("O artefato local foi criado em:", err_msg)
+
+        # O artefato local DEVE ter sido preservado
+        local_file = target / "prompts" / "MISSAO-TAREFA-AUTH-FAIL.md"
+        self.assertTrue(local_file.exists(), "Artefato local deve existir mesmo após falha de autenticação")
+
+        # Via CLI: deve retornar exit code 1 e mensagem de erro em stderr (nunca falso PASS)
+        buf_out = io.StringIO()
+        buf_err = io.StringIO()
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
+             patch("sys.stdout", buf_out), \
+             patch("sys.stderr", buf_err):
+            code = cli_main(["mission", "new", "Tarefa Auth Fail CLI", "--path", str(target), "--remote"])
+        self.assertEqual(code, 1)
+        self.assertIn("Erro em 'ch mission': GitHub CLI (gh) não está autenticado", buf_err.getvalue())
+        self.assertNotIn("Issue remota criada", buf_out.getvalue())
+
+    def test_create_mission_remote_issue_create_failure(self) -> None:
+        target = Path(self.test_dir) / "RemoteAppCreateFail"
+        target.mkdir()
+        self._init_git_repo(target)
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == "gh":
+                if cmd[1:3] == ["auth", "status"]:
+                    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+                if cmd[1:3] == ["issue", "create"]:
+                    return subprocess.CompletedProcess(
+                        args=cmd,
+                        returncode=1,
+                        stdout="",
+                        stderr="GraphQL: Resource not accessible by integration (HTTP 403)",
+                    )
+            return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run):
+            with self.assertRaises(MissionError) as cm:
+                create_mission("Tarefa Create Fail", project_path=target, remote=True)
+            err_msg = str(cm.exception)
+            self.assertIn("Falha ao criar Issue remota no GitHub", err_msg)
+            self.assertIn("GraphQL: Resource not accessible by integration (HTTP 403)", err_msg)
+            self.assertIn("O artefato local foi criado em:", err_msg)
+
+        # O artefato local DEVE ter sido preservado
+        local_file = target / "prompts" / "MISSAO-TAREFA-CREATE-FAIL.md"
+        self.assertTrue(local_file.exists(), "Artefato local deve existir mesmo após falha na criação remota")
+
+        # Via CLI: deve retornar exit code 1 e mensagem em stderr (elimina falso PASS)
+        buf_out = io.StringIO()
+        buf_err = io.StringIO()
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
+             patch("sys.stdout", buf_out), \
+             patch("sys.stderr", buf_err):
+            code = cli_main(["mission", "new", "Tarefa Create Fail CLI", "--path", str(target), "--remote"])
+        self.assertEqual(code, 1, "CLI deve falhar com exit code 1 quando gh issue create falhar")
+        self.assertIn("Erro em 'ch mission': Falha ao criar Issue remota no GitHub", buf_err.getvalue())
+        self.assertNotIn("Issue remota criada", buf_out.getvalue())
+
+    def test_create_mission_remote_issue_create_sanitizes_secret(self) -> None:
+        target = Path(self.test_dir) / "RemoteAppSanitize"
+        target.mkdir()
+        self._init_git_repo(target)
+
+        leaked_token = "ghp_supersecretleak123456789012345678901234567"
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == "gh":
+                if cmd[1:3] == ["auth", "status"]:
+                    return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
+                if cmd[1:3] == ["issue", "create"]:
+                    return subprocess.CompletedProcess(
+                        args=cmd,
+                        returncode=1,
+                        stdout="",
+                        stderr=f"HTTP 401: Bad credentials (token: {leaked_token})",
+                    )
+            return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run):
+            with self.assertRaises(MissionError) as cm:
+                create_mission("Tarefa Leak", project_path=target, remote=True)
+            err_msg = str(cm.exception)
+            self.assertNotIn(leaked_token, err_msg)
+            self.assertIn("[REDACTED_TOKEN]", err_msg)
+
+        # Via CLI: valida que stderr nunca exibe o token vazado
+        buf_out = io.StringIO()
+        buf_err = io.StringIO()
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
+             patch("sys.stdout", buf_out), \
+             patch("sys.stderr", buf_err):
+            code = cli_main(["mission", "new", "Tarefa Leak CLI", "--path", str(target), "--remote"])
+        self.assertEqual(code, 1)
+        self.assertNotIn(leaked_token, buf_err.getvalue())
+        self.assertIn("[REDACTED_TOKEN]", buf_err.getvalue())
+
+    def test_create_mission_remote_not_git_repository(self) -> None:
+        target = Path(self.test_dir) / "RemoteAppNoGit"
+        target.mkdir()
+
+        with self.assertRaises(MissionError) as cm:
+            create_mission("Tarefa Sem Git", project_path=target, remote=True)
+        err_msg = str(cm.exception)
+        self.assertIn("Não é possível criar Issue remota fora de um repositório Git", err_msg)
+        self.assertIn("O artefato local foi criado em:", err_msg)
+
+        local_file = target / "prompts" / "MISSAO-TAREFA-SEM-GIT.md"
+        self.assertTrue(local_file.exists())
+
+        # Via CLI
+        buf_err = io.StringIO()
+        with patch("sys.stderr", buf_err):
+            code = cli_main(["mission", "new", "Tarefa Sem Git CLI", "--path", str(target), "--remote"])
+        self.assertEqual(code, 1)
+        self.assertIn("Não é possível criar Issue remota fora de um repositório Git", buf_err.getvalue())
+
+    def test_create_mission_remote_gh_not_found(self) -> None:
+        target = Path(self.test_dir) / "RemoteAppGhNotFound"
+        target.mkdir()
+        self._init_git_repo(target)
+
+        def fake_subprocess_run(cmd, *args, **kwargs):
+            if cmd[0] == "gh":
+                raise FileNotFoundError("gh not found")
+            return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run):
+            with self.assertRaises(MissionError) as cm:
+                create_mission("Tarefa Gh Not Found", project_path=target, remote=True)
+            err_msg = str(cm.exception)
+            self.assertIn("GitHub CLI (gh) não foi encontrado no PATH", err_msg)
+            self.assertIn("O artefato local foi criado em:", err_msg)
+
+        buf_err = io.StringIO()
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
+             patch("sys.stderr", buf_err):
+            code = cli_main(["mission", "new", "Tarefa Gh Not Found CLI", "--path", str(target), "--remote"])
+        self.assertEqual(code, 1)
+        self.assertIn("GitHub CLI (gh) não foi encontrado no PATH", buf_err.getvalue())
 
     def test_generate_ruc_without_and_with_evidence(self) -> None:
         target = Path(self.test_dir) / "RucApp"

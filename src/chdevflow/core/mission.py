@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 
+from chdevflow.adapters.base import sanitize_output
 from chdevflow.core.status import check_git_status
 
 
@@ -106,11 +107,26 @@ def create_mission(
     remote_msg = ""
     if remote:
         if not git_info["is_git"]:
-            raise MissionError("Não é possível criar Issue remota fora de um repositório Git.")
+            raise MissionError(
+                f"Não é possível criar Issue remota fora de um repositório Git. "
+                f"O artefato local foi criado em: {mission_file}"
+            )
 
-        gh_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=False)
+        try:
+            gh_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            raise MissionError(
+                f"GitHub CLI (gh) não foi encontrado no PATH. "
+                f"O artefato local foi criado em: {mission_file}"
+            )
+
         if gh_check.returncode != 0:
-            raise MissionError("GitHub CLI (gh) não está autenticado. Execute 'gh auth login' primeiro.")
+            err_output = sanitize_output((gh_check.stderr or gh_check.stdout or "").strip())
+            detail = f": {err_output}" if err_output else ""
+            raise MissionError(
+                f"GitHub CLI (gh) não está autenticado{detail}. Execute 'gh auth login' primeiro. "
+                f"O artefato local foi criado em: {mission_file}"
+            )
 
         # Cria a Issue remota via gh
         cmd = [
@@ -119,11 +135,23 @@ def create_mission(
             "--body", content,
             "--label", "ch:workflow",
         ]
-        res = subprocess.run(cmd, cwd=str(target), capture_output=True, text=True, check=False)
+        try:
+            res = subprocess.run(cmd, cwd=str(target), capture_output=True, text=True, check=False)
+        except FileNotFoundError:
+            raise MissionError(
+                f"GitHub CLI (gh) não foi encontrado no PATH. "
+                f"O artefato local foi criado em: {mission_file}"
+            )
+
         if res.returncode == 0:
             remote_url = res.stdout.strip()
             remote_msg = f" | Issue remota criada: {remote_url}"
         else:
-            remote_msg = f" | Falha ao criar Issue remota: {res.stderr.strip()}"
+            raw_err = (res.stderr or res.stdout or "").strip()
+            clean_err = sanitize_output(raw_err) or "Erro desconhecido ao executar 'gh issue create'"
+            raise MissionError(
+                f"Falha ao criar Issue remota no GitHub: {clean_err}. "
+                f"O artefato local foi criado em: {mission_file}"
+            )
 
     return mission_file, f"Fatia W gerada localmente em: {mission_file}{remote_msg}"
