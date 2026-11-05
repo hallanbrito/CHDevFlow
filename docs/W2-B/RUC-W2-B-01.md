@@ -2,7 +2,7 @@
 
 > Formato documental do CHDevFlow; este relatório é parecer do executor, não auditoria independente nem aceite do PO.
 
-**Cabeçalho:** missão/Issue: [#56](https://github.com/hallanbrito/CHDevFlow/issues/56) | executor declarado: Codex | coordenação/PO: Hallan | autonomia e prova: CH-2 delimitada pelo [gate do PO na #6](https://github.com/hallanbrito/CHDevFlow/issues/6#issuecomment-6666762269) e pela #56 | ambiente: cópia Git isolada `/tmp/chdevflow-w2b-56`, Linux | fontes: `LIVE_GITHUB` + `LOCAL_REPO` | timestamp: 2026-11-05 19:19:08 UTC | run_id: NÃO_APLICÁVEL (produto não iniciou run real) | baseline: `ffadabed95a3d4d55284135c574e741f9c9bd61b`, branch `codex/w2b-dispatcher-dryrun`, [Draft PR #57](https://github.com/hallanbrito/CHDevFlow/pull/57) | resultado técnico: **PARCIAL** até CI e auditoria independente.
+**Cabeçalho:** missão/Issue: [#56](https://github.com/hallanbrito/CHDevFlow/issues/56) | executor declarado: Codex | coordenação/PO: Hallan | autonomia e prova: CH-2 delimitada pelo [gate do PO na #6](https://github.com/hallanbrito/CHDevFlow/issues/6#issuecomment-6666762269) e pela #56 | ambiente: cópia Git isolada `/tmp/chdevflow-w2b-56`, Linux | fontes: `LIVE_GITHUB` + `LOCAL_REPO` | registro inicial: 2026-11-05 19:19:08 UTC | run_id: NÃO_APLICÁVEL (produto não iniciou run real) | baseline: `ffadabed95a3d4d55284135c574e741f9c9bd61b`, branch `codex/w2b-dispatcher-dryrun`, [Draft PR #57](https://github.com/hallanbrito/CHDevFlow/pull/57) | resultado técnico: **PARCIAL** até auditoria independente.
 
 ## 1. Identificação
 
@@ -24,11 +24,12 @@ O módulo novo só produz prévia de simulação, reserva em memória e normaliz
 |---|---|---|---|
 | E01 | OBSERVADO | LIVE_GITHUB: Issues #56, #7 e comentário #6 citado | Gate CH-2 limitado à implementação W2-B; D01–D07 ratificadas. |
 | E02 | OBSERVADO | LIVE_GITHUB: comparação `185d3df..ffadabe` e blobs dos dois arquivos | Base remota reconciliada por conteúdo; nenhum commit foi escrito na `main`. |
-| E03 | OBSERVADO | LOCAL_REPO: `/tmp/chdevflow-w2b-root-tests-offline.log` | Suíte raiz terminou `Ran 285 tests`, `OK (skipped=1)` com cache `uv` em `/tmp` e `UV_OFFLINE=1`. |
+| E03 | OBSERVADO | LOCAL_REPO: `/tmp/chdevflow-w2b-root-tests-offline.log` e `/tmp/chdevflow-w2b-root-tests-final.log` | Suíte raiz terminou `Ran 285 tests`, `OK (skipped=1)` nas duas rodadas offline; a segunda foi após a última alteração de código. |
 | E04 | OBSERVADO | LOCAL_REPO: execução da suíte Sentinela | `Ran 69 tests`, `OK`. |
 | E05 | OBSERVADO | LOCAL_REPO: testes W2-B e código | 16 casos W2-B passaram; interceptação de `subprocess.run`, `Popen` e `socket.socket` não detectou chamada pelo simulador. Prova limitada ao caminho testado. |
 | E06 | OBSERVADO | LIVE_GITHUB: Draft PR #57 | PR draft aberto sobre `main`, branch `codex/w2b-dispatcher-dryrun`, sem merge. |
 | E07 | NÃO_VERIFICADO | Sessão/licença do host | Custo incremental da sessão Codex e de futuros agentes não foi medido/comprovado aqui; o produto não faz chamadas a modelos. |
+| E08 | OBSERVADO | [CI Integral run 42093052181](https://github.com/hallanbrito/CHDevFlow/actions/runs/42093052181), HEAD `86a8808ba46c762be4d3af9c6e6b8512a8e75242` | Workflow `completed/success`; job `python-checks` e as três etapas de testes concluíram com `success`. Este registro documental cria HEAD posterior, sujeito à própria CI. |
 
 ## 5. Verificações e resultados
 
@@ -43,7 +44,8 @@ O módulo novo só produz prévia de simulação, reserva em memória e normaliz
 | Sentinela | `PYTHONPATH=src:apps/bootstrap/sentinela/src python3 -m unittest discover -s apps/bootstrap/sentinela/tests -v` | PASSOU | E04; 69 testes |
 | Sintaxe e prévia W1 | `python3 -m compileall -q src scripts apps`; `python3 scripts/w1_github_project.py` | PASSOU | saída local; prévia sem ações remotas |
 | Control Center local | `python3 -m pytest apps/control-center/tests -q` | NÃO_EXECUTADO | `No module named pytest`; sem instalação no host |
-| CI Integral da PR | Workflow `CHDevFlow CI Integral` | NÃO_EXECUTADO | Pendente de resultado no HEAD final da PR no momento deste RUC |
+| CI Integral da implementação | Workflow `CHDevFlow CI Integral` no HEAD `86a8808` | PASSOU | E08; run 42093052181 |
+| CI do commit documental final | Workflow no HEAD que inclui esta atualização do RUC | NÃO_EXECUTADO | A verificar depois da publicação deste relatório |
 | Agentes reais, custo operacional e GitHub Project #2 | Execução/alteração fora do escopo | NÃO_APLICÁVEL | Nenhum agente real despachado pelo produto; custo real NÃO_VERIFICADO |
 
 Na primeira rodada da suíte raiz, dois testes de wheel falharam porque `uv` tentou escrever em `/home/hallan/.cache/uv`, somente leitura no sandbox. O cache foi copiado para `/tmp` e a suíte inteira foi repetida offline com `OK`. O log da primeira rodada permanece em `/tmp/chdevflow-w2b-root-tests.log`; não é uma falha de código concluída como PASS sem reteste.
@@ -52,7 +54,7 @@ Na primeira rodada da suíte raiz, dois testes de wheel falharam porque `uv` ten
 
 - Autorização GitHub autenticada, identidade do PO, licença e custo adicional R$ 0 **não são implementados nem verificados** no produto. A fixture serve apenas à simulação.
 - Reserva em memória não é lock atômico entre processos nem persiste após crash. Um adaptador operacional futuro requer nova Fatia e novo gate.
-- O teste local de Control Center não rodou por falta de `pytest`; a CI deve cobrir a suíte antes de decisão de integração.
+- O teste local de Control Center não rodou por falta de `pytest`; a CI do HEAD de implementação cobriu a suíte (E08). Confirmar também a CI do HEAD documental final.
 - Sanitização cobre padrões conhecidos; saída não confiável precisa de revisão antes de publicação fora da fixture.
 
 ## 7. Alterações realizadas
@@ -66,7 +68,7 @@ Publicação: branch e Draft PR #57. Nenhum merge, deploy, release, mudança em 
 
 ## 8. Recomendação técnica
 
-**PARCIAL** no momento do registro: os testes offline executados passaram, mas a CI e a auditoria independente ainda precisam ser conferidas. Recomendo revisão do diff e dos limites antes de qualquer decisão de integração. Não recomendo habilitar execução real neste gate.
+**PARCIAL** no momento do registro: testes offline e CI do HEAD de implementação passaram; a CI do commit documental final e a auditoria independente ainda precisam ser conferidas. Recomendo revisão do diff e dos limites antes de qualquer decisão de integração. Não recomendo habilitar execução real neste gate.
 
 ## 9. Decisão necessária do PO
 
