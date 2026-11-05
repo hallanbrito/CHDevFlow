@@ -22,6 +22,8 @@ _LIMITES = {"max_parallel": 1, "timeout_seconds": 900,
             "max_retries_after_diagnosis": 1, "extra_cost_brl": 0}
 _RECUSA = re.compile(r"permission denied|access denied|permiss[aã]o negada|not authorized|unauthorized", re.I)
 _ERRO = re.compile(r"\berror\b|\bfatal\b|\bfailed\b|\berro\b|\bfalhou\b", re.I)
+_INJECAO = re.compile(r"ignore (?:as |the )?(?:regras|instru[cç][oõ]es|policy|rules)|"
+                     r"bypass (?:sandbox|policy|rules)|(?:publique|print|expose) (?:o )?token", re.I)
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class FakeAdapter:
         completed = False
         refused = False
         erro_evento = False
+        injection = False
         for line in trace.stdout:
             try:
                 data = json.loads(line)
@@ -75,6 +78,7 @@ class FakeAdapter:
                 events.append({"type": _limpar(kind), "message": mensagem})
                 completed |= kind == self.completion_type and data.get("is_error") is not True
                 refused |= bool(_RECUSA.search(line))
+                injection |= bool(_INJECAO.search(mensagem))
                 erro_evento |= (kind in {"error", "turn.failed"} or data.get("is_error") is True
                                 or bool(_ERRO.search(mensagem)))
             except (TypeError, ValueError, json.JSONDecodeError):
@@ -92,6 +96,8 @@ class FakeAdapter:
             status, reason = "TIMED_OUT", "Limite simulado de 900 segundos excedido"
         elif refused:
             status, reason = "BLOCKED", "Permissão negada na saída simulada"
+        elif injection:
+            status, reason = "BLOCKED", "Instrução maliciosa na saída simulada"
         elif malformed:
             status, reason = "BLOCKED", "JSONL inválido ou parcial"
         elif trace.stderr or erro_evento or trace.exit_code != 0 or not completed:
