@@ -18,7 +18,7 @@ for source in (ROOT / "src", ROOT / "apps/bootstrap/sentinela/src"):
 
 from ch_sentinela.contracts import ContratoAutorizacao, validar_contrato_missao
 from chdevflow.core.dry_run_dispatcher import (
-    AgyPrintFake, CodexExecFake, DryRunDispatcher, FixtureTrace,
+    AgyPrintFake, CodexExecFake, DryRunDispatcher, DryRunReport, FixtureTrace,
 )
 
 SHA = "a" * 40
@@ -45,12 +45,13 @@ class DispatcherTests(unittest.TestCase):
 
     def make_approval(self) -> ContratoAutorizacao:
         mission = validar_contrato_missao(self.payload)
+        issue = str(self.payload["source"]["issue"])
         return ContratoAutorizacao(
-            approval_type="CH2_RUN_APPROVAL", issue_ref="56",
+            approval_type="CH2_RUN_APPROVAL", issue_ref=issue,
             mission_digest=mission.mission_digest, baseline_sha=SHA,
             authorized_executor=self.payload["worker"],
             authorized_repo="hallanbrito/CHDevFlow", approved_by="hallanbrito",
-            approved_at="2026-11-05T00:00:00Z", event_id="fixture:56:1",
+            approved_at="2026-11-05T00:00:00Z", event_id=f"fixture:{issue}:1",
             is_simulation=True,
         )
 
@@ -117,25 +118,86 @@ class DispatcherTests(unittest.TestCase):
         self.dispatcher.cancel_simulation(key)
         self.assertEqual(self.dispatcher.reserve_simulation(report, "56"), key)
 
-    def test_concorrencia_simultanea_reserva_uma(self):
+    def test_r1_relatorio_fabricado_copia_ou_outra_instancia(self):
         report = self.preview()
+        forged = DryRunReport("DRY_RUN_ELIGIBLE", report.reason, report.mission_digest,
+                              report.executor, report.plan)
+        for rejected in (forged, replace(report)):
+            with self.assertRaises(ValueError):
+                self.dispatcher.reserve_simulation(rejected, "56")
+        with self.assertRaises(ValueError):
+            DryRunDispatcher().reserve_simulation(report, "56")
+
+    def test_r1_issue_e_executor_adulterados(self):
+        report = self.preview()
+        with self.assertRaises(ValueError):
+            self.dispatcher.reserve_simulation(report, "57")
+        object.__setattr__(report, "executor", "agy_print")
+        with self.assertRaises(ValueError):
+            self.dispatcher.reserve_simulation(report, "56")
+
+    def test_r1_replay_com_nova_previa_ou_parametros_diferentes(self):
+        report = self.preview()
+        key = self.dispatcher.reserve_simulation(report, "56")
+        with self.assertRaises(ValueError):
+            self.dispatcher.reserve_simulation(self.preview(), "56")
+        with self.assertRaises(ValueError):
+            self.dispatcher.reserve_simulation(report, "56", diagnosis_ref="outro")
+        self.dispatcher.finish_simulation(key, FixtureTrace(stdout=(), crashed=True))
+        retry_key = self.dispatcher.reserve_simulation(report, "56", 2, "diag-a", True)
+        with self.assertRaises(ValueError):
+            self.dispatcher.reserve_simulation(report, "56", 2, "diag-b", True)
+        self.assertEqual(self.dispatcher.reserve_simulation(report, "56", 2, "diag-a", True), retry_key)
+
+    def test_concorrencia_simultanea_reserva_uma(self):
+        report56 = self.preview()
+        self.payload["source"]["issue"] = 57
+        self.approval = self.make_approval()
+        report57 = self.preview()
         barrier = Barrier(3)
         outcomes = []
 
-        def reserve(issue):
+        def reserve(report, issue):
             barrier.wait()
             try:
                 outcomes.append(self.dispatcher.reserve_simulation(report, issue))
             except ValueError:
                 outcomes.append("BLOCKED")
 
-        threads = [Thread(target=reserve, args=(issue,)) for issue in ("56", "57")]
+        threads = [Thread(target=reserve, args=(report, issue))
+                   for report, issue in ((report56, "56"), (report57, "57"))]
         for thread in threads:
             thread.start()
         barrier.wait()
         for thread in threads:
             thread.join()
         self.assertEqual(sum(item == "BLOCKED" for item in outcomes), 1)
+
+    def test_r1_falha_de_normalizacao_libera_reserva_e_registra_estado(self):
+        for trace in (None, FixtureTrace(stdout=None)):
+            with self.subTest(trace=trace):
+                dispatcher = DryRunDispatcher()
+                report = dispatcher.preview(self.payload, self.approval, SHA, self.root,
+                                            cost_fixture_verified=True, interface_fixture_verified=True)
+                key = dispatcher.reserve_simulation(report, "56")
+                result = dispatcher.finish_simulation(key, trace)
+                self.assertEqual(result.status, "INDETERMINATE")
+                self.assertEqual(dispatcher.simulation_status(key)[0], "INDETERMINATE")
+                self.assertEqual(dispatcher.reserve_simulation(report, "56"), key)
+                with self.assertRaises(ValueError):
+                    dispatcher.finish_simulation(key, trace)
+                retry = dispatcher.reserve_simulation(report, "56", 2, "diag", True)
+                self.assertEqual(dispatcher.simulation_status(retry)[0], "CLAIMED")
+
+    def test_r1_erro_sintetico_mascara_segredo_e_permite_reconciliar(self):
+        report = self.preview()
+        key = self.dispatcher.reserve_simulation(report, "56")
+        secret = "ghp_" + "A" * 30
+        with patch.object(CodexExecFake, "normalize", side_effect=RuntimeError("token=" + secret)):
+            result = self.dispatcher.finish_simulation(key, FixtureTrace(stdout=()))
+        self.assertEqual(result.status, "INDETERMINATE")
+        self.assertNotIn(secret, str(self.dispatcher.simulation_status(key)))
+        self.assertEqual(self.dispatcher.simulation_status(key)[0], "INDETERMINATE")
 
     def test_t10_t15_timeout_cancelamento_retry_crash(self):
         report = self.preview()
