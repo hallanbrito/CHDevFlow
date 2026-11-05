@@ -177,7 +177,7 @@ Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de 
 | **Sentinela Python com FakeWorker (BOOT-01)** | `IMPLEMENTADO` | Implementada em `apps/bootstrap/sentinela/` ([PR #26](https://github.com/hallanbrito/CHDevFlow/pull/26), [Issue #27](https://github.com/hallanbrito/CHDevFlow/issues/27)), validada por testes e integrada na `main`. |
 | **CHDevFlow CLI v0.1 (`src/chdevflow/`)** | `IMPLEMENTADO` | Implementada e integrada na `main` ([PR #39](https://github.com/hallanbrito/CHDevFlow/pull/39), [Issues #32–#38](https://github.com/hallanbrito/CHDevFlow/issues/32)), fornecendo comandos operacionais do C.H. |
 | **Estabilizações P0 (P0-01 a P0-04, CI, Access)** | `IMPLEMENTADO` | Totalmente integradas na `main` ([PRs #42, #44, #46, #48, #50, #52](https://github.com/hallanbrito/CHDevFlow/pull/52)), garantindo status estrito, empacotamento, CI integral e modelo seguro de verificação. |
-| **Control Center (`apps/control-center/`)** | `PARCIAL` | Fundação em `apps/control-center/` integrada via [PR #30](https://github.com/hallanbrito/CHDevFlow/pull/30); correções de leitura live ([PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31)) aguardam reteste/auditoria. |
+| **Control Center (`apps/control-center/`)** | `PARCIAL` | Fundação em `apps/control-center/` integrada via [PR #30](https://github.com/hallanbrito/CHDevFlow/pull/30); correções de leitura live da [PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31) integradas à `main` em 04/11/2026. A classificação `PARCIAL` se refere à evolução do Control Center, não ao estado pendente da PR #31. |
 | **KSYNC-03 / Reconciliação do Kanban** | `PARCIAL` | Leitura auditável implementada (CH-ACCESS-01); mutação assistida permanece estritamente manual pelo PO. |
 | **Execução AGY/Codex no Host (BOOT-03 / BOOT-04)** | `NÃO_IMPLEMENTADO` | Executores reais com sandbox no CachyOS continuam não autorizados e não implementados; exigem gates futuros específicos. |
 | **Sentinela em Loop / Daemon Permanente (D05-v2)** | `NÃO_IMPLEMENTADO` | Polling ou execução 24/7 não autorizados; D05 permanece estritamente manual (`--once`). |
@@ -245,4 +245,4 @@ Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de 
    - **Parecer:** `AGUARDANDO_AUDITORIA_CHATGPT` / `SEM_MERGE`.
 
 9. **Decisão PO:**
-   - `PENDENTE`. Nenhuma alteração de gate, merge ou início de novas tarefas (incluindo PR #31) sem decisão humana expressa do PO.
+   - `HOMOLOGADO_DOCUMENTALMENTE_PELO_PO / SEM_MERGE`: homologação expressa em 03/11/2026, restrita ao HEAD `e6dc3a569626ac55b9d5b65dceb26e9044eac450`, registrada no [gate da PR #25](https://github.com/hallanbrito/CHDevFlow/pull/25#issuecomment-6614230031). A homologação histórica não autoriza integração nem se estende automaticamente a novo commit de correção documental. Qualquer merge exige novo gate específico do PO, com revalidação de HEAD, CI, diff e mergeabilidade.
