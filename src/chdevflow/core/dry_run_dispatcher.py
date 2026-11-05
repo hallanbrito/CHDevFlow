@@ -144,6 +144,9 @@ class DryRunDispatcher:
         self._active: str | None = None
         self._history: dict[str, str] = {}
         self._executors: dict[str, str] = {}
+        self._previews: dict[int, tuple[DryRunReport, str, str, str, str, tuple[str, ...]]] = {}
+        self._claims: dict[str, tuple[DryRunReport, str | None, bool]] = {}
+        self._reasons: dict[str, str] = {}
 
     def preview(
         self, payload: dict[str, Any], approval_fixture: ContratoAutorizacao | None,
@@ -191,39 +194,72 @@ class DryRunDispatcher:
                 return DryRunReport("BLOQUEADO_CUSTO", "Custo/licença sem prova nem fixture", mission.mission_digest, mission.worker, plan)
             if not interface_fixture_verified:
                 raise ValueError("Interface não comprovada por fixture")
-            return DryRunReport("DRY_RUN_ELIGIBLE", "Somente fixture sintética elegível", mission.mission_digest, mission.worker, plan)
+            report = DryRunReport("DRY_RUN_ELIGIBLE", "Somente fixture sintética elegível", mission.mission_digest, mission.worker, plan)
+            with self._lock:
+                # Mantém a referência viva; igualdade de campos ou id reutilizado não autentica a prévia.
+                self._previews[id(report)] = (report, str(mission.source["issue"]),
+                                              mission.mission_digest, mission.worker,
+                                              report.reason, report.plan)
+            return report
         except (ValueError, KeyError, TypeError, ViolacaoPoliticaSegurancaErro) as exc:
             return DryRunReport("BLOCKED", _limpar(str(exc)), None, None, plan)
 
     def reserve_simulation(self, report: DryRunReport, issue_ref: str, attempt: int = 1,
                            diagnosis_ref: str | None = None, retry_fixture_approved: bool = False) -> str:
         """Reserva lógica local; replay devolve o mesmo identificador sem novo trabalho."""
-        if report.status != "DRY_RUN_ELIGIBLE" or not report.mission_digest:
-            raise ValueError("Prévia não elegível")
-        if attempt not in (1, 2) or (attempt == 2 and (not diagnosis_ref or not retry_fixture_approved)):
+        if type(attempt) is not int or attempt not in (1, 2):
+            raise ValueError("Tentativa simulada inválida")
+        if attempt == 1 and (diagnosis_ref is not None or retry_fixture_approved):
+            raise ValueError("Primeira tentativa não aceita parâmetros de retry")
+        if attempt == 2 and (not diagnosis_ref or retry_fixture_approved is not True):
             raise ValueError("Retry exige diagnóstico e nova aprovação simulada")
-        key = f"{issue_ref}:{report.mission_digest}:{attempt}"
         with self._lock:
+            binding = self._previews.get(id(report))
+            if (type(report) is not DryRunReport or binding is None or binding[0] is not report
+                    or type(issue_ref) is not str or issue_ref != binding[1]
+                    or report.status != "DRY_RUN_ELIGIBLE" or report.mission_digest != binding[2]
+                    or report.executor != binding[3] or report.reason != binding[4]
+                    or report.plan != binding[5] or report.run_authorized is not False):
+                raise ValueError("Prévia ausente, adulterada ou Issue divergente")
+            key = f"{binding[1]}:{binding[2]}:{attempt}"
             if key in self._history:
+                prior = self._claims[key]
+                if prior[0] is not report or prior[1:] != (diagnosis_ref, retry_fixture_approved):
+                    raise ValueError("Replay com prévia ou parâmetros divergentes")
                 return key
             if self._active is not None:
                 raise ValueError("Outra reserva simulada está ativa")
             if attempt == 2:
-                previous = f"{issue_ref}:{report.mission_digest}:1"
+                previous = f"{binding[1]}:{binding[2]}:1"
                 if self._history.get(previous) not in {"BLOCKED", "TIMED_OUT", "CANCELLED", "INDETERMINATE"}:
                     raise ValueError("Tentativa anterior sem falha reconciliada")
             self._active = key
             self._history[key] = "CLAIMED"
-            self._executors[key] = report.executor or ""
+            self._executors[key] = binding[3]
+            self._claims[key] = (report, diagnosis_ref, retry_fixture_approved)
+            self._reasons[key] = "Reserva simulada ativa"
         return key
 
     def finish_simulation(self, key: str, trace: FixtureTrace) -> NormalizedTrace:
         with self._lock:
             if self._active != key:
                 raise ValueError("Reserva não está ativa")
-            executor = self._executor_for_key(key)
-            result = _ADAPTERS[executor].normalize(trace, key)
+            executor = self._executors[key]
+            try:
+                result = _ADAPTERS[executor].normalize(trace, key)
+                if not isinstance(result, NormalizedTrace):
+                    raise TypeError("Resultado normalizado inválido")
+            except Exception as exc:
+                reason = f"Falha de normalização simulada ({type(exc).__name__}): {_limpar(str(exc))}"
+                worker_result = ContratoWorkerResultado(
+                    schema=SCHEMA_WORKER_VERSAO, run_id=key, executor=executor,
+                    status="INDETERMINATE", exit_code=-1, artifacts=[], tests=[],
+                    cost={"currency": "BRL", "additional": 0, "verified": False},
+                    event_log_ref=f"fixture://{key}/{executor}",
+                )
+                result = NormalizedTrace("INDETERMINATE", reason, (), worker_result)
             self._history[key] = result.status
+            self._reasons[key] = result.reason
             self._active = None
             return result
 
@@ -232,8 +268,12 @@ class DryRunDispatcher:
             if self._active != key:
                 raise ValueError("Reserva não está ativa")
             self._history[key] = "CANCELLED"
+            self._reasons[key] = "Cancelamento simulado pelo operador"
             self._active = None
 
-    def _executor_for_key(self, key: str) -> str:
-        # O executor da reserva é fixado pela prévia; ver método reserve_simulation.
-        return self._executors[key]
+    def simulation_status(self, key: str) -> tuple[str, str]:
+        """Consulta o estado e o diagnóstico da reserva nesta instância de simulação."""
+        with self._lock:
+            if key not in self._history:
+                raise ValueError("Reserva simulada desconhecida")
+            return self._history[key], self._reasons[key]
