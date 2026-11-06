@@ -24,6 +24,11 @@ class NoGrafo:
     autonomia: str               # CH-0, CH-1, CH-2
     dependencias: list[str]      # Lista de IDs das quais esta tarefa depende
     pendencias_dados: list[str] = field(default_factory=list) # Informações ainda não verificadas
+    homologacao_verificada: bool = False  # Evidência externa vinculada à missão; nunca inferida da etapa
+    dependency_state: str = "UNKNOWN"
+    dependency_refs: list[dict[str, Any]] = field(default_factory=list)
+    dependency_source: str | None = None
+    dependency_observed_at: str | None = None
     dependentes: list[str] = field(default_factory=list) # Tarefas que dependem desta
     grau_entrada: int = 0        # Número de dependências não concluídas
     status_grafo: str = "PENDENTE" # ELEGIVEL, BLOQUEADA_POR_DEPENDENCIA, BLOQUEADA_CICLO, BLOQUEADA_ORFA, CONCLUIDA
@@ -76,7 +81,7 @@ STATUS_BLOQUEADA_CICLO: str = "BLOQUEADA_CICLO"
 STATUS_BLOQUEADA_ORFA: str = "BLOQUEADA_ORFA"
 STATUS_BLOQUEADA_DADOS: str = "BLOQUEADA_DADOS"
 
-ETAPAS_CONCLUIDAS: tuple[str, ...] = ("INTEGRADA", "HOMOLOGADA", "DONE", "CLOSED", "PROD_OK")
+ETAPAS_FECHAMENTO_VISUAL: tuple[str, ...] = ("INTEGRADA", "HOMOLOGADA", "DONE", "CLOSED", "PROD_OK")
 
 
 class DAGEngine:
@@ -101,6 +106,8 @@ class DAGEngine:
         # 1. Registro inicial de todos os nós
         for item in tarefas:
             task_id = str(item.get("id") or item.get("mission_id") or f"W-{item.get('number', 0)}")
+            if task_id in nos:
+                raise ValueError("ID de tarefa duplicado; grafo inconclusivo.")
             titulo = str(item.get("title") or item.get("titulo") or "Sem título")
             etapa = str(item.get("stage") or item.get("etapa_ch") or "BACKLOG").upper()
             esteira = str(item.get("esteira") or item.get("executor") or "AGY")
@@ -109,6 +116,8 @@ class DAGEngine:
 
             deps_raw = item.get("dependencies") or item.get("dependencias") or []
             deps = [str(d).strip() for d in deps_raw if str(d).strip()]
+            if len(set(deps)) != len(deps):
+                raise ValueError("Dependências duplicadas; grafo inconclusivo.")
 
             no = NoGrafo(
                 id=task_id,
@@ -119,11 +128,24 @@ class DAGEngine:
                 autonomia=autonomia,
                 dependencias=deps,
                 pendencias_dados=list(item.get("pendencias_dados", [])),
+                homologacao_verificada=item.get("homologacao_verificada") is True,
+                dependency_state=item.get("dependency_state", "UNKNOWN"),
+                dependency_refs=list(item.get("dependency_refs", [])),
+                dependency_source=item.get("dependency_source"),
+                dependency_observed_at=item.get("dependency_observed_at"),
             )
-            # Preserva a etapa concluída explicitamente observada no Project.
-            # Dados incompletos continuam sinalizados, mas não reescrevem essa etapa.
-            if etapa in ETAPAS_CONCLUIDAS:
-                no.status_grafo = "CONCLUIDA"
+            # Etapa visual de conclusão não prova a decisão humana vinculada.
+            deps_verificadas = no.dependency_state in ("VERIFIED_EMPTY", "VERIFIED_NONEMPTY")
+            if etapa == "HOMOLOGADA" and no.homologacao_verificada and deps_verificadas and not no.pendencias_dados:
+                no.status_grafo = STATUS_CONCLUIDA
+            elif etapa in ETAPAS_FECHAMENTO_VISUAL:
+                if not no.homologacao_verificada:
+                    no.pendencias_dados.append("Homologação humana vinculada à missão não verificada")
+                if etapa != "HOMOLOGADA":
+                    no.pendencias_dados.append("Etapa visual não satisfaz pré-requisito")
+                if not deps_verificadas:
+                    no.pendencias_dados.append("Dependências da missão não verificadas")
+                no.status_grafo = STATUS_BLOQUEADA_DADOS
             elif no.pendencias_dados:
                 no.status_grafo = STATUS_BLOQUEADA_DADOS
 
@@ -141,6 +163,30 @@ class DAGEngine:
                     # Aresta direcionada: dep_id -> task_id (dep_id precede task_id)
                     nos[dep_id].dependentes.append(task_id)
                     arestas.append({"source": dep_id, "target": task_id})
+
+        # Ciclos são anomalias mesmo quando um campo visual ou prova de
+        # homologação marca um nó como concluído.
+        ciclos_detectados = self._identificar_ciclos_dfs(nos, set(nos))
+        nos_em_ciclos: set[str] = {no_id for ciclo in ciclos_detectados for no_id in ciclo}
+        for no_id in nos_em_ciclos:
+            nos[no_id].status_grafo = STATUS_BLOQUEADA_CICLO
+        for no_id in dependencias_desconhecidas:
+            if nos[no_id].status_grafo == STATUS_CONCLUIDA:
+                nos[no_id].status_grafo = STATUS_BLOQUEADA_ORFA
+
+        # Uma prova positiva da missão não substitui a homologação dos seus
+        # pré-requisitos internos. Revogar até estabilizar cobre cadeias em
+        # qualquer ordem de entrada, antes de calcular graus e elegibilidade.
+        while True:
+            concluidas_com_pendencia = [
+                no for no in nos.values()
+                if no.status_grafo == STATUS_CONCLUIDA
+                and any(nos[dep_id].status_grafo != STATUS_CONCLUIDA for dep_id in no.dependencias)
+            ]
+            if not concluidas_com_pendencia:
+                break
+            for no in concluidas_com_pendencia:
+                no.status_grafo = STATUS_BLOQUEADA_DEP
 
         # 3. Cálculo de graus de entrada (considerando apenas dependências NÃO concluídas)
         for task_id, no in nos.items():
@@ -181,30 +227,23 @@ class DAGEngine:
                         fila_kahn.append(dependente_id)
 
         # 5. Classificação dos nós que não puderam ser ordenados (Ciclos)
-        ciclos_detectados: list[list[str]] = []
-        nos_nao_ordenados = set(graus_trabalho.keys()) - visitados_kahn
-
-        if nos_nao_ordenados:
-            ciclos_detectados = self._identificar_ciclos_dfs(nos, nos_nao_ordenados)
-
-        # AUD-04: Coleta estrita dos nós que efetivamente são membros de ciclos detectados
-        nos_em_ciclos: set[str] = {no_id for ciclo in ciclos_detectados for no_id in ciclo}
+        # AUD-04: nos_em_ciclos contém só membros do laço, não sucessoras.
 
         # 6. Atualização final de status e motivos de bloqueio
         for task_id, no in nos.items():
             if no.status_grafo == STATUS_CONCLUIDA:
                 continue
 
-            if no.pendencias_dados:
+            if task_id in nos_em_ciclos:
+                no.status_grafo = STATUS_BLOQUEADA_CICLO
+                no.motivo_bloqueio = "Ciclo de dependência circular detectado!"
+            elif no.pendencias_dados:
                 no.status_grafo = STATUS_BLOQUEADA_DADOS
                 no.motivo_bloqueio = "Dados insuficientes: " + "; ".join(no.pendencias_dados)
             elif dependencias_desconhecidas.get(task_id):
                 no.status_grafo = STATUS_BLOQUEADA_ORFA
                 faltantes = ", ".join(dependencias_desconhecidas[task_id])
                 no.motivo_bloqueio = f"Dependência(s) ausente(s) ou não concluída(s): {faltantes}"
-            elif task_id in nos_em_ciclos:
-                no.status_grafo = STATUS_BLOQUEADA_CICLO
-                no.motivo_bloqueio = "Ciclo de dependência circular detectado!"
             elif task_id in nos_elegiveis_iniciais:
                 no.status_grafo = STATUS_ELEGIVEL
                 no.motivo_bloqueio = None
@@ -249,7 +288,7 @@ class DAGEngine:
             visitado[atual] = 1
             pilha.append(atual)
 
-            for vizinho in nos[atual].dependentes:
+            for vizinho in sorted(nos[atual].dependentes):
                 if vizinho in candidatos:
                     if visitado[vizinho] == 1:
                         # Ciclo encontrado: extrai a fatia da pilha a partir de vizinho
@@ -263,7 +302,7 @@ class DAGEngine:
             pilha.pop()
             visitado[atual] = 2
 
-        for no_id in candidatos:
+        for no_id in sorted(candidatos):
             if visitado[no_id] == 0:
                 dfs(no_id)
 

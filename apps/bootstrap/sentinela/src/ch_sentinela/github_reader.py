@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ch_sentinela.config import (
@@ -51,9 +52,13 @@ class LeitorGitHubErro(RuntimeError):
     """Exceção levantada quando ocorre erro de comunicação, timeout ou formato com o GitHub."""
 
 
+class LeitorGitHubFormatoErro(LeitorGitHubErro):
+    """Resposta recebida, mas estruturalmente inválida ou incompleta."""
+
+
 def executar_comando_gh(
     argumentos: list[str],
-    timeout_segundos: int = 30,
+    timeout_segundos: float = 30,
     executor_customizado: Callable[[list[str]], str] | None = None,
 ) -> str:
     """Executa o comando `gh` de forma segura com lista de argumentos e sem shell.
@@ -72,6 +77,8 @@ def executar_comando_gh(
         ViolacaoPoliticaSegurancaErro: Se for detectada tentativa de mutação.
         LeitorGitHubErro: Se o comando falhar, expirar ou retornar erro de rede.
     """
+    if timeout_segundos <= 0:
+        raise LeitorGitHubErro("Prazo da consulta ao GitHub esgotado.")
     # 1. Defesa em profundidade: bloqueia qualquer argumento mutável
     for arg in argumentos:
         arg_limpo = arg.strip().lower()
@@ -119,6 +126,7 @@ def executar_comando_gh(
 def executar_consulta_json(
     argumentos: list[str],
     executor_customizado: Callable[[list[str]], str] | None = None,
+    timeout_segundos: float = 30,
 ) -> dict[str, Any]:
     """Executa uma consulta gh e converte a resposta para dicionário JSON validado.
 
@@ -132,7 +140,7 @@ def executar_consulta_json(
     Raises:
         LeitorGitHubErro: Se a saída não for JSON válido ou não for um objeto.
     """
-    saida_bruta = executar_comando_gh(argumentos, executor_customizado=executor_customizado)
+    saida_bruta = executar_comando_gh(argumentos, timeout_segundos=timeout_segundos, executor_customizado=executor_customizado)
     try:
         dados = json.loads(saida_bruta)
     except json.JSONDecodeError as exc:
@@ -308,6 +316,66 @@ class LeitorGitHub:
 
         return dados
 
+    def obter_dependencias_issue(self, numero_issue: int, repositorio: str | None = None, timeout_segundos: float = 30) -> dict[str, Any]:
+        """Lê todas as páginas da relação nativa blocked_by, sem inferir conclusão.
+
+        A CLI encerra com erro se uma página falhar. --slurp preserva as páginas
+        separadas para validar formato, duplicidade e limite antes de aceitar [].
+        """
+        repo = repositorio or self.repositorio
+        if repo not in REPOSITORIOS_PERMITIDOS:
+            raise ViolacaoPoliticaSegurancaErro(f"Repositório não autorizado: '{repo}'.")
+        if isinstance(numero_issue, bool) or not isinstance(numero_issue, int) or numero_issue <= 0:
+            raise ViolacaoPoliticaSegurancaErro("Número de Issue inválido para dependências.")
+
+        fonte = f"/repos/{repo}/issues/{numero_issue}/dependencies/blocked_by"
+        args = ["api", "--method", "GET", "--paginate", "--slurp", f"{fonte}?per_page=100"]
+        bruto = executar_comando_gh(args, timeout_segundos=timeout_segundos, executor_customizado=self._executor)
+        try:
+            paginas = json.loads(bruto)
+        except json.JSONDecodeError as exc:
+            raise LeitorGitHubFormatoErro("JSON inválido na leitura de dependências.") from exc
+        if not isinstance(paginas, list) or not paginas or len(paginas) > 100:
+            raise LeitorGitHubFormatoErro("Paginação ausente ou fora do limite na leitura de dependências.")
+
+        referencias: list[dict[str, Any]] = []
+        vistos: set[str] = set()
+        for indice, pagina in enumerate(paginas):
+            if not isinstance(pagina, list) or len(pagina) > 100 or (indice < len(paginas) - 1 and len(pagina) != 100):
+                raise LeitorGitHubFormatoErro("Página de dependências incompleta ou inválida.")
+            for dependencia in pagina:
+                if not isinstance(dependencia, dict):
+                    raise LeitorGitHubFormatoErro("Dependência sem objeto estruturado.")
+                url = dependencia.get("html_url")
+                numero = dependencia.get("number")
+                node_id = dependencia.get("node_id")
+                rest_id = dependencia.get("id")
+                estado = dependencia.get("state")
+                repo_url = dependencia.get("repository_url")
+                if not isinstance(repo_url, str):
+                    raise LeitorGitHubFormatoErro("Repositório da dependência ausente.")
+                match = re.fullmatch(r"https://api\.github\.com/repos/([^/]+)/([^/]+)", repo_url)
+                if not match or isinstance(numero, bool) or not isinstance(numero, int) or numero <= 0:
+                    raise LeitorGitHubFormatoErro("Identidade da dependência inválida.")
+                dep_repo = f"{match.group(1)}/{match.group(2)}"
+                esperado = f"https://github.com/{dep_repo}/issues/{numero}"
+                if url != esperado or not isinstance(node_id, str) or not node_id or isinstance(rest_id, bool) or not isinstance(rest_id, int) or rest_id <= 0 or estado not in ("open", "closed"):
+                    raise LeitorGitHubFormatoErro("Campos da dependência divergentes ou inválidos.")
+                ref = f"{dep_repo}#{numero}"
+                if ref in vistos:
+                    raise LeitorGitHubFormatoErro("Dependência duplicada na resposta nativa.")
+                vistos.add(ref)
+                referencias.append({"issue_ref": ref, "url": esperado, "node_id": node_id, "rest_id": rest_id, "state": estado.upper()})
+
+        return {
+            "issue_ref": f"{repo}#{numero_issue}",
+            "dependency_refs": referencias,
+            "dependency_state": "VERIFIED_NONEMPTY" if referencias else "VERIFIED_EMPTY",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "source": f"github_rest:{fonte}",
+            "diagnostic": None,
+        }
+
     def obter_pull_request(self, numero_pr: int, repositorio: str | None = None) -> dict[str, Any]:
         """Consulta os dados estruturados de um Pull Request.
 
@@ -345,6 +413,7 @@ class LeitorGitHub:
         self,
         numero_projeto: int = NUMERO_PROJETO_PADRAO,
         proprietario: str = PROPRIETARIO_PADRAO,
+        timeout_segundos: float = 30,
     ) -> dict[str, Any]:
         """Consulta os itens do GitHub Project com validação estrita de integridade.
 
@@ -374,7 +443,7 @@ class LeitorGitHub:
             "-L",
             str(MAXIMO_ITEMS_PROJECT),
         ]
-        dados = executar_consulta_json(args, executor_customizado=self._executor)
+        dados = executar_consulta_json(args, executor_customizado=self._executor, timeout_segundos=timeout_segundos)
         validar_snapshot_projeto(dados)
         return dados
 

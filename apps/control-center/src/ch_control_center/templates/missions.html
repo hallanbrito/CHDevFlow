@@ -21,7 +21,7 @@
         <option value="BLOQUEADA_DADOS" {% if filtro_status == 'BLOQUEADA_DADOS' %}selected{% endif %}>Dados insuficientes</option>
         <option value="BLOQUEADA_CICLO" {% if filtro_status == 'BLOQUEADA_CICLO' %}selected{% endif %}>Ciclos Detectados</option>
         <option value="BLOQUEADA_ORFA" {% if filtro_status == 'BLOQUEADA_ORFA' %}selected{% endif %}>Dependências Órfãs</option>
-        <option value="CONCLUIDA" {% if filtro_status == 'CONCLUIDA' %}selected{% endif %}>Concluídas</option>
+        <option value="CONCLUIDA" {% if filtro_status == 'CONCLUIDA' %}selected{% endif %}>Homologações verificadas</option>
       </select>
     </div>
 
@@ -67,10 +67,7 @@
         {% for m in missoes %}
         <tr>
           <td>
-            <strong>{{ m.id }}</strong>
-            {% if m.number %}
-              <div style="font-size: 0.7rem; color: var(--text-muted);">Issue #{{ m.number }}</div>
-            {% endif %}
+            <strong title="ID interno: {{ m.id }}">{% if m.issue_ref and m.number %}#{{ m.number }}{% else %}{{ m.id }}{% endif %}</strong>
           </td>
           <td>
             <div style="font-weight: 600; color: var(--text-primary);">{{ m.title }}</div>
@@ -94,20 +91,22 @@
           </td>
           <td>
             {% if not m.dependencies_informadas %}
-              <span>Não informadas</span>
+              <span>Desconhecidas ou inválidas</span>
             {% elif m.dependencies %}
               <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
-                {% for d in m.dependencies %}
-                  <span style="font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 4px; background: var(--bg-primary); border: 1px solid var(--border-color); font-weight: 600;">{{ d }}</span>
+                {% for d in m.dependency_refs if m.dependency_refs %}
+                  <a href="{{ d.url }}" style="font-size: 0.65rem;">{{ d.issue_ref }}</a>
+                {% else %}
+                  {% for d in m.dependencies %}<span style="font-size: 0.65rem;">{{ d }}</span>{% endfor %}
                 {% endfor %}
               </div>
             {% else %}
-              <span style="font-size: 0.7rem; color: var(--text-muted);">Nenhuma (Raiz)</span>
+              <span style="font-size: 0.7rem; color: var(--text-muted);">Sem dependências verificadas</span>
             {% endif %}
           </td>
           <td>
             {% if m.status_grafo == 'CONCLUIDA' %}
-              <span class="badge-status badge-concluida">✓ CONCLUÍDA</span>
+              <span class="badge-status badge-concluida">✓ HOMOLOGADA VERIFICADA</span>
             {% elif m.status_grafo == 'ELEGIVEL' %}
               <span class="badge-status badge-elegivel">● ELEGÍVEL</span>
             {% elif m.status_grafo == 'BLOQUEADA_DADOS' %}
@@ -128,7 +127,7 @@
               <div class="modal-content">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
                   <div>
-                    <h3 style="font-size: 1.1rem; font-weight: 700;">{{ m.id }}: {{ m.title }}</h3>
+                    <h3 style="font-size: 1.1rem; font-weight: 700;" title="ID interno: {{ m.id }}">{% if m.issue_ref and m.number %}#{{ m.number }}{% else %}{{ m.id }}{% endif %}: {{ m.title }}</h3>
                     <span style="font-size: 0.75rem; color: var(--text-muted);">Etapa CH: {{ m.stage }} • Esteira: {{ m.esteira }} • Autonomia: {{ m.autonomia }}</span>
                   </div>
                   <button type="button" class="btn btn-sm" onclick="fecharModal('modal-{{ loop.index }}')">✕</button>
@@ -138,7 +137,7 @@
                   <div>
                     <strong>Status no Grafo:</strong>
                     {% if m.status_grafo == 'CONCLUIDA' %}
-                      <span class="badge-status badge-concluida">CONCLUÍDA</span>
+                      <span class="badge-status badge-concluida">HOMOLOGADA VERIFICADA</span>
                     {% elif m.status_grafo == 'ELEGIVEL' %}
                       <span class="badge-status badge-elegivel">ELEGÍVEL (SEM BLOQUEIOS)</span>
                     {% elif m.status_grafo == 'BLOQUEADA_DADOS' %}
@@ -162,6 +161,10 @@
                     <strong>Repositório Alvo:</strong> <code>{{ m.repository }}</code>
                   </div>
 
+                  <div>
+                    <strong>ID interno:</strong> <code>{{ m.id }}</code>
+                  </div>
+
                   {% if m.number %}
                   <div>
                     <strong>Link Canônico GitHub:</strong> <a href="{{ m.url }}" target="_blank" style="color: #2563eb;">Issue #{{ m.number }} (Abrir no GitHub)</a>
@@ -170,17 +173,21 @@
 
                   <div>
                     <strong>Dependências Diretas:</strong>
+                    <div>Estado: {{ m.dependency_state }} • Origem: {{ m.dependency_source }} • Observado: {{ m.dependency_observed_at or 'não informado' }}</div>
                     {% if not m.dependencies_informadas %}
-                      <span>Dependências não informadas ou inválidas; grafo não verificado.</span>
+                      <span>Dependências desconhecidas ou inválidas; grafo não verificado.</span>
                     {% elif m.dependencies %}
                       <ul style="margin-left: 1.5rem; margin-top: 0.25rem;">
-                        {% for dep in m.dependencies %}
-                          <li><code>{{ dep }}</code></li>
-                        {% endfor %}
+                        {% if m.dependency_refs %}
+                          {% for dep in m.dependency_refs %}<li><a href="{{ dep.url }}">{{ dep.issue_ref }}</a> (Issue {{ dep.state }})</li>{% endfor %}
+                        {% else %}
+                          {% for dep in m.dependencies %}<li><code>{{ dep }}</code></li>{% endfor %}
+                        {% endif %}
                       </ul>
                     {% else %}
-                      <span>Nenhuma dependência declarada (Nó Raiz).</span>
+                      <span>Sem dependências verificadas.</span>
                     {% endif %}
+                    {% if m.dependency_diagnostic %}<div>{{ m.dependency_diagnostic }}</div>{% endif %}
                   </div>
 
                   <div style="background-color: var(--bg-primary); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); margin-top: 0.5rem;">

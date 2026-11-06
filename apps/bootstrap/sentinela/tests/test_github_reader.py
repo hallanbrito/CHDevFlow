@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
 from ch_sentinela.github_reader import (
     LeitorGitHub,
     LeitorGitHubErro,
+    LeitorGitHubFormatoErro,
     executar_comando_gh,
     validar_campos_projeto,
     validar_snapshot_projeto,
@@ -49,6 +50,45 @@ class TestesLeitorGitHub(unittest.TestCase):
         self.assertEqual(dados["number"], 24)
         self.assertEqual(dados["state"], "OPEN")
         self.assertIn("ch:workflow", dados["labels"])
+
+    def test_dependencias_vazias_com_resposta_nativa_completa(self) -> None:
+        def resposta(args: list[str]) -> str:
+            self.assertEqual(args[:5], ["api", "--method", "GET", "--paginate", "--slurp"])
+            self.assertIn("/issues/24/dependencies/blocked_by?per_page=100", args[-1])
+            return "[[]]"
+        dado = LeitorGitHub(executor_customizado=resposta).obter_dependencias_issue(24)
+        self.assertEqual(dado["dependency_state"], "VERIFIED_EMPTY")
+        self.assertEqual(dado["dependency_refs"], [])
+        self.assertEqual(dado["issue_ref"], "hallanbrito/CHDevFlow#24")
+
+    def test_dependencias_paginadas_preservam_identidade_e_estado(self) -> None:
+        def dep(n: int) -> dict:
+            return {"id": n + 1000, "node_id": f"I_{n}", "number": n,
+                    "repository_url": "https://api.github.com/repos/hallanbrito/CHDevFlow",
+                    "html_url": f"https://github.com/hallanbrito/CHDevFlow/issues/{n}",
+                    "state": "closed" if n == 101 else "open"}
+        paginas = [[dep(n) for n in range(1, 101)], [dep(101)]]
+        dado = LeitorGitHub(executor_customizado=lambda _: json.dumps(paginas)).obter_dependencias_issue(24)
+        self.assertEqual(dado["dependency_state"], "VERIFIED_NONEMPTY")
+        self.assertEqual(len(dado["dependency_refs"]), 101)
+        self.assertEqual(dado["dependency_refs"][-1]["state"], "CLOSED")
+        self.assertEqual(dado["dependency_refs"][-1]["node_id"], "I_101")
+
+    def test_paginacao_parcial_identidade_divergente_e_json_invalido(self) -> None:
+        valido = {"id": 1001, "node_id": "I_1", "number": 1,
+                  "repository_url": "https://api.github.com/repos/hallanbrito/CHDevFlow",
+                  "html_url": "https://github.com/hallanbrito/CHDevFlow/issues/1", "state": "open"}
+        respostas = [json.dumps([[valido], [valido]]), json.dumps([[{**valido, "html_url": "https://github.com/outro/repo/issues/1"}]]), "{invalido", "[]"]
+        for resposta in respostas:
+            with self.subTest(resposta=resposta), self.assertRaises(LeitorGitHubFormatoErro):
+                LeitorGitHub(executor_customizado=lambda _, r=resposta: r).obter_dependencias_issue(24)
+
+    def test_erro_http_e_timeout_nao_viram_dependencias_vazias(self) -> None:
+        for erro in ("HTTP 403", "HTTP 404", "timeout"):
+            def falhar(_: list[str], mensagem: str = erro) -> str:
+                raise RuntimeError(mensagem)
+            with self.subTest(erro=erro), self.assertRaises(LeitorGitHubErro):
+                LeitorGitHub(executor_customizado=falhar).obter_dependencias_issue(24)
 
     def test_bloqueio_operacao_mutavel(self) -> None:
         """Garante que subcomandos de escrita/mutação levantem violação de segurança imediata."""
