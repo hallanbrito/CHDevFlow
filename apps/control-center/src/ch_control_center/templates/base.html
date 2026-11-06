@@ -137,6 +137,12 @@
       </header>
 
       <main class="content-area">
+        {% if estado_sync and estado_sync.status == 'PARTIAL' %}
+        <div class="card" role="alert" style="border-left: 5px solid var(--status-bloqueada); margin-bottom: 1rem; padding: 0.75rem 1rem;">
+          <strong>⚠️ Verificação parcial:</strong> {{ estado_sync.diagnostic or 'Algumas dependências não puderam ser verificadas.' }}
+          Essas tarefas permanecem bloqueadas; a classificação não autoriza despachar agentes.
+        </div>
+        {% endif %}
         {% if estado_sync and estado_sync.status == 'STALE' %}
         <div id="sync-stale-banner" class="card" role="alert" style="border-left: 5px solid var(--status-bloqueada); background-color: var(--status-bloqueada-bg); margin-bottom: 1rem; padding: 0.75rem 1rem;">
           <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
