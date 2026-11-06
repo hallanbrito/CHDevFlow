@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from ch_control_center.config import DIRETORIO_TEMPLATES
 from ch_control_center.dependencies import get_mission_service, get_project_service
@@ -28,7 +29,8 @@ async def list_missions_view(
     project_service: ProjectService = Depends(get_project_service),
 ) -> HTMLResponse:
     """Renderiza a página com tabela completa e filtros de missões."""
-    missoes = mission_service.listar_missoes(
+    missoes = await run_in_threadpool(
+        mission_service.listar_missoes,
         filtro_status=status,
         filtro_esteira=esteira,
         termo_busca=busca,
@@ -54,7 +56,7 @@ async def get_mission_detail_api(
     mission_service: MissionService = Depends(get_mission_service),
 ) -> dict[str, Any]:
     """Retorna dados detalhados de uma missão em formato JSON (somente leitura)."""
-    missao = mission_service.obter_missao_por_id(mission_id)
+    missao = await run_in_threadpool(mission_service.obter_missao_por_id, mission_id)
     if not missao:
         raise HTTPException(status_code=404, detail=f"Missão '{mission_id}' não encontrada.")
     return missao
