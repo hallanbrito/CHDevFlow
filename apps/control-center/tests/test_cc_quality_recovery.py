@@ -436,3 +436,147 @@ def test_f4_demo_offline_nao_faz_chamadas_externas():
 
     facade.obter_snapshot_ao_vivo.assert_not_called()
     facade.obter_snapshot_demo.assert_called_once()
+
+
+# ==============================================================================
+# R1 / CH-AUDIT: REGRESSÕES REAIS IDENTIFICADAS NA REVISÃO INDEPENDENTE
+# ==============================================================================
+
+def test_r1_f3_card_minimalista_nao_mostra_diagnostico_interno():
+    """Não confundir o JSON oculto do modal com texto visível no cartão DAG."""
+    from pathlib import Path
+    source = (Path(DIRETORIO_TEMPLATES) / "graph.html").read_text(encoding="utf-8")
+    macro = source.split("{% macro render_node_card(", 1)[1].split("{% endmacro %}", 1)[0]
+    for nome_tecnico in ("no.dependency_source", "no.dependency_observed_at", "no.motivo_bloqueio"):
+        assert nome_tecnico not in macro
+    assert '<details open' not in source
+    assert 'id="secao-dados-insuficientes"' in source
+    assert 'render_node_card(no' in source
+
+
+def test_r1_f4_post_stale_nao_retorna_falso_ok(client):
+    """Falha após snapshot válido devolve 503/STALE, não 200/OK."""
+    from ch_control_center.dependencies import get_mission_service
+
+    service = get_mission_service()
+    facade = MagicMock(spec=SentinelFacade)
+    facade.obter_snapshot_ao_vivo.side_effect = [
+        {"items": [gerar_item_sintetico(42)], "totalCount": 1},
+        SentinelaAdapterErro("Falha temporária simulada"),
+    ]
+    facade.sanitizar.side_effect = lambda texto: texto
+    service.facade = facade
+    service.alternar_modo_operacao(MODO_LIVE_GITHUB)
+    service.obter_contexto_dashboard()
+
+    headers = {
+        "Host": "127.0.0.1:8000",
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/grafo",
+        "X-CSRF-Token": obter_csrf_token(),
+    }
+    resposta = client.post("/api/sincronizar", headers=headers)
+    assert resposta.status_code == 503
+    assert resposta.json()["status"] == "STALE"
+    assert resposta.json()["estado"]["status"] == "STALE"
+    assert service.obter_estado_sincronizacao().last_success_at is not None
+
+
+def test_r1_f4_parcial_nao_afirma_sucesso_completo():
+    """Project lido, mas relações UNKNOWN impedem status global OK."""
+    facade = MagicMock(spec=SentinelFacade)
+    facade.obter_snapshot_ao_vivo.return_value = {
+        "items": [gerar_item_sintetico(43, dep_state="UNKNOWN")],
+        "totalCount": 1,
+    }
+    facade.sanitizar.side_effect = lambda texto: texto
+    service = MissionService(facade=facade)
+    service.alternar_modo_operacao(MODO_LIVE_GITHUB)
+
+    resultado = service.sincronizar_agora()
+    assert resultado["status"] == "PARTIAL"
+    assert resultado["estado"]["error_code"] == "DEPENDENCIES_PARTIAL"
+    assert resultado["estado"]["last_success_at"] is None
+    assert resultado["stats"]["total_dados_insuficientes"] == 1
+
+
+def test_r1_f2_coalesce_dois_refreshes_forcados_em_uma_leitura():
+    """Duas abas que pedem refresh no mesmo instante não duplicam 30 comandos gh."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    chamadas = 0
+    barreira = threading.Barrier(2)
+
+    def mock_github():
+        nonlocal chamadas
+        chamadas += 1
+        time.sleep(0.15)
+        return {"items": [gerar_item_sintetico(45)], "totalCount": 1}
+
+    facade = MagicMock(spec=SentinelFacade)
+    facade.obter_snapshot_ao_vivo.side_effect = mock_github
+    facade.sanitizar.side_effect = lambda texto: texto
+    service = MissionService(facade=facade)
+    service.alternar_modo_operacao(MODO_LIVE_GITHUB)
+
+    def job():
+        barreira.wait(timeout=2)
+        return service.sincronizar_agora()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        a = executor.submit(job)
+        b = executor.submit(job)
+        assert a.result(timeout=5)["status"] == "OK"
+        assert b.result(timeout=5)["status"] == "OK"
+    assert chamadas == 1
+
+
+def test_r1_f2_status_api_responde_enquanto_github_esta_lento(client):
+    """Async event loop não pode bloquear durante sync de uma rota distinta."""
+    import asyncio
+    from ch_control_center.dependencies import get_mission_service
+
+    service = get_mission_service()
+    iniciado = threading.Event()
+    liberar = threading.Event()
+
+    def github_lento():
+        iniciado.set()
+        if not liberar.wait(timeout=3):
+            raise SentinelaAdapterErro("Timeout simulado")
+        return {"items": [gerar_item_sintetico(49)], "totalCount": 1}
+
+    facade = MagicMock(spec=SentinelFacade)
+    facade.obter_snapshot_ao_vivo.side_effect = github_lento
+    facade.sanitizar.side_effect = lambda texto: texto
+    service.facade = facade
+    service.alternar_modo_operacao(MODO_LIVE_GITHUB)
+
+    async def verificar():
+        primeira = asyncio.create_task(client._async_request("GET", "/api/grafo"))
+        try:
+            assert await asyncio.to_thread(iniciado.wait, 2)
+            status = await asyncio.wait_for(
+                client._async_request("GET", "/api/sincronizacao"),
+                timeout=1.5,
+            )
+            assert status.status_code == 200
+            assert status.json()["status"] == "SYNCING"
+        finally:
+            liberar.set()
+        resultado = await asyncio.wait_for(primeira, timeout=3)
+        assert resultado.status_code == 200
+
+    asyncio.run(verificar())
+
+
+def test_r1_f4_js_atualiza_dom_sem_reload_integral():
+    """Polling deve refletir o novo snapshot na UI e manter contexto do usuário."""
+    from pathlib import Path
+    js = (Path(DIRETORIO_TEMPLATES).parent / "static" / "js" / "app.js").read_text(encoding="utf-8")
+    assert "window.location.reload()" not in js
+    assert "async function atualizarConteudoVisivel()" in js
+    assert "await atualizarConteudoVisivel()" in js
+    assert "window.scrollTo(scrollX, scrollY)" in js
+    assert 'filtroNovo.dispatchEvent(new Event("input"' in js
+    assert "visibilitychange" in js
