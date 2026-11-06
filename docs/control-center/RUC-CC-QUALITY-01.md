@@ -161,18 +161,85 @@ A implementação atende com rigor técnico e evidências verificáveis a todos 
 
 ---
 
-## 10. R1 corretiva após auditoria independente do ChatGPT — pendente de testes finais
+## 10. R1 Corretiva após Auditoria Independente do ChatGPT — Validação Integral Concluída
 
-**Data:** 2026-11-06. **Originador das alterações da R1:** ChatGPT por GitHub connector, em resposta direta ao PO. **Peão/AGY:** originador da F0–F5 inicial, não atribuir os commits corretivos ao AGY sem sua execução. Referência da auditoria: https://github.com/hallanbrito/CHDevFlow/pull/61#pullrequestreview-5808277156.
+**Data:** 2026-11-06.  
+**Originador das correções de código da R1:** ChatGPT por GitHub connector, em resposta direta ao PO (HEAD `a294728`).  
+**Originador da validação, ajustes de testes e evidências:** Peão (Google Antigravity / AGY) em worktree isolada (`agy/cc-quality-01`).  
+**Referência da auditoria:** https://github.com/hallanbrito/CHDevFlow/pull/61#pullrequestreview-5808277156  
+**Ordem de validação do PO:** https://github.com/hallanbrito/CHDevFlow/issues/58#issuecomment-6698481169  
 
-**Escopo das mudanças publicadas na mesma branch `agy/cc-quality-01`, mantendo Draft empilhada sobre PR #60:**
+### 10.1 Escopo das Mudanças Validadas da R1
+- **P1-A (UX Minimalista no DAG):** macro `render_node_card` em `graph.html` exibe unicamente `#Issue`, título da missão, badge de causa diagnóstica e contagem concisa de dependências. Detalhes completos (motivo extenso, horários ISO, origem REST/fixtures, ID interno) foram mantidos exclusivamente em `data-node` e no modal acessível (`#modal-detalhes-missao`). Raia 4 (`secao-dados-insuficientes`) inicia recolhida por padrão. Layout unificado via CSS Grid responsivo.
+- **P1-B (Veracidade do Status da API de Sincronização):** `POST /api/sincronizar` retorna status real: HTTP 503 com `STALE` quando há falha após snapshot válido (sem emitir falso `OK`); HTTP 200 com `PARTIAL` quando há dependências `UNKNOWN/INVALID`; HTTP 200 com `OK` apenas quando 100% das relações são verificadas. `last_success_at` é gravado estritamente após a conclusão bem-sucedida. Status inicial padronizado como `PENDING`.
+- **P1-C (I/O e Desacoplamento Assíncrono):** rotas assíncronas do FastAPI delegam subprocessos bloqueantes (`gh`) ao threadpool (`run_in_threadpool`), mantendo o event loop responsivo mesmo durante consultas lentas ao GitHub. Chamadas concorrentes de refresh compartilham a mesma geração por barreira. Falhas ativam backoff de 60s em `STALE`.
+- **P1-D (Atualização Suave do DOM sem Recarregamento):** sincronização no frontend substitui o conteúdo por `fetch` e manipulação do DOM sem recarregar a janela (`window.location.reload()` eliminado). Preserva termos de busca, filtros, estado aberto/fechado de seções, modais abertos e posição de rolagem. Polling a cada 60s pausado em aba oculta (`document.hidden`).
 
-- **P1-A (UX):** macro dos cartões remove da face motivos longos, origem REST, horários ISO, rodapé Esteira/CH e chips redundantes; exibe apenas Issue, título, status/causa principal e dependências resumidas; demais campos permanecem no `data-node` e no modal. Quarta raia inicia recolhida, layout usa CSS Grid em vez de cartões de largura fixa desiguais. Alertas de segurança e bloqueios não foram desativados.
-- **P1-B (API):** `POST /api/sincronizar` devolve status real `STALE` com HTTP 503 quando GitHub falha depois de snapshot válido, sem enviar `OK` falso. `PARTIAL` representa snapshot novo com dependências `UNKNOWN/INVALID`, evitando alegar verificação completa. Horário de sucesso é registrado depois da consulta (não antes). Status inicial `PENDING`.
-- **P1-C (I/O):** rotas assíncronas que chamam a Sentinela agora usam `run_in_threadpool` para não bloquear o event loop com `gh`; duas chamadas forçadas concorrentes compartilham a mesma geração; após falha há backoff de 60s, exibindo `STALE` sem repetir imediatamente as 30 consultas em toda tela.
-- **P1-D (browser):** após sincronização, a página visível atualiza por `fetch`/substituição do conteúdo, **sem `window.location.reload()`**; restaura busca/filtros, seção expandida, modal compatível e rolagem. Sincronização em aba oculta continua suspensa; DEMO não faz polling. `PARTIAL` tem mensagem visual distinta; destaque do Dashboard explica homologação não comprovada e cadastro ausente separadamente.
-- **Regressão:** adicionados seis testes R1 em `test_cc_quality_recovery.py` (cartão mínimo, POST STALE, snapshot PARTIAL, refresh forçado concorrente, responsividade da API de status durante consulta lenta, atualização DOM sem reload). Atualizadas as expectativas do teste R3 de renderização: a exigência antiga de rodapé/origem textual no cartão foi superada pela decisão de UX do PO.
+### 10.2 Ajustes de Testes e Conformidade Local
+Durante a execução inicial da suíte no HEAD `a294728`, o Peão identificou 2 falhas pontuais resultantes de asserções legadas desatualizadas em relação à nova UX da R1:
+1. `test_cc_quality_recovery.py::test_f3_template_grafo_cartoes_minimos_e_modal_acessivel`: ainda esperava `<details open` (da F3 original), contrariando a decisão da R1 de manter a 4ª raia fechada por padrão (`<details id="secao-dados-insuficientes"`).
+2. `test_routes_read_only.py::test_rota_grafo_html`: ainda esperava a string prolixa `Homologação humana vinculada à missão não verificada` diretamente no corpo HTML do cartão, superada pela exibição do badge conciso `Homologação não verificada` e modal dedicado.
 
-**Estado exato desta seção:** `CH_AUDIT_R1_IMPLEMENTED_AWAITING_CI_AND_BROWSER`. A R1 foi escrita e publicada, **mas ainda não há execução de CI ou inspeção visual Firefox comprovada para seu novo HEAD**. O run histórico [42309655861](https://github.com/hallanbrito/CHDevFlow/actions/runs/42309655861) comprovou 466 testes **no commit antigo `f201d06`**, não neste patch. Não extrapolar seus resultados para os novos commits. O número total esperado é **472 testes** após seis testes adicionados, sujeito à execução real e correção de eventuais falhas. Nenhum dado do Project #2 foi alterado. Merge/release/deploy seguem proibidos até novos gates e aceitação expressa do PO.
+Após o alinhamento das asserções e inclusão das evidências, a suíte completa de **472 testes** passou com 100% de sucesso local:
+- `apps/control-center/tests/`: 109 testes aprovados (1.56s).
+- `apps/bootstrap/sentinela/tests/`: 73 testes aprovados (0.142s).
+- `tests/` (Raiz / CLI / Governança): 290 testes aprovados (59.03s).
+- Total: **472 testes PASS** (`compileall -q src scripts apps` e `git diff --check` sem erros).
 
-**Validação restante:** no worktree do AGY, `git fetch origin` + fast-forward seguro da branch `agy/cc-quality-01`, executar suites raiz/Sentinela/Control Center, compilar, verificar diff, despachar CI pelo GitHub CLI no HEAD final, coletar logs/screenshots de Dashboard/Missões/Grafo em LIVE; se houver falha, corrigir na mesma Draft PR e submeter nova evidência para reauditoria ChatGPT.
+### 10.3 CI Integral Remota (GitHub Actions)
+- **Workflow:** CHDevFlow CI Integral (`.github/workflows/w1-checks.yml`)
+- **Disparo:** manual via `gh workflow run w1-checks.yml --ref agy/cc-quality-01`
+- **Run ID:** `42314122884`
+- **URL da Execução:** https://github.com/hallanbrito/CHDevFlow/actions/runs/42314122884
+- **Ref / Branch:** `agy/cc-quality-01`
+- **Resultado:** `success` (concluído em 1m14s)
+- **Contagem de Testes no CI:**
+  - `python-checks` — Testes CLI e Governança Raiz: **290 testes** OK (45.96s)
+  - `python-checks` — Testes Sentinela: **73 testes** OK (0.055s)
+  - `python-checks` — Testes Control Center: **109 testes** OK (1.07s)
+  - Total consolidado no CI: **472 testes PASS**.
+
+### 10.4 Testes no Navegador Firefox em `LIVE_GITHUB`
+O servidor foi executado localmente em `127.0.0.1:8000` em modo `LIVE_GITHUB` (`CH_CC_MODE=LIVE_GITHUB`) contra o repositório `hallanbrito/CHDevFlow` e Project #2 real.
+
+1. **Desempenho Medido:**
+   - **Primeiro Acesso Frio (`GET /`):** **24.89s** (tempo real de consulta inicial das 30 missões e relações via `gh`).
+   - **Navegação Quente Subsequente com Cache Ativo:**
+     - `GET /grafo`: **0.056s** (56ms)
+     - `GET /missoes`: **0.051s** (51ms)
+     - `GET /` (Dashboard repetido): **0.004s** (4ms)
+     - **Subprocessos `gh` em navegação interna quente:** **0** (leitura puramente em memória).
+2. **Comportamento Observado na UI:**
+   - **Dashboard (`/`):** exibe alerta transparente informando status `PARTIAL`, com discriminação de 25 missões com cadastro incompleto, 16 consultas indisponíveis e 20 homologações humanas não verificadas.
+   - **Grafo DAG (`/grafo`):** Raia 4 (`secao-dados-insuficientes`) inicia recolhida por padrão; resumo exibe `4. Dados insuficientes — análise pendente (27)`. Ao clicar em um cartão, o modal acessível abre imediatamente exibindo os dados completos sem expor URLs REST na face.
+   - **Sincronização em Tempo Real (`/api/sincronizacao`):** API reporta com precisão `PARTIAL`, `DEPENDENCIES_PARTIAL`, sem alegar falso sucesso enquanto houver relações inconclusivas.
+   - **Resiliência a Falhas:** em caso de falha transitória do GitHub com cache existente, o sistema entra em `STALE` (HTTP 503) e exibe banner de aviso sem quebrar a aplicação.
+3. **Capturas de Tela Arquivadas (Evidências Auditáveis):**
+   - `docs/control-center/evidencias_r1/firefox_dashboard_desktop.png` (Desktop 1280x900)
+   - `docs/control-center/evidencias_r1/firefox_dashboard_mobile.png` (Mobile 375x812)
+   - `docs/control-center/evidencias_r1/firefox_grafo_desktop.png` (Desktop 1280x900)
+   - `docs/control-center/evidencias_r1/firefox_grafo_mobile.png` (Mobile 375x812)
+   - `docs/control-center/evidencias_r1/firefox_missoes_desktop.png` (Desktop 1280x900)
+   - `docs/control-center/evidencias_r1/firefox_missoes_mobile.png` (Mobile 375x812)
+
+### 10.5 Análise do Item Pendente (Acesso Frio) e Proposta Futura
+- **Diagnóstico:** O tempo de primeiro acesso frio em `LIVE_GITHUB` permanece em ~25s. Esse tempo decorre das consultas pontuais sequenciais via subprocessos `gh` para inspecionar dependências cruzadas de issues quando essas não constam na tabela do Project #2.
+- **Rigor Técnico:** O ganho exponencial de performance proporcionado pelo cache (de 25s para 4ms) aplica-se exclusivamente aos acessos subsequentes durante a janela de TTL (60s). Não se extrapola o ganho para a primeira consulta.
+- **Proposta para Fatias Futuras (Pós-CC-QUALITY-01):**
+  1. *Pré-aquecimento Assíncrono:* disparar thread em background na inicialização do servidor em `LIVE_GITHUB` para pré-carregar o snapshot antes do primeiro acesso do usuário.
+  2. *Consulta GraphQL em Batch:* substituir as invocações individuais de `gh` por uma única consulta GraphQL em lote contendo os cards do projeto e os campos vinculados de dependências.
+  3. *Cache Persistente em Disco com ETag:* persistir o snapshot em arquivo local (ex: `.ch_control_center/cache.json`) validando via ETag/If-None-Match, evitando novo acesso frio em reinicializações do servidor.
+
+---
+
+## 11. Conclusão da Validação R1 e Estado da Entrega
+
+A missão de recuperação CC-QUALITY-01 com o ciclo de correções R1 encontra-se tecnicamente validada com evidências locais, remotas e visuais completas.
+
+- **Draft PR:** #61 (https://github.com/hallanbrito/CHDevFlow/pull/61)
+- **Branch:** `agy/cc-quality-01` (empilhada sobre `codex/cc-dag-01` / PR #60)
+- **CI Integral:** Run 42314122884 (`success`, 472 testes)
+- **Custo:** R$ 0,00 mantido
+- **Segurança:** Invariantes C.H. D01, D05 e D06 estritamente preservadas. Nenhum merge, push na `main`, alteração de campos do Project #2 ou despacho real de agentes realizado.
+
+**Estado Formal:** `READY_FOR_CHATGPT_REVIEW`.
