@@ -260,6 +260,11 @@ function inicializarSincronizacao() {
   const modoMeta = document.querySelector('meta[name="modo-operacao"]');
   const modoOperacao = modoMeta ? modoMeta.getAttribute("content") : "DEMO_OFFLINE";
 
+  // O horário vem da última leitura confirmada pelo servidor, não da abertura da página.
+  const ultimaLeitura = document.querySelector('meta[name="cc-last-success"]')?.content;
+  const timestamp = ultimaLeitura ? Date.parse(ultimaLeitura) : NaN;
+  ultimoSucessoTimestamp = Number.isFinite(timestamp) ? timestamp : 0;
+
   // Polling automático de 60 segundos APENAS no modo LIVE_GITHUB
   if (modoOperacao === "LIVE_GITHUB") {
     iniciarPolling();
@@ -324,6 +329,59 @@ async function acionarSincronizacaoManual() {
   await executarSincronizacao(true);
 }
 
+// Atualiza o HTML usando o snapshot já sincronizado, sem recarregar a aba.
+// Preserva consulta de filtros, expansão da raia, modal ativo e posição de leitura.
+async function atualizarConteudoVisivel() {
+  const mainAtual = document.querySelector("main.content-area");
+  if (!mainAtual) return;
+
+  const scrollX = window.scrollX;
+  const scrollY = window.scrollY;
+  const filtroAntes = document.getElementById("filtro-dados-insuficientes");
+  const buscaAntes = filtroAntes ? filtroAntes.value : "";
+  const raiaAntes = document.getElementById("secao-dados-insuficientes");
+  const raiaAberta = raiaAntes ? raiaAntes.open : false;
+  const modalAntes = document.querySelector(".modal-overlay.active");
+  const modalId = modalAntes?.id || null;
+  let noAberto = null;
+  if (modalId === "modal-detalhes-missao") {
+    try { noAberto = JSON.parse(ultimoElementoFocado?.getAttribute("data-node") || "{}").id; }
+    catch (_) { noAberto = null; }
+  }
+
+  const resp = await fetch(window.location.pathname + window.location.search, { cache: "no-store" });
+  if (!resp.ok) throw new Error("Não foi possível atualizar a visualização com os dados recentes.");
+  const documento = new DOMParser().parseFromString(await resp.text(), "text/html");
+  const mainNovo = documento.querySelector("main.content-area");
+  if (!mainNovo) throw new Error("A resposta da atualização não contém o conteúdo esperado.");
+
+  mainAtual.replaceWith(mainNovo);
+  inicializarFiltroDadosInsuficientes();
+
+  const filtroNovo = document.getElementById("filtro-dados-insuficientes");
+  if (filtroNovo && filtroAntes) {
+    filtroNovo.value = buscaAntes;
+    filtroNovo.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  const raiaNova = document.getElementById("secao-dados-insuficientes");
+  if (raiaNova && raiaAntes) raiaNova.open = raiaAberta;
+
+  if (modalId === "modal-detalhes-missao" && noAberto) {
+    const cartaoNovo = [...document.querySelectorAll(".graph-node-card[data-node]")].find(el => {
+      try { return JSON.parse(el.getAttribute("data-node")).id === noAberto; }
+      catch (_) { return false; }
+    });
+    if (cartaoNovo) abrirModalDetalhesMissao(cartaoNovo);
+  } else if (modalId) {
+    const modalNovo = document.getElementById(modalId);
+    if (modalNovo && modalNovo.querySelector("h3")?.textContent === modalAntes.querySelector("h3")?.textContent) {
+      modalNovo.classList.add("active");
+      modalNovo.querySelector("button")?.focus();
+    }
+  }
+  window.scrollTo(scrollX, scrollY);
+}
+
 async function executarSincronizacao(manual = false) {
   if (isSyncing) return;
   isSyncing = true;
@@ -352,12 +410,16 @@ async function executarSincronizacao(manual = false) {
     const data = await res.json();
 
     if (res.ok && data.status === "OK") {
-      ultimoSucessoTimestamp = Date.now();
+      const registrado = Date.parse(data.estado?.last_success_at || "");
+      if (Number.isFinite(registrado)) ultimoSucessoTimestamp = registrado;
       atualizarIndicadorUi("OK");
 
-      // Se foi acionamento manual ou se houve alteração, recarrega a página preservando scroll
-      if (manual) {
-        window.location.reload();
+      const idAnterior = document.querySelector('meta[name="cc-snapshot-id"]')?.content || "";
+      const idAtual = data.estado?.snapshot_id || "";
+      if (manual || idAtual !== idAnterior) {
+        await atualizarConteudoVisivel();
+        const meta = document.querySelector('meta[name="cc-snapshot-id"]');
+        if (meta) meta.content = idAtual;
       }
     } else {
       const st = data.estado && data.estado.status ? data.estado.status : "ERROR";
