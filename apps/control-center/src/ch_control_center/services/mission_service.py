@@ -353,14 +353,23 @@ class MissionService:
                 self._cache_timestamp = time.monotonic()
                 self._cache_origem = modo
 
-                # Atualiza estado de sincronização de sucesso (F4)
+                # Uma leitura de Project pode ter dependências UNKNOWN/INVALID.
+                # Publicar resultado parcial sem alegar verificação integral.
+                incompletas = sum(
+                    1 for t in visao["tarefas"]
+                    if t["dependency_state"] in ("UNKNOWN", "INVALID")
+                ) if modo == MODO_LIVE_GITHUB else 0
                 self._estado_sincronizacao.source = modo
-                self._estado_sincronizacao.status = "OK"
-                self._estado_sincronizacao.last_success_at = datetime.now(timezone.utc).isoformat()
+                self._estado_sincronizacao.status = "PARTIAL" if incompletas else "OK"
+                if not incompletas:
+                    self._estado_sincronizacao.last_success_at = datetime.now(timezone.utc).isoformat()
                 self._estado_sincronizacao.total_received = len(snapshot.get("items", []))
                 self._estado_sincronizacao.total_recognized = len(visao["tarefas"])
-                self._estado_sincronizacao.error_code = None
-                self._estado_sincronizacao.diagnostic = None
+                self._estado_sincronizacao.error_code = "DEPENDENCIES_PARTIAL" if incompletas else None
+                self._estado_sincronizacao.diagnostic = (
+                    f"{incompletas} missão(ões) com consulta de dependências inconclusiva(s)."
+                    if incompletas else None
+                )
 
                 raw_bytes = json.dumps(snapshot, sort_keys=True).encode("utf-8")
                 self._estado_sincronizacao.snapshot_id = hashlib.sha256(raw_bytes).hexdigest()[:16]
