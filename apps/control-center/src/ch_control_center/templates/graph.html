@@ -44,28 +44,7 @@
       {% endif %}
     </div>
 
-    {% if no.motivo_bloqueio %}
-      <div style="font-size: 0.7rem; color: var(--status-bloqueada); margin: 0.25rem 0;">
-        ⚠️ {{ no.motivo_bloqueio }}
-      </div>
-    {% endif %}
 
-    <div style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.2rem 0;">
-      Dependências: {{ no.dependency_state }} • Origem: {{ no.dependency_source or 'não verificada' }} • Observado: {{ no.dependency_observed_at or 'não informado' }}
-    </div>
-
-    {% if no.causas_diagnosticas %}
-      <div style="display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.3rem 0;">
-        {% for causa in no.causas_diagnosticas %}
-          <span class="badge-causa">{{ causa }}</span>
-        {% endfor %}
-      </div>
-    {% endif %}
-
-    <div class="node-footer">
-      <span>Esteira: <strong>{{ no.esteira }}</strong></span>
-      <span>CH: <strong>{{ no.autonomia }}</strong></span>
-    </div>
   </div>
 {% endmacro %}
 
@@ -73,7 +52,7 @@
 {% if incompletos %}
 <div class="card" role="status" style="border-left: 4px solid var(--status-bloqueada); margin-bottom: 1rem;">
   <strong>Dados insuficientes: grafo parcial.</strong>
-  <p>{{ incompletos|length }} missão(ões) com campos ou dependências não informados. A ausência de arestas não comprova ausência de dependências.</p>
+  <p>{{ incompletos|length }} missão(ões) com alguma verificação pendente (cadastro, dependências ou homologação). A ausência de arestas não comprova ausência de dependências.</p>
 </div>
 {% endif %}
 
@@ -215,7 +194,7 @@
     {% set bloqueadas_dados = grafo.nos.values() | selectattr('status_grafo', 'equalto', 'BLOQUEADA_DADOS') | list %}
     {% if bloqueadas_dados %}
     <div style="margin-top: 1.25rem;">
-      <details open class="card" style="margin: 0; padding: 1rem; border: 1px solid var(--border-color);">
+      <details class="card" style="margin: 0; padding: 1rem; border: 1px solid var(--border-color);">
         <summary style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
           <span>4. Dados insuficientes — análise pendente ({{ bloqueadas_dados|length }})</span>
           <span style="font-size: 0.75rem; font-weight: 400; text-transform: none; color: var(--text-muted);">Clique para recolher/expandir</span>
