@@ -10,8 +10,9 @@
 - **Autonomia e Prova:** CH-2 expressamente autorizada pelo PO no comentário #6695121056
 - **Ambiente:** Linux (CachyOS x86_64), Python 3.13 / UV, worktree isolada `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow/recuperacao_control_center_ch2`, branch `agy/cc-quality-01`
 - **Fonte de Dados:** `LIVE_GITHUB` (GitHub Project #2 e API REST `blocked_by` via `gh`) / `DEMO_OFFLINE`
-- **Timestamp:** 2026-11-06T20:00:00Z
+- **Timestamp:** 2026-11-06T20:08:00Z
 - **Baseline:** Commit `761af5a3db75a83d71e39490f092c577713e243d` (HEAD da PR #60 / CC-DAG-01 R3 em `codex/cc-dag-01`)
+- **CI Run ID:** [42309655861](https://github.com/hallanbrito/CHDevFlow/actions/runs/42309655861) (Completed: `success`)
 - **Resultado Técnico:** APROVADO_TECNICAMENTE (sujeito à auditoria do ChatGPT e homologação do PO)
 - **Custo Adicional Comprovado:** R$ 0,00
 
@@ -86,6 +87,7 @@ O Control Center foi recuperado com sucesso nas seis fases da ordem de serviço:
 | E10 | OBSERVADO | `python -m compileall -q src scripts apps` | Compilação sintática 100% aprovada. |
 | E11 | OBSERVADO | `python scripts/w1_github_project.py` | Prévia offline executada sem mutações e sem erros. |
 | E12 | OBSERVADO | `git diff --check` | Nenhuma linha em branco ou erro de formatação detectado. |
+| E13 | OBSERVADO | [CI Integral 42309655861](https://github.com/hallanbrito/CHDevFlow/actions/runs/42309655861) | `completed/success` no GitHub Actions; 290 testes raiz, 73 Sentinela, 103 Control Center = 466 aprovados; compilação sintática e prévia offline aprovadas. |
 
 ---
 
