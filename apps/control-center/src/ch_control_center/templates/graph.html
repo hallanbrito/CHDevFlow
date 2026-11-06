@@ -4,6 +4,7 @@
 {% block page_title %}Grafo Visual de Dependências (DAG Read-Only){% endblock %}
 
 {% block content %}
+{% macro rotulo(no) -%}{% if no.numero_issue %}#{{ no.numero_issue }}{% else %}{{ no.id }}{% endif %}{%- endmacro %}
 {% set incompletos = grafo.nos.values() | selectattr('pendencias_dados') | list %}
 {% if incompletos %}
 <div class="card" role="status" style="border-left: 4px solid var(--status-bloqueada); margin-bottom: 1rem;">
@@ -27,7 +28,7 @@
   </p>
   <ul style="margin-left: 1.5rem; margin-top: 0.3rem; font-size: 0.8rem;">
     {% for ciclo in grafo.ciclos_detectados %}
-      <li><code>{{ ciclo | join(" ➔ ") }} ➔ {{ ciclo[0] }}</code></li>
+      <li><code>{% for task_id in ciclo %}<span title="ID interno: {{ task_id }}">{{ rotulo(grafo.nos[task_id]) }}</span> ➔ {% endfor %}<span title="ID interno: {{ ciclo[0] }}">{{ rotulo(grafo.nos[ciclo[0]]) }}</span></code></li>
     {% endfor %}
   </ul>
 </div>
@@ -43,7 +44,7 @@
   </p>
   <ul style="margin-left: 1.5rem; margin-top: 0.3rem; font-size: 0.8rem;">
     {% for task_id, faltantes in grafo.dependencias_desconhecidas.items() %}
-      <li><strong>{{ task_id }}</strong> depende de: <code>{{ faltantes | join(", ") }}</code></li>
+      <li><strong title="ID interno: {{ task_id }}">{{ rotulo(grafo.nos[task_id]) }}</strong> depende de: <code>{{ faltantes | join(", ") }}</code></li>
     {% endfor %}
   </ul>
 </div>
@@ -94,7 +95,7 @@
           {% if no.status_grafo in ['CONCLUIDA', 'ELEGIVEL'] %}
             <div class="graph-node-card {{ no.status_grafo.lower() }}">
               <div class="node-header">
-                <span class="node-id">{{ no.id }}</span>
+                <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
                 {% if no.status_grafo == 'CONCLUIDA' %}
                   <span class="badge-status badge-concluida">HOMOLOGADA VERIFICADA</span>
                 {% else %}
@@ -123,7 +124,7 @@
           {% if no.status_grafo == 'BLOQUEADA_POR_DEPENDENCIA' %}
             <div class="graph-node-card bloqueada">
               <div class="node-header">
-                <span class="node-id">{{ no.id }}</span>
+                <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
                 <span class="badge-status badge-bloqueada">BLOQUEADA ({{ no.grau_entrada }})</span>
               </div>
               <div class="node-title">{{ no.titulo }}</div>
@@ -161,7 +162,7 @@
           {% if no.status_grafo in ['BLOQUEADA_CICLO', 'BLOQUEADA_ORFA'] %}
             <div class="graph-node-card {% if no.status_grafo == 'BLOQUEADA_CICLO' %}ciclo{% else %}orfa{% endif %}">
               <div class="node-header">
-                <span class="node-id">{{ no.id }}</span>
+                <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
                 {% if no.status_grafo == 'BLOQUEADA_CICLO' %}
                   <span class="badge-status badge-ciclo">CICLO</span>
                 {% else %}
@@ -186,15 +187,28 @@
     {% set bloqueadas_dados = grafo.nos.values() | selectattr('status_grafo', 'equalto', 'BLOQUEADA_DADOS') | list %}
     {% if bloqueadas_dados %}
     <div style="margin-top: 1rem;">
-      <h4>Dados insuficientes — análise pendente</h4>
+      <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.75rem;">
+        4. Dados insuficientes — análise pendente
+      </h4>
       <div class="graph-level">
         {% for no in bloqueadas_dados %}
         <div class="graph-node-card bloqueada">
-          <div class="node-header"><span class="node-id">{{ no.id }}</span><span class="badge-status badge-bloqueada">Dados insuficientes</span></div>
+          <div class="node-header">
+            <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
+            <span class="badge-status badge-bloqueada">Dados insuficientes</span>
+          </div>
           <div class="node-title">{{ no.titulo }}</div>
-          <p>{{ no.motivo_bloqueio }}</p>
-          <p>Dependências: {{ no.dependency_state }} • Origem: {{ no.dependency_source or 'não verificada' }} • Observado: {{ no.dependency_observed_at or 'não informado' }}</p>
-          {% for ref in no.dependency_refs %}<p><a href="{{ ref.url }}">{{ ref.issue_ref }}</a></p>{% endfor %}
+          <div style="font-size: 0.7rem; color: var(--status-bloqueada); margin-bottom: 0.5rem;">
+            ⚠️ {{ no.motivo_bloqueio }}
+          </div>
+          <div style="font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
+            Dependências: {{ no.dependency_state }} • Origem: {{ no.dependency_source or 'não verificada' }} • Observado: {{ no.dependency_observed_at or 'não informado' }}
+            {% for ref in no.dependency_refs %}<div><a href="{{ ref.url }}">{{ ref.issue_ref }}</a></div>{% endfor %}
+          </div>
+          <div class="node-footer">
+            <span>Esteira: <strong>{{ no.esteira }}</strong></span>
+            <span>CH: <strong>{{ no.autonomia }}</strong></span>
+          </div>
         </div>
         {% endfor %}
       </div>

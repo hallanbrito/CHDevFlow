@@ -67,10 +67,7 @@
         {% for m in missoes %}
         <tr>
           <td>
-            <strong>{{ m.id }}</strong>
-            {% if m.number %}
-              <div style="font-size: 0.7rem; color: var(--text-muted);">Issue #{{ m.number }}</div>
-            {% endif %}
+            <strong title="ID interno: {{ m.id }}">{% if m.issue_ref and m.number %}#{{ m.number }}{% else %}{{ m.id }}{% endif %}</strong>
           </td>
           <td>
             <div style="font-weight: 600; color: var(--text-primary);">{{ m.title }}</div>
@@ -130,7 +127,7 @@
               <div class="modal-content">
                 <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
                   <div>
-                    <h3 style="font-size: 1.1rem; font-weight: 700;">{{ m.id }}: {{ m.title }}</h3>
+                    <h3 style="font-size: 1.1rem; font-weight: 700;" title="ID interno: {{ m.id }}">{% if m.issue_ref and m.number %}#{{ m.number }}{% else %}{{ m.id }}{% endif %}: {{ m.title }}</h3>
                     <span style="font-size: 0.75rem; color: var(--text-muted);">Etapa CH: {{ m.stage }} • Esteira: {{ m.esteira }} • Autonomia: {{ m.autonomia }}</span>
                   </div>
                   <button type="button" class="btn btn-sm" onclick="fecharModal('modal-{{ loop.index }}')">✕</button>
@@ -162,6 +159,10 @@
 
                   <div>
                     <strong>Repositório Alvo:</strong> <code>{{ m.repository }}</code>
+                  </div>
+
+                  <div>
+                    <strong>ID interno:</strong> <code>{{ m.id }}</code>
                   </div>
 
                   {% if m.number %}

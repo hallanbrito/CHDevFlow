@@ -238,6 +238,53 @@ def test_dashboard_separa_etapa_visual_de_homologacao_verificada():
     assert "não comprovam homologação" in html
 
 
+def test_r3_templates_mostram_issue_ou_fallback_e_dados_insuficientes():
+    com_issue = item_nativo(42)
+    sem_issue = item_nativo(43)
+    sem_issue["content"]["number"] = None
+    sem_issue["content"]["url"] = "#"
+    visao = MissionService().construir_visao_operacional_completa(
+        {"items": [com_issue, sem_issue]}, "DEMO_OFFLINE",
+    )
+    ambiente = Environment(loader=FileSystemLoader(str(DIRETORIO_TEMPLATES)), autoescape=True)
+    dashboard = ambiente.get_template("dashboard.html").render(
+        stats=visao["stats"], missoes=visao["missoes"], erro_leitura=None,
+    )
+    missoes = ambiente.get_template("missions.html").render(
+        missoes=visao["missoes"], modo_operacao="DEMO_OFFLINE",
+        filtro_busca="", filtro_status="TODOS", filtro_esteira="TODAS",
+    )
+    grafo = ambiente.get_template("graph.html").render(grafo=visao["grafo"])
+
+    for html in (dashboard, missoes):
+        assert '<strong title="ID interno: PVTI_sintetico_42">#42</strong>' in html
+        assert '<strong title="ID interno: PVTI_sintetico_43">PVTI_sintetico_43</strong>' in html
+        assert re.search(r'<span class="badge-status badge-bloqueada">Dados insuficientes</span>', html)
+    assert '/missoes?detalhe=PVTI_sintetico_42' in dashboard
+    assert '<strong>ID interno:</strong> <code>PVTI_sintetico_42</code>' in missoes
+    assert '<span class="node-id" title="ID interno: PVTI_sintetico_42">#42</span>' in grafo
+    assert '<span class="node-id" title="ID interno: PVTI_sintetico_43">PVTI_sintetico_43</span>' in grafo
+    assert "4. Dados insuficientes — análise pendente" in grafo
+    assert re.search(r'4\. Dados insuficientes.*?node-footer.*?Esteira:.*?CH:', grafo, re.S)
+    assert "Dependências: UNKNOWN • Origem: fixture_offline • Observado: não informado" in grafo
+
+
+def test_r3_alertas_do_grafo_mostram_issue_e_preservam_id_tecnico():
+    a, b, orfa = [item_nativo(n) for n in (10, 11, 12)]
+    a["dependencies"] = [b["id"]]
+    b["dependencies"] = [a["id"]]
+    orfa["dependencies"] = ["outro/repo#99"]
+    visao = MissionService().construir_visao_operacional_completa(
+        {"items": [a, b, orfa]}, "DEMO_OFFLINE",
+    )
+    ambiente = Environment(loader=FileSystemLoader(str(DIRETORIO_TEMPLATES)), autoescape=True)
+    grafo = ambiente.get_template("graph.html").render(grafo=visao["grafo"])
+    assert '<span title="ID interno: PVTI_sintetico_10">#10</span>' in grafo
+    assert '<span title="ID interno: PVTI_sintetico_11">#11</span>' in grafo
+    assert '<strong title="ID interno: PVTI_sintetico_12">#12</strong> depende de:' in grafo
+    assert "outro/repo#99" in grafo
+
+
 def configurar_live(monkeypatch, snapshot):
     servico = get_mission_service()
     servico.alternar_modo_operacao(MODO_LIVE_GITHUB)
@@ -287,4 +334,4 @@ def test_projeto_valido_vazio_nao_e_falha_de_leitura(client, monkeypatch):
 
 def test_grafo_demo_renderiza_todos_os_onze_cartoes_inclusive_anomalias(client):
     resposta = client.get("/grafo")
-    assert resposta.text.count('class="node-id"') == 11
+    assert resposta.text.count('class="node-id" title=') == 11
