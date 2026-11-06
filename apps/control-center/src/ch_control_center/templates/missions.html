@@ -94,15 +94,17 @@
           </td>
           <td>
             {% if not m.dependencies_informadas %}
-              <span>Não informadas</span>
+              <span>Desconhecidas ou inválidas</span>
             {% elif m.dependencies %}
               <div style="display: flex; flex-wrap: wrap; gap: 0.25rem;">
-                {% for d in m.dependencies %}
-                  <span style="font-size: 0.65rem; padding: 0.1rem 0.35rem; border-radius: 4px; background: var(--bg-primary); border: 1px solid var(--border-color); font-weight: 600;">{{ d }}</span>
+                {% for d in m.dependency_refs if m.dependency_refs %}
+                  <a href="{{ d.url }}" style="font-size: 0.65rem;">{{ d.issue_ref }}</a>
+                {% else %}
+                  {% for d in m.dependencies %}<span style="font-size: 0.65rem;">{{ d }}</span>{% endfor %}
                 {% endfor %}
               </div>
             {% else %}
-              <span style="font-size: 0.7rem; color: var(--text-muted);">Nenhuma (Raiz)</span>
+              <span style="font-size: 0.7rem; color: var(--text-muted);">Sem dependências verificadas</span>
             {% endif %}
           </td>
           <td>
@@ -170,17 +172,21 @@
 
                   <div>
                     <strong>Dependências Diretas:</strong>
+                    <div>Estado: {{ m.dependency_state }} • Origem: {{ m.dependency_source }} • Observado: {{ m.dependency_observed_at or 'não informado' }}</div>
                     {% if not m.dependencies_informadas %}
-                      <span>Dependências não informadas ou inválidas; grafo não verificado.</span>
+                      <span>Dependências desconhecidas ou inválidas; grafo não verificado.</span>
                     {% elif m.dependencies %}
                       <ul style="margin-left: 1.5rem; margin-top: 0.25rem;">
-                        {% for dep in m.dependencies %}
-                          <li><code>{{ dep }}</code></li>
-                        {% endfor %}
+                        {% if m.dependency_refs %}
+                          {% for dep in m.dependency_refs %}<li><a href="{{ dep.url }}">{{ dep.issue_ref }}</a> (Issue {{ dep.state }})</li>{% endfor %}
+                        {% else %}
+                          {% for dep in m.dependencies %}<li><code>{{ dep }}</code></li>{% endfor %}
+                        {% endif %}
                       </ul>
                     {% else %}
-                      <span>Nenhuma dependência declarada (Nó Raiz).</span>
+                      <span>Sem dependências verificadas.</span>
                     {% endif %}
+                    {% if m.dependency_diagnostic %}<div>{{ m.dependency_diagnostic }}</div>{% endif %}
                   </div>
 
                   <div style="background-color: var(--bg-primary); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); margin-top: 0.5rem;">

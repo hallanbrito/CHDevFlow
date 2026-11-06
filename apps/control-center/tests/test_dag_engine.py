@@ -53,9 +53,9 @@ def test_fluxo_linear_simples(dag: DAGEngine) -> None:
 
 
 def test_tarefa_concluida_desbloqueia_sucessora(dag: DAGEngine) -> None:
-    """Se A está CONCLUIDA (DONE/PROD_OK), B (que depende de A) torna-se ELEGIVEL."""
+    """Só homologação verificada e etapa correspondente satisfazem A."""
     tarefas = [
-        {"id": "A", "title": "Tarefa A", "stage": "DONE", "dependencies": []},
+        {"id": "A", "title": "Tarefa A", "stage": "HOMOLOGADA", "homologacao_verificada": True, "dependencies": []},
         {"id": "B", "title": "Tarefa B", "stage": "BACKLOG", "dependencies": ["A"]},
     ]
     res = dag.construir_grafo(tarefas)
@@ -67,12 +67,36 @@ def test_tarefa_concluida_desbloqueia_sucessora(dag: DAGEngine) -> None:
     assert res.total_bloqueadas == 0
 
 
+@pytest.mark.parametrize("etapa", ["INTEGRADA", "DONE", "CLOSED", "PROD_OK", "HOMOLOGADA"])
+def test_etapa_sem_homologacao_verificada_nao_desbloqueia(etapa: str, dag: DAGEngine) -> None:
+    res = dag.construir_grafo([
+        {"id": "A", "stage": etapa, "dependencies": []},
+        {"id": "B", "stage": "BACKLOG", "dependencies": ["A"]},
+    ])
+    assert res.nos["A"].status_grafo != STATUS_CONCLUIDA
+    assert res.nos["B"].status_grafo == STATUS_BLOQUEADA_DEP
+    assert res.total_elegiveis == 0
+
+
+def test_prova_sem_etapa_homologada_nao_desbloqueia(dag: DAGEngine) -> None:
+    res = dag.construir_grafo([
+        {"id": "A", "stage": "INTEGRADA", "homologacao_verificada": True, "dependencies": []},
+        {"id": "B", "stage": "BACKLOG", "dependencies": ["A"]},
+    ])
+    assert res.nos["B"].status_grafo == STATUS_BLOQUEADA_DEP
+
+
+def test_ids_duplicados_na_entrada_direta_rejeitados(dag: DAGEngine) -> None:
+    with pytest.raises(ValueError, match="duplicado"):
+        dag.construir_grafo([{"id": "A"}, {"id": "A"}])
+
+
 def test_diamante_com_conclusoes_parciais(dag: DAGEngine) -> None:
     """Padrão diamante: A -> B, A -> C; B & C -> D.
     A concluída; B concluída; C pendente => D deve continuar bloqueada por C."""
     tarefas = [
-        {"id": "A", "title": "A", "stage": "PROD_OK", "dependencies": []},
-        {"id": "B", "title": "B", "stage": "DONE", "dependencies": ["A"]},
+        {"id": "A", "title": "A", "stage": "HOMOLOGADA", "homologacao_verificada": True, "dependencies": []},
+        {"id": "B", "title": "B", "stage": "HOMOLOGADA", "homologacao_verificada": True, "dependencies": ["A"]},
         {"id": "C", "title": "C", "stage": "IN_PROGRESS", "dependencies": ["A"]},
         {"id": "D", "title": "D", "stage": "BACKLOG", "dependencies": ["B", "C"]},
     ]
@@ -112,6 +136,16 @@ def test_deteccao_auto_dependencia(dag: DAGEngine) -> None:
     assert res.nos["A"].status_grafo == STATUS_BLOQUEADA_CICLO
 
 
+def test_ciclo_nao_desaparece_com_etapa_homologada(dag: DAGEngine) -> None:
+    res = dag.construir_grafo([
+        {"id": "A", "stage": "HOMOLOGADA", "homologacao_verificada": True, "dependencies": ["B"]},
+        {"id": "B", "stage": "BACKLOG", "dependencies": ["A"]},
+    ])
+    assert res.total_concluidas == 0
+    assert res.nos["A"].status_grafo == STATUS_BLOQUEADA_CICLO
+    assert res.nos["B"].status_grafo == STATUS_BLOQUEADA_CICLO
+
+
 def test_deteccao_dependencia_orfa_ou_desconhecida(dag: DAGEngine) -> None:
     """A depende de X, mas X não existe no snapshot."""
     tarefas = [
@@ -129,7 +163,7 @@ def test_grafo_misto_isolamento_de_anomalias(dag: DAGEngine) -> None:
     """Um grafo que contém tarefas saudáveis e um ciclo isolado não deve corromper
     as tarefas saudáveis (princípio de isolamento)."""
     tarefas = [
-        {"id": "OK-1", "title": "Saudável 1", "stage": "DONE", "dependencies": []},
+        {"id": "OK-1", "title": "Saudável 1", "stage": "HOMOLOGADA", "homologacao_verificada": True, "dependencies": []},
         {"id": "OK-2", "title": "Saudável 2", "stage": "BACKLOG", "dependencies": ["OK-1"]},
         {"id": "CICLO-1", "title": "Ciclo 1", "stage": "BACKLOG", "dependencies": ["CICLO-2"]},
         {"id": "CICLO-2", "title": "Ciclo 2", "stage": "BACKLOG", "dependencies": ["CICLO-1"]},

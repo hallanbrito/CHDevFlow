@@ -7,6 +7,8 @@ ele consome estritamente as interfaces públicas estáveis de 'ch_sentinela'.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,7 @@ from ch_sentinela.contracts import (
 from ch_sentinela.github_reader import (
     LeitorGitHub,
     LeitorGitHubErro,
+    LeitorGitHubFormatoErro,
     validar_campos_projeto,
     validar_snapshot_projeto,
 )
@@ -88,7 +91,30 @@ class SentinelFacade:
         try:
             snapshot = self.leitor.listar_itens_projeto()
             self.validar_estrutura_snapshot(snapshot)
-            return snapshot
+            # A observação de dependências pertence à mesma visão da requisição.
+            # Uma falha individual permanece explícita; jamais vira lista vazia.
+            enriquecido = deepcopy(snapshot)
+            for item in enriquecido["items"]:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                labels = item.get("labels", [])
+                nomes = {x.get("name") if isinstance(x, dict) else x for x in labels} if isinstance(labels, list) else set()
+                if not isinstance(content, dict) or content.get("type") != "Issue" or "ch:workflow" not in nomes:
+                    continue
+                numero = content.get("number")
+                repo = content.get("repository")
+                observado = datetime.now(timezone.utc).isoformat()
+                if isinstance(numero, bool) or not isinstance(numero, int) or numero <= 0 or repo != self.leitor.repositorio or content.get("url") != f"https://github.com/{repo}/issues/{numero}":
+                    item["dependency_observation"] = {"dependency_state": "INVALID", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": "Identidade da Issue no Project inválida."}
+                    continue
+                try:
+                    item["dependency_observation"] = self.leitor.obter_dependencias_issue(numero, repo)
+                except LeitorGitHubFormatoErro as exc:
+                    item["dependency_observation"] = {"dependency_state": "INVALID", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": sanitizar_texto_segredos(str(exc))}
+                except LeitorGitHubErro as exc:
+                    item["dependency_observation"] = {"dependency_state": "UNKNOWN", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": sanitizar_texto_segredos(str(exc))}
+            return enriquecido
         except LeitorGitHubErro as exc:
             msg = f"Falha na leitura ao vivo do GitHub Project: {exc}"
             raise SentinelaAdapterErro(msg) from exc

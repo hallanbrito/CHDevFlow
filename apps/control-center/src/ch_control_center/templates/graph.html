@@ -55,11 +55,11 @@
   <div style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem;">
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-concluida); border-radius: 2px;"></span>
-      <span><strong>Concluída:</strong> Etapa de conclusão observada</span>
+      <span><strong>Concluída:</strong> Homologação verificada vinculada à missão</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-elegivel); border-radius: 2px;"></span>
-      <span><strong>Elegível:</strong> Sem dependências pendentes</span>
+      <span><strong>Elegível no DAG:</strong> Sem pré-requisitos pendentes; não autoriza execução</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-bloqueada); border-radius: 2px;"></span>
@@ -102,6 +102,7 @@
                 {% endif %}
               </div>
               <div class="node-title">{{ no.titulo }}</div>
+              <div style="font-size: 0.7rem;">Dependências: {{ no.dependency_state }} • {{ no.dependency_source or 'fonte não verificada' }}</div>
               <div class="node-footer">
                 <span>Esteira: <strong>{{ no.esteira }}</strong></span>
                 <span>CH: <strong>{{ no.autonomia }}</strong></span>
@@ -126,6 +127,7 @@
                 <span class="badge-status badge-bloqueada">BLOQUEADA ({{ no.grau_entrada }})</span>
               </div>
               <div class="node-title">{{ no.titulo }}</div>
+              <div style="font-size: 0.7rem;">Dependências: {{ no.dependency_state }} • {{ no.dependency_source or 'fonte não verificada' }}</div>
               {% if no.motivo_bloqueio %}
                 <div style="font-size: 0.7rem; color: var(--status-bloqueada); margin-bottom: 0.5rem;">
                   ⏳ {{ no.motivo_bloqueio }}
@@ -167,6 +169,7 @@
                 {% endif %}
               </div>
               <div class="node-title">{{ no.titulo }}</div>
+              <div style="font-size: 0.7rem;">Dependências: {{ no.dependency_state }} • {{ no.dependency_source or 'fonte não verificada' }}</div>
               <div style="font-size: 0.7rem; color: var(--status-ciclo); font-weight: 600; margin-bottom: 0.5rem;">
                 ⚠️ {{ no.motivo_bloqueio }}
               </div>
@@ -190,6 +193,8 @@
           <div class="node-header"><span class="node-id">{{ no.id }}</span><span class="badge-status badge-bloqueada">Dados insuficientes</span></div>
           <div class="node-title">{{ no.titulo }}</div>
           <p>{{ no.motivo_bloqueio }}</p>
+          <p>Dependências: {{ no.dependency_state }} • Origem: {{ no.dependency_source or 'não verificada' }} • Observado: {{ no.dependency_observed_at or 'não informado' }}</p>
+          {% for ref in no.dependency_refs %}<p><a href="{{ ref.url }}">{{ ref.issue_ref }}</a></p>{% endfor %}
         </div>
         {% endfor %}
       </div>

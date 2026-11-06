@@ -81,7 +81,7 @@ def test_obter_resumo_estatisticas(service: MissionService) -> None:
     """Verifica cálculo dos contadores para os cards do dashboard."""
     stats = service.obter_resumo_estatisticas()
     assert stats["total_tarefas"] >= 10
-    assert stats["total_concluidas"] >= 1
+    assert stats["total_concluidas"] == 0  # Fixture não contém prova humana de homologação.
     assert stats["total_ciclos"] == 1  # 1 ciclo detectado (com 2 tarefas)
     assert stats["total_orfas"] == 1    # 1 tarefa com dependência órfã
     assert stats["modo_operacao"] == MODO_DEMO_OFFLINE

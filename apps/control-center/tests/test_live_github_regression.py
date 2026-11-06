@@ -6,10 +6,13 @@ Nenhum teste consulta rede ou usa credenciais.
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 
 import pytest
 
 from ch_control_center.adapters.sentinela_adapter import SentinelaAdapterErro
+from ch_control_center.adapters.sentinela_adapter import SentinelFacade
+from ch_sentinela.github_reader import LeitorGitHub
 from ch_control_center.config import MODO_LIVE_GITHUB
 from ch_control_center.dependencies import get_mission_service
 from ch_control_center.services.mission_service import MissionService
@@ -54,7 +57,7 @@ def test_dezessete_itens_nativos_nao_sao_descartados_nem_inventam_dependencias()
     assert missao["autonomia"] == "CH-2"
     assert missao["dependencies_informadas"] is False
     assert missao["status_grafo"] == "BLOQUEADA_DADOS"
-    assert "Dependências não informadas" in missao["motivo_bloqueio"]
+    assert "Dependências desconhecidas" in missao["motivo_bloqueio"]
     assert visao["grafo"].arestas == []
     assert visao["grafo"].ciclos_detectados == []
     assert visao["grafo"].dependencias_desconhecidas == {}
@@ -108,14 +111,78 @@ def test_lista_vazia_explicita_permite_raiz_e_dependente_de_dados_insuficientes_
     assert estados == ["BLOQUEADA_DADOS", "BLOQUEADA_POR_DEPENDENCIA", "ELEGIVEL"]
 
 
-def test_etapa_homologada_observada_e_preservada_com_dependencias_nao_informadas():
+def test_etapa_homologada_sem_prova_humana_permanece_bloqueada():
     item = item_nativo()
     item["etapa CH"] = "HOMOLOGADA"
     visao = MissionService().construir_visao_operacional_completa({"items": [item]})
-    assert visao["missoes"][0]["status_grafo"] == "CONCLUIDA"
+    assert visao["missoes"][0]["status_grafo"] == "BLOQUEADA_DADOS"
+    assert "Homologação humana" in visao["missoes"][0]["motivo_bloqueio"]
     assert visao["missoes"][0]["dependencies_informadas"] is False
     assert visao["stats"]["total_dados_insuficientes"] == 1
     assert visao["stats"]["total_elegiveis"] == 0
+
+
+def test_leitura_nativa_resolve_issue_para_item_sem_liberar_etapa_integrada():
+    a, b, externa = [item_nativo(n) for n in (1, 2, 3)]
+    a["etapa CH"] = "INTEGRADA"
+    def dep(repo: str, numero: int, estado: str = "closed") -> dict:
+        return {"id": numero + 100, "node_id": f"I_{numero}", "number": numero,
+                "repository_url": f"https://api.github.com/repos/{repo}",
+                "html_url": f"https://github.com/{repo}/issues/{numero}", "state": estado}
+    def resposta(args: list[str]) -> str:
+        if "item-list" in args:
+            return json.dumps({"items": [a, b, externa], "totalCount": 3})
+        numero = int(args[-1].split("/issues/")[1].split("/")[0])
+        paginas = {1: [[]], 2: [[dep("hallanbrito/CHDevFlow", 1)]],
+                   3: [[dep("outro/repo", 99)]]}
+        return json.dumps(paginas[numero])
+    facade = SentinelFacade(leitor=LeitorGitHub(executor_customizado=resposta))
+    snapshot = facade.obter_snapshot_ao_vivo()
+    visao = MissionService(facade=facade).construir_visao_operacional_completa(snapshot, MODO_LIVE_GITHUB)
+    m_a, m_b, m_externa = visao["missoes"]
+    assert m_a["dependency_state"] == "VERIFIED_EMPTY"
+    assert m_a["status_grafo"] == "BLOQUEADA_DADOS"
+    assert m_b["dependency_refs"][0]["issue_ref"] == "hallanbrito/CHDevFlow#1"
+    assert m_b["dependencies"] == [a["id"]]
+    assert m_b["status_grafo"] == "BLOQUEADA_POR_DEPENDENCIA"
+    assert m_externa["dependencies"] == ["outro/repo#99"]
+    assert m_externa["status_grafo"] == "BLOQUEADA_ORFA"
+    assert m_b["dependency_observed_at"] and m_b["dependency_source"].startswith("github_rest:")
+
+
+def test_falha_parcial_da_api_nativa_e_dado_bruto_nao_liberam_missao():
+    a, b = item_nativo(1), item_nativo(2)
+    b["dependencies"] = []  # Campo bruto não substitui prova da API nativa.
+    def resposta(args: list[str]) -> str:
+        if "item-list" in args:
+            return json.dumps({"items": [a, b], "totalCount": 2})
+        if "/issues/1/" in args[-1]:
+            return "[[]]"
+        raise RuntimeError("HTTP 403: ghp_1234567890abcdefghijklmnopqrstuvwxyz")
+    facade = SentinelFacade(leitor=LeitorGitHub(executor_customizado=resposta))
+    snapshot = facade.obter_snapshot_ao_vivo()
+    visao = MissionService(facade=facade).construir_visao_operacional_completa(snapshot, MODO_LIVE_GITHUB)
+    assert visao["missoes"][0]["status_grafo"] == "ELEGIVEL"
+    assert visao["missoes"][1]["dependency_state"] == "UNKNOWN"
+    assert visao["missoes"][1]["status_grafo"] == "BLOQUEADA_DADOS"
+    assert "ghp_1234567890" not in str(visao)
+
+
+def test_json_nativo_invalido_fica_invalid_e_bloqueado():
+    item = item_nativo(1)
+    def resposta(args: list[str]) -> str:
+        return json.dumps({"items": [item], "totalCount": 1}) if "item-list" in args else "{json quebrado"
+    facade = SentinelFacade(leitor=LeitorGitHub(executor_customizado=resposta))
+    visao = MissionService(facade=facade).construir_visao_operacional_completa(facade.obter_snapshot_ao_vivo(), MODO_LIVE_GITHUB)
+    assert visao["missoes"][0]["dependency_state"] == "INVALID"
+    assert visao["missoes"][0]["status_grafo"] == "BLOQUEADA_DADOS"
+
+
+def test_ids_duplicados_do_project_bloqueiam_grafo_inteiro():
+    a, b = item_nativo(1), item_nativo(2)
+    b["id"] = a["id"]
+    with pytest.raises(SentinelaAdapterErro, match="duplicado"):
+        MissionService().construir_visao_operacional_completa({"items": [a, b]}, MODO_LIVE_GITHUB)
 
 
 def configurar_live(monkeypatch, snapshot):
