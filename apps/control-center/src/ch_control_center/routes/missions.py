@@ -33,6 +33,7 @@ async def list_missions_view(
         filtro_esteira=esteira,
         termo_busca=busca,
     )
+    estado_sync = mission_service.obter_estado_sincronizacao()
 
     contexto = {
         "active_page": "missoes",
@@ -42,6 +43,7 @@ async def list_missions_view(
         "filtro_status": status,
         "filtro_esteira": esteira,
         "filtro_busca": busca,
+        "estado_sync": estado_sync,
     }
     return templates.TemplateResponse(request=request, name="missions.html", context=contexto)
 

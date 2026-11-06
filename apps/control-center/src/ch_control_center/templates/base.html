@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <meta name="modo-operacao" content="{{ modo_operacao }}">
   <title>{% block title %}CHDevFlow Control Center{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/styles.css">
   <script src="/static/js/app.js"></script>
@@ -85,6 +87,18 @@
         </div>
 
         <div class="header-right">
+          <!-- Widget de Sincronização UX (CC-QUALITY-01 / F4) -->
+          <div class="sync-widget" style="display: inline-flex; align-items: center; gap: 0.5rem; margin-right: 0.5rem;">
+            <div id="sync-indicator" class="sync-status-badge sync-{{ estado_sync.status|lower if estado_sync else 'ok' }}" title="Estado da sincronização: {{ estado_sync.status if estado_sync else 'OK' }}">
+              <span class="sync-dot"></span>
+              <span id="sync-status-text">{{ estado_sync.status if estado_sync else 'OK' }}</span>
+            </div>
+            <button type="button" id="btn-atualizar-agora" class="btn btn-sm" onclick="acionarSincronizacaoManual()" title="Atualizar agora os dados do projeto" style="display: inline-flex; align-items: center; gap: 0.3rem; font-weight: 600;">
+              <span id="sync-icon">🔄</span>
+              <span id="sync-label">Atualizar agora</span>
+            </button>
+          </div>
+
           <!-- Seletor de Perfil de Projeto (AUD-03 e AUD-02.1) -->
           <form action="/projetos/alternar" method="POST" style="display: inline-flex; align-items: center; gap: 0.4rem;">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -121,6 +135,19 @@
       </header>
 
       <main class="content-area">
+        {% if estado_sync and estado_sync.status == 'STALE' %}
+        <div id="sync-stale-banner" class="card" role="alert" style="border-left: 5px solid var(--status-bloqueada); background-color: var(--status-bloqueada-bg); margin-bottom: 1rem; padding: 0.75rem 1rem;">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;">
+            <span style="font-size: 0.85rem; font-weight: 700; color: var(--text-primary);">
+              ⚠️ <strong>Dados em cache (STALE)</strong>: A última tentativa de sincronização falhou ({{ estado_sync.error_code or 'Falha na consulta' }}). O sistema opera com o último snapshot seguro em memória.
+            </span>
+            <button type="button" class="btn btn-sm" onclick="acionarSincronizacaoManual()" style="font-size: 0.75rem; font-weight: 600;">Tentar novamente</button>
+          </div>
+          {% if estado_sync.diagnostic %}
+            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.3rem;">{{ estado_sync.diagnostic }}</p>
+          {% endif %}
+        </div>
+        {% endif %}
         {% block content %}{% endblock %}
       </main>
     </div>

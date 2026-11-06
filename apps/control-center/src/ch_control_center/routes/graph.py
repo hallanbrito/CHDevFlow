@@ -26,12 +26,14 @@ async def graph_view(
 ) -> HTMLResponse:
     """Renderiza a visualização topológica do Grafo de Dependências com alertas de ciclo/órfãs."""
     grafo = mission_service.obter_grafo_dag()
+    estado_sync = mission_service.obter_estado_sincronizacao()
 
     contexto = {
         "active_page": "grafo",
         "projeto_ativo": project_service.obter_perfil_ativo(),
         "modo_operacao": mission_service.obter_modo_operacao(),
         "grafo": grafo,
+        "estado_sync": estado_sync,
     }
     return templates.TemplateResponse(request=request, name="graph.html", context=contexto)
 

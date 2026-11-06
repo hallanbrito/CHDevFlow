@@ -36,13 +36,16 @@ async def dashboard_view(
         stats = {}
         missoes = []
 
+    estado_sync = mission_service.obter_estado_sincronizacao()
+
     contexto = {
         "active_page": "dashboard",
         "projeto_ativo": project_service.obter_perfil_ativo(),
         "modo_operacao": mission_service.obter_modo_operacao(),
         "stats": stats,
         "missoes": missoes,
-        "erro_leitura": erro_leitura,
+        "erro_leitura": erro_leitura or (estado_sync.diagnostic if estado_sync.status in ("ERROR", "STALE") else None),
+        "estado_sync": estado_sync,
     }
     return templates.TemplateResponse(
         request=request, name="dashboard.html", context=contexto,

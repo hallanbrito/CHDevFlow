@@ -5,6 +5,70 @@
 
 {% block content %}
 {% macro rotulo(no) -%}{% if no.numero_issue %}#{{ no.numero_issue }}{% else %}{{ no.id }}{% endif %}{%- endmacro %}
+
+{% macro render_node_card(no, classe_extra="") %}
+  <div class="graph-node-card clickable-card {{ classe_extra }}"
+       tabindex="0"
+       role="button"
+       aria-label="Ver detalhes da missão {{ rotulo(no) }}"
+       onclick="abrirModalDetalhesMissao(this)"
+       data-node='{{ no.para_dicionario() | tojson }}'>
+    <div class="node-header">
+      <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
+      {% if no.status_grafo == 'CONCLUIDA' %}
+        <span class="badge-status badge-concluida">HOMOLOGADA</span>
+      {% elif no.status_grafo == 'ELEGIVEL' %}
+        <span class="badge-status badge-elegivel">ELEGÍVEL</span>
+      {% elif no.status_grafo == 'BLOQUEADA_POR_DEPENDENCIA' %}
+        <span class="badge-status badge-bloqueada">BLOQUEADA ({{ no.grau_entrada }})</span>
+      {% elif no.status_grafo == 'BLOQUEADA_CICLO' %}
+        <span class="badge-status badge-ciclo">CICLO</span>
+      {% elif no.status_grafo == 'BLOQUEADA_ORFA' %}
+        <span class="badge-status badge-orfa">ÓRFÃ</span>
+      {% else %}
+        <span class="badge-status badge-bloqueada">Dados insuficientes</span>
+      {% endif %}
+    </div>
+
+    <div class="node-title" title="{{ no.titulo }}">{{ no.titulo }}</div>
+
+    <div style="font-size: 0.72rem; color: var(--text-secondary); margin: 0.25rem 0;">
+      {% if no.dependency_state == 'VERIFIED_EMPTY' %}
+        <span>Dependências: <strong>Nenhuma</strong></span>
+      {% elif no.dependency_refs %}
+        <span>Dependências: <strong>{{ no.dependency_refs | map(attribute='issue_ref') | join(', ') }}</strong></span>
+      {% elif no.dependencias %}
+        <span>Dependências: <strong>{{ no.dependencias | join(', ') }}</strong></span>
+      {% else %}
+        <span>Dependências: <em>Indisponíveis ({{ no.dependency_state }})</em></span>
+      {% endif %}
+    </div>
+
+    {% if no.motivo_bloqueio %}
+      <div style="font-size: 0.7rem; color: var(--status-bloqueada); margin: 0.25rem 0;">
+        ⚠️ {{ no.motivo_bloqueio }}
+      </div>
+    {% endif %}
+
+    <div style="font-size: 0.7rem; color: var(--text-secondary); margin: 0.2rem 0;">
+      Dependências: {{ no.dependency_state }} • Origem: {{ no.dependency_source or 'não verificada' }} • Observado: {{ no.dependency_observed_at or 'não informado' }}
+    </div>
+
+    {% if no.causas_diagnosticas %}
+      <div style="display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.3rem 0;">
+        {% for causa in no.causas_diagnosticas %}
+          <span class="badge-causa">{{ causa }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <div class="node-footer">
+      <span>Esteira: <strong>{{ no.esteira }}</strong></span>
+      <span>CH: <strong>{{ no.autonomia }}</strong></span>
+    </div>
+  </div>
+{% endmacro %}
+
 {% set incompletos = grafo.nos.values() | selectattr('pendencias_dados') | list %}
 {% if incompletos %}
 <div class="card" role="status" style="border-left: 4px solid var(--status-bloqueada); margin-bottom: 1rem;">
@@ -12,7 +76,8 @@
   <p>{{ incompletos|length }} missão(ões) com campos ou dependências não informados. A ausência de arestas não comprova ausência de dependências.</p>
 </div>
 {% endif %}
-<!-- Alerta de Anomalias (se houver ciclos ou dependências órfãs) -->
+
+<!-- Alertas de Anomalias Críticas -->
 {% if grafo.ciclos_detectados %}
 <div class="card" style="border-left: 5px solid var(--status-ciclo); background-color: var(--status-ciclo-bg); margin-bottom: 1rem;">
   <div style="display: flex; align-items: center; gap: 0.5rem; font-weight: 700; color: var(--status-ciclo); font-size: 0.95rem;">
@@ -24,7 +89,7 @@
     ALERTA CRÍTICO: Ciclo(s) de Dependência Circular Detectado(s)!
   </div>
   <p style="font-size: 0.8rem; color: var(--text-primary); margin-top: 0.4rem;">
-    O algoritmo topológico identificou que as seguintes tarefas dependem circularmente umas das outras:
+    O algoritmo topológico identificou dependência circular entre as seguintes tarefas:
   </p>
   <ul style="margin-left: 1.5rem; margin-top: 0.3rem; font-size: 0.8rem;">
     {% for ciclo in grafo.ciclos_detectados %}
@@ -50,34 +115,44 @@
 </div>
 {% endif %}
 
-<!-- Legenda do Grafo -->
+<!-- Legenda do Grafo com Discriminação de Causas (F1) -->
 <div class="card" style="padding: 0.85rem 1.25rem; margin-bottom: 1.25rem;">
-  <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem;">Legenda dos Nós do Grafo:</div>
-  <div style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem;">
+  <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.5rem;">Legenda dos Nós e Causas Diagnósticas:</div>
+  <div style="display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.8rem; align-items: center;">
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-concluida); border-radius: 2px;"></span>
-      <span><strong>Concluída:</strong> Homologação verificada vinculada à missão</span>
+      <span><strong>Concluída:</strong> Homologação verificada vinculada</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-elegivel); border-radius: 2px;"></span>
-      <span><strong>Elegível no DAG:</strong> Sem pré-requisitos pendentes; não autoriza execução</span>
+      <span><strong>Elegível no DAG:</strong> Sem pré-requisitos pendentes (não autoriza agentes)</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-bloqueada); border-radius: 2px;"></span>
-      <span><strong>Bloqueada:</strong> Aguardando tarefas anteriores</span>
+      <span><strong>Bloqueada:</strong> Aguardando predecessora</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-ciclo); border-radius: 2px;"></span>
-      <span><strong>Ciclo:</strong> Dependência circular inválida</span>
+      <span><strong>Ciclo:</strong> Dependência circular</span>
     </div>
     <div style="display: flex; align-items: center; gap: 0.4rem;">
       <span style="display: inline-block; width: 12px; height: 12px; background: var(--status-orfa); border-radius: 2px;"></span>
       <span><strong>Órfã:</strong> Dependência inexistente</span>
     </div>
   </div>
+  {% if grafo.contagem_por_causa %}
+  <div style="margin-top: 0.6rem; padding-top: 0.5rem; border-top: 1px solid var(--border-color); display: flex; flex-wrap: wrap; gap: 0.5rem; font-size: 0.75rem;">
+    <span style="color: var(--text-muted); font-weight: 600;">Diagnóstico discriminado (F1):</span>
+    {% for causa, qtd in grafo.contagem_por_causa.items() %}
+      {% if qtd > 0 %}
+        <span class="badge-causa"><strong>{{ causa }}:</strong> {{ qtd }}</span>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endif %}
 </div>
 
-<!-- Visualização dos Nós do Grafo em Raias / Níveis -->
+<!-- Visualização Topológica em Raias -->
 <div class="card">
   <div class="card-header">
     <span class="card-title">Mapeamento Topológico de Execução</span>
@@ -85,7 +160,7 @@
   </div>
 
   <div class="graph-container">
-    <!-- Nível 1: Tarefas Elegíveis e Concluídas -->
+    <!-- Nível 1: Concluídas e Elegíveis -->
     <div>
       <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.75rem;">
         1. Homologadas verificadas e elegíveis no DAG
@@ -93,58 +168,27 @@
       <div class="graph-level">
         {% for id, no in grafo.nos.items() %}
           {% if no.status_grafo in ['CONCLUIDA', 'ELEGIVEL'] %}
-            <div class="graph-node-card {{ no.status_grafo.lower() }}">
-              <div class="node-header">
-                <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
-                {% if no.status_grafo == 'CONCLUIDA' %}
-                  <span class="badge-status badge-concluida">HOMOLOGADA VERIFICADA</span>
-                {% else %}
-                  <span class="badge-status badge-elegivel">ELEGÍVEL</span>
-                {% endif %}
-              </div>
-              <div class="node-title">{{ no.titulo }}</div>
-              <div style="font-size: 0.7rem;">Dependências: {{ no.dependency_state }} • {{ no.dependency_source or 'fonte não verificada' }}</div>
-              <div class="node-footer">
-                <span>Esteira: <strong>{{ no.esteira }}</strong></span>
-                <span>CH: <strong>{{ no.autonomia }}</strong></span>
-              </div>
-            </div>
+            {{ render_node_card(no, no.status_grafo.lower()) }}
           {% endif %}
         {% endfor %}
       </div>
     </div>
 
-    <!-- Nível 2: Tarefas Bloqueadas por Dependência -->
-    <div style="margin-top: 1rem;">
+    <!-- Nível 2: Bloqueadas por Dependência -->
+    <div style="margin-top: 1.25rem;">
       <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.75rem;">
         2. Fila Bloqueada por Pré-requisitos
       </h4>
       <div class="graph-level">
         {% for id, no in grafo.nos.items() %}
           {% if no.status_grafo == 'BLOQUEADA_POR_DEPENDENCIA' %}
-            <div class="graph-node-card bloqueada">
-              <div class="node-header">
-                <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
-                <span class="badge-status badge-bloqueada">BLOQUEADA ({{ no.grau_entrada }})</span>
-              </div>
-              <div class="node-title">{{ no.titulo }}</div>
-              <div style="font-size: 0.7rem;">Dependências: {{ no.dependency_state }} • {{ no.dependency_source or 'fonte não verificada' }}</div>
-              {% if no.motivo_bloqueio %}
-                <div style="font-size: 0.7rem; color: var(--status-bloqueada); margin-bottom: 0.5rem;">
-                  ⏳ {{ no.motivo_bloqueio }}
-                </div>
-              {% endif %}
-              <div class="node-footer">
-                <span>Esteira: <strong>{{ no.esteira }}</strong></span>
-                <span>CH: <strong>{{ no.autonomia }}</strong></span>
-              </div>
-            </div>
+            {{ render_node_card(no, "bloqueada") }}
           {% endif %}
         {% endfor %}
       </div>
     </div>
 
-    <!-- Nível 3: Tarefas com Anomalias (Ciclos e Órfãs) -->
+    <!-- Nível 3: Anomalias (Ciclos e Órfãs) -->
     {% set tem_anomalias = namespace(valor=false) %}
     {% for id, no in grafo.nos.items() %}
       {% if no.status_grafo in ['BLOQUEADA_CICLO', 'BLOQUEADA_ORFA'] %}
@@ -153,67 +197,97 @@
     {% endfor %}
 
     {% if tem_anomalias.valor %}
-    <div style="margin-top: 1rem;">
+    <div style="margin-top: 1.25rem;">
       <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--status-ciclo); text-transform: uppercase; margin-bottom: 0.75rem;">
         3. Fila de Anomalias de Dependência (Requer Atenção do PO)
       </h4>
       <div class="graph-level">
         {% for id, no in grafo.nos.items() %}
           {% if no.status_grafo in ['BLOQUEADA_CICLO', 'BLOQUEADA_ORFA'] %}
-            <div class="graph-node-card {% if no.status_grafo == 'BLOQUEADA_CICLO' %}ciclo{% else %}orfa{% endif %}">
-              <div class="node-header">
-                <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
-                {% if no.status_grafo == 'BLOQUEADA_CICLO' %}
-                  <span class="badge-status badge-ciclo">CICLO</span>
-                {% else %}
-                  <span class="badge-status badge-orfa">ÓRFÃ</span>
-                {% endif %}
-              </div>
-              <div class="node-title">{{ no.titulo }}</div>
-              <div style="font-size: 0.7rem;">Dependências: {{ no.dependency_state }} • {{ no.dependency_source or 'fonte não verificada' }}</div>
-              <div style="font-size: 0.7rem; color: var(--status-ciclo); font-weight: 600; margin-bottom: 0.5rem;">
-                ⚠️ {{ no.motivo_bloqueio }}
-              </div>
-              <div class="node-footer">
-                <span>Esteira: <strong>{{ no.esteira }}</strong></span>
-                <span>CH: <strong>{{ no.autonomia }}</strong></span>
-              </div>
-            </div>
+            {{ render_node_card(no, "ciclo" if no.status_grafo == 'BLOQUEADA_CICLO' else "orfa") }}
           {% endif %}
         {% endfor %}
       </div>
     </div>
     {% endif %}
+
+    <!-- Nível 4: Dados Insuficientes (Recolhível e Pesquisável - F3) -->
     {% set bloqueadas_dados = grafo.nos.values() | selectattr('status_grafo', 'equalto', 'BLOQUEADA_DADOS') | list %}
     {% if bloqueadas_dados %}
-    <div style="margin-top: 1rem;">
-      <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.75rem;">
-        4. Dados insuficientes — análise pendente
-      </h4>
-      <div class="graph-level">
-        {% for no in bloqueadas_dados %}
-        <div class="graph-node-card bloqueada">
-          <div class="node-header">
-            <span class="node-id" title="ID interno: {{ no.id }}">{{ rotulo(no) }}</span>
-            <span class="badge-status badge-bloqueada">Dados insuficientes</span>
-          </div>
-          <div class="node-title">{{ no.titulo }}</div>
-          <div style="font-size: 0.7rem; color: var(--status-bloqueada); margin-bottom: 0.5rem;">
-            ⚠️ {{ no.motivo_bloqueio }}
-          </div>
-          <div style="font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
-            Dependências: {{ no.dependency_state }} • Origem: {{ no.dependency_source or 'não verificada' }} • Observado: {{ no.dependency_observed_at or 'não informado' }}
-            {% for ref in no.dependency_refs %}<div><a href="{{ ref.url }}">{{ ref.issue_ref }}</a></div>{% endfor %}
-          </div>
-          <div class="node-footer">
-            <span>Esteira: <strong>{{ no.esteira }}</strong></span>
-            <span>CH: <strong>{{ no.autonomia }}</strong></span>
-          </div>
+    <div style="margin-top: 1.25rem;">
+      <details open class="card" style="margin: 0; padding: 1rem; border: 1px solid var(--border-color);">
+        <summary style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
+          <span>4. Dados insuficientes — análise pendente ({{ bloqueadas_dados|length }})</span>
+          <span style="font-size: 0.75rem; font-weight: 400; text-transform: none; color: var(--text-muted);">Clique para recolher/expandir</span>
+        </summary>
+
+        <div style="margin-top: 0.75rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;">
+          <input type="search" id="filtro-dados-insuficientes" placeholder="🔍 Filtrar entre missões com dados insuficientes..." style="padding: 0.4rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.8rem; width: 100%; max-width: 380px;">
+          <span id="contador-filtro-dados" style="font-size: 0.75rem; color: var(--text-muted);">({{ bloqueadas_dados|length }})</span>
         </div>
-        {% endfor %}
-      </div>
+
+        <div id="raia-dados-insuficientes" class="graph-level" style="margin-top: 0.75rem;">
+          {% for no in bloqueadas_dados %}
+            {{ render_node_card(no, "bloqueada") }}
+          {% endfor %}
+        </div>
+      </details>
     </div>
     {% endif %}
+  </div>
+</div>
+
+<!-- Modal Acessível de Detalhes da Missão (F3) -->
+<div id="modal-detalhes-missao" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modal-node-title">
+  <div class="modal-content">
+    <div class="modal-header-actions">
+      <div style="display: flex; align-items: center; gap: 0.6rem;">
+        <span id="modal-node-issue" class="node-id" style="font-size: 1.15rem; font-weight: 700;">#</span>
+        <a id="modal-node-issue-link" href="#" target="_blank" rel="noopener noreferrer" style="font-size: 0.8rem; color: var(--border-focus); text-decoration: underline;">Abrir Issue no GitHub ↗</a>
+      </div>
+      <button type="button" class="modal-close-btn" onclick="fecharModalDetalhesMissao()" aria-label="Fechar modal">✕</button>
+    </div>
+
+    <h3 id="modal-node-title" style="font-size: 1.1rem; margin-bottom: 0.75rem; line-height: 1.3;">Título da Missão</h3>
+
+    <div style="margin-bottom: 0.75rem;">
+      <span id="modal-node-status" class="badge-status">STATUS</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.5rem; margin-bottom: 1rem; padding: 0.6rem; background: rgba(0,0,0,0.03); border-radius: 8px;">
+      <div><span style="font-size: 0.7rem; color: var(--text-muted);">ETAPA CH</span><div id="modal-node-etapa" style="font-weight: 600; font-size: 0.85rem;">-</div></div>
+      <div><span style="font-size: 0.7rem; color: var(--text-muted);">ESTEIRA</span><div id="modal-node-esteira" style="font-weight: 600; font-size: 0.85rem;">-</div></div>
+      <div><span style="font-size: 0.7rem; color: var(--text-muted);">AUTONOMIA CH</span><div id="modal-node-autonomia" style="font-weight: 600; font-size: 0.85rem;">-</div></div>
+    </div>
+
+    <div style="margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);">Homologação Humana:</strong>
+      <div id="modal-node-homologacao" style="margin-top: 0.2rem; font-size: 0.85rem;"></div>
+    </div>
+
+    <div style="margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);">Diagnóstico de Bloqueio:</strong>
+      <div id="modal-node-motivo" style="margin-top: 0.2rem; font-size: 0.85rem; color: var(--status-bloqueada);"></div>
+    </div>
+
+    <div style="margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);">Causas Discriminadas:</strong>
+      <div id="modal-node-causas" style="margin-top: 0.25rem;"></div>
+    </div>
+
+    <div style="margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.8rem; text-transform: uppercase; color: var(--text-muted);">Dependências da Missão:</strong>
+      <div id="modal-node-deps" style="margin-top: 0.25rem;"></div>
+    </div>
+
+    <div style="border-top: 1px solid var(--border-color); padding-top: 0.5rem; margin-top: 1rem; font-size: 0.72rem; color: var(--text-muted);">
+      <div><strong>ID Interno:</strong> <code id="modal-node-id-interno">-</code></div>
+      <div id="modal-node-provenance"></div>
+    </div>
+
+    <div style="margin-top: 1.25rem; text-align: right;">
+      <button type="button" class="btn btn-sm" onclick="fecharModalDetalhesMissao()">Fechar</button>
+    </div>
   </div>
 </div>
 {% endblock %}

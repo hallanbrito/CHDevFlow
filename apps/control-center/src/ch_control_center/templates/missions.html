@@ -79,6 +79,13 @@
                 ⚠️ {{ m.motivo_bloqueio }}
               </div>
             {% endif %}
+            {% if m.causas_diagnosticas %}
+              <div style="display: flex; flex-wrap: wrap; gap: 0.2rem; margin-top: 0.3rem;">
+                {% for c in m.causas_diagnosticas %}
+                  <span class="badge-causa">{{ c }}</span>
+                {% endfor %}
+              </div>
+            {% endif %}
           </td>
           <td>
             <span style="font-size: 0.75rem; font-weight: 600;">{{ m.stage }}</span>

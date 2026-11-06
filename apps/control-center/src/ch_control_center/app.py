@@ -19,6 +19,7 @@ from ch_control_center.routes.graph import router as graph_router
 from ch_control_center.routes.missions import router as missions_router
 from ch_control_center.routes.projects import router as projects_router
 from ch_control_center.routes.student import router as student_router
+from ch_control_center.routes.sync import router as sync_router
 from ch_control_center.security import validar_host_cabecalho
 
 
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(student_router)
     app.include_router(demo_router)
     app.include_router(projects_router)
+    app.include_router(sync_router)
 
     # Healthcheck para sondas locais e testes automatizados
     @app.get("/health", response_class=JSONResponse)
