@@ -409,10 +409,10 @@ async function executarSincronizacao(manual = false) {
 
     const data = await res.json();
 
-    if (res.ok && data.status === "OK") {
+    if (res.ok && (data.status === "OK" || data.status === "PARTIAL")) {
       const registrado = Date.parse(data.estado?.last_success_at || "");
       if (Number.isFinite(registrado)) ultimoSucessoTimestamp = registrado;
-      atualizarIndicadorUi("OK");
+      atualizarIndicadorUi(data.status, data.estado?.diagnostic);
 
       const idAnterior = document.querySelector('meta[name="cc-snapshot-id"]')?.content || "";
       const idAtual = data.estado?.snapshot_id || "";
