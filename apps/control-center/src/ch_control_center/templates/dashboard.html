@@ -16,7 +16,7 @@
 {% if stats.total_dados_insuficientes %}
 <div class="card" role="status" style="border-left: 4px solid var(--status-bloqueada); margin-bottom: 1rem;">
   <strong>Dados insuficientes para verificar o grafo de {{ stats.total_dados_insuficientes }} missão(ões).</strong>
-  <p>As missões foram carregadas, mas há campos ou dependências não informados. Consulte os detalhes em Missões. Ausência de informação não significa ausência de dependências.</p>
+  <p>Há diferentes causas: campos ausentes, dependências não verificadas e homologações humanas ainda não comprovadas. Os números abaixo discriminam as causas (uma missão pode ter mais de uma). Isso não significa que todos os cadastros estejam incorretos.</p>
   {% if stats.contagem_por_causa %}
   <div style="margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 0.4rem;">
     {% for causa, qtd in stats.contagem_por_causa.items() %}
@@ -36,7 +36,7 @@
   <div class="stat-card">
     <span class="stat-title">Total de Fatias W</span>
     <span class="stat-value">{{ stats.total_tarefas }}</span>
-    <span class="stat-desc">Observadas no GitHub Project</span>
+    <span class="stat-desc">{{ 'Observadas no GitHub Project' if modo_operacao == 'LIVE_GITHUB' else 'Dados de demonstração offline' }}</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid var(--status-elegivel);">
