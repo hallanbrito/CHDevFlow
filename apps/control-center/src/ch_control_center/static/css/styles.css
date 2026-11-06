@@ -564,6 +564,9 @@ html.dark .student-hint-title {
   background: var(--bg-card);
 }
 
+.sync-pending .sync-dot { background-color: var(--text-muted); }
+.sync-pending { color: var(--text-muted); }
+
 .sync-dot {
   width: 8px;
   height: 8px;
