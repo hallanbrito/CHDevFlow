@@ -1,6 +1,6 @@
 # BOOT-00 — Contratos para o Bootstrap Engine (proposta CH-1)
 
-**Issue:** [#24](https://github.com/hallanbrito/CHDevFlow/issues/24) · **Draft PR:** [#25](https://github.com/hallanbrito/CHDevFlow/pull/25) · **Estado:** ESPECIFICAÇÃO ARQUITETURAL DE CONTRATOS (CH-1 DOCUMENTAL) — REVISÃO CONCEITUAL DE ATUALIDADE (03/11/2026) · **Base Histórica de Proposta:** `d2a74426bfa1fab12aafb721c8dad60876f6f8ec` · **Baseline Canônico de Alinhamento (`main`):** `a1aa3935ce3e5a34cd12dbf79c54dd211c02887e` · **PO:** Hallan.
+**Issue:** [#24](https://github.com/hallanbrito/CHDevFlow/issues/24) · **Draft PR:** [#25](https://github.com/hallanbrito/CHDevFlow/pull/25) · **Estado:** ESPECIFICAÇÃO ARQUITETURAL DE CONTRATOS (CH-1 DOCUMENTAL) — REVISÃO CONCEITUAL DE ATUALIDADE (03/11/2026) · **Base Histórica de Proposta:** `d2a74426bfa1fab12aafb721c8dad60876f6f8ec` · **Baseline Canônico de Alinhamento (`main`, reconferido em 06/11/2026):** `f8eea14e03c687c4b2ba2a0f628c7c6948d7a6dd` · **PO:** Hallan.
 
 ---
 
@@ -12,7 +12,7 @@ O Bootstrap Engine é **um coordenador de processos**, não um modelo de IA. Nã
 - **GitHub Issues/PRs:** verdade durável, autorização e entregas.
 - **Project #2:** **visualização/indexação**; rótulos e colunas NÃO dão permissão nem constituem fonte de verdade normativa.
 - **KSYNC-03 / Exportador:** leitura e reconciliação conservadora; rotinas de exportação read-only implementadas no CH-ACCESS-01 ([PR #50](https://github.com/hallanbrito/CHDevFlow/pull/50)). Mutações dependem de gate humano do PO.
-- **Control Center (`apps/control-center/`):** painel estático somente leitura fundado em CC-00 ([PR #30](https://github.com/hallanbrito/CHDevFlow/pull/30)), com correções de leitura live tratadas em CC-01 ([PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31)).
+- **Control Center (`apps/control-center/`):** proposta histórica CC-00 ([PR #23](https://github.com/hallanbrito/CHDevFlow/pull/23), encerrada sem merge em 06/11/2026); implementação somente leitura CC-01 ([PR #30](https://github.com/hallanbrito/CHDevFlow/pull/30), integrada) e correção LIVE ([PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31), integrada).
 - **Maestro Router:** recomendação de modelos, estimativas e métricas através de adaptador opcional e sem privilégios de execução no host. Não substitui o roteador nem autoriza execuções diretas não deliberadas pelo PO.
 - **AGY/Antigravity e Codex:** **executores**; ambos exigem gate explícito, sandbox e verificação de compatibilidade, nunca atuando como supervisores de sua própria aprovação.
 
@@ -154,7 +154,7 @@ Nenhum projeto de produção é alvo da arquitetura BOOT. Invariantes herdadas D
 
 ## 6. Evolução arquitetural e entregas reais na `main`
 
-Historicamente, o BOOT-00 foi redigido como especificação puramente documental quando o repositório ainda não possuía executáveis do motor de autoaceleração. Com a evolução do projeto, as seguintes entregas reais foram homologadas e integradas à branch `main` (`a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`):
+Historicamente, o BOOT-00 foi redigido como especificação puramente documental quando o repositório ainda não possuía executáveis do motor de autoaceleração. Com a evolução do projeto, as seguintes entregas reais foram homologadas e integradas à branch `main` (baseline reconferido em 06/11/2026: `f8eea14e03c687c4b2ba2a0f628c7c6948d7a6dd`):
 
 1. **Sentinela Python (BOOT-01):** Integrada via [PR #26](https://github.com/hallanbrito/CHDevFlow/pull/26) no diretório `apps/bootstrap/sentinela/`, implementando cliente GitHub read-only, observação com `watch --once`, `FakeWorker`, `SupervisorResult`, gravação de eventos JSONL em `0600` e suíte de testes unitários.
 2. **CHDevFlow CLI v0.1 (CLI-00 a CLI-06):** Integrada via [PR #39](https://github.com/hallanbrito/CHDevFlow/pull/39) no diretório `src/chdevflow/`, consolidando o comando instalável `ch` com subcomandos `new`, `status`, `doctor`, `verify`, `mission`, `ruc`, `submit` e `watch`.
@@ -165,11 +165,13 @@ Historicamente, o BOOT-00 foi redigido como especificação puramente documental
    - **CH-ACCESS-01 ([PR #50](https://github.com/hallanbrito/CHDevFlow/pull/50)):** Exportador read-only auditável do GitHub Project #2.
    - **P0-04 ([PR #52](https://github.com/hallanbrito/CHDevFlow/pull/52)):** Modelo seguro de execução em `ch verify`, eliminando `shell=True` arbitrário e estabelecendo política estrita de Project Trust.
 
+4. **Dispatcher W2-B DRY_RUN:** Integrado via [PR #57](https://github.com/hallanbrito/CHDevFlow/pull/57) em `src/chdevflow/core/dry_run_dispatcher.py`, com prévia, reserva e normalização de fixtures para Codex/AGY simulados. **Não inicia agentes reais, não autentica gate de execução nem comprova custo operacional.**
+
 ---
 
 ## 7. Matriz de classificação dos componentes e gates
 
-Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de autoaceleração é classificado formalmente:
+Conforme auditoria de 03/11/2026 e reconciliação documental de 06/11/2026 com a W2-B, cada elemento da arquitetura de autoaceleração é classificado formalmente:
 
 | Componente / Elemento | Classificação | Evidência Canônica / Situação Observada |
 |---|---|---|
@@ -179,6 +181,7 @@ Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de 
 | **Estabilizações P0 (P0-01 a P0-04, CI, Access)** | `IMPLEMENTADO` | Totalmente integradas na `main` ([PRs #42, #44, #46, #48, #50, #52](https://github.com/hallanbrito/CHDevFlow/pull/52)), garantindo status estrito, empacotamento, CI integral e modelo seguro de verificação. |
 | **Control Center (`apps/control-center/`)** | `PARCIAL` | Fundação em `apps/control-center/` integrada via [PR #30](https://github.com/hallanbrito/CHDevFlow/pull/30); correções de leitura live da [PR #31](https://github.com/hallanbrito/CHDevFlow/pull/31) integradas à `main` em 04/11/2026. A classificação `PARCIAL` se refere à evolução do Control Center, não ao estado pendente da PR #31. |
 | **KSYNC-03 / Reconciliação do Kanban** | `PARCIAL` | Leitura auditável implementada (CH-ACCESS-01); mutação assistida permanece estritamente manual pelo PO. |
+| **Dispatcher W2-B (`DRY_RUN` Codex/AGY fake)** | `IMPLEMENTADO (DRY_RUN / SIMULADO)` | Integrado na `main` via [PR #57](https://github.com/hallanbrito/CHDevFlow/pull/57): validação de fixtures, reserva em memória, testes offline e nenhuma execução real. |
 | **Execução AGY/Codex no Host (BOOT-03 / BOOT-04)** | `NÃO_IMPLEMENTADO` | Executores reais com sandbox no CachyOS continuam não autorizados e não implementados; exigem gates futuros específicos. |
 | **Sentinela em Loop / Daemon Permanente (D05-v2)** | `NÃO_IMPLEMENTADO` | Polling ou execução 24/7 não autorizados; D05 permanece estritamente manual (`--once`). |
 | **Integração de Modelos via Maestro em Runtime** | `NÃO_IMPLEMENTADO` | O Maestro Router atua como ferramenta externa; o CHDevFlow não delega execução nem roteamento em tempo real a modelos. |
@@ -191,7 +194,7 @@ Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de 
 ## 8. Critérios de aceitação da revisão BOOT-00
 
 - [x] Documento rastreável com os três contratos, esquemas e exemplos sintéticos preservados.
-- [x] Rebaseamento conceitual documentado em relação à `main` canônica (`a1aa3935ce3e5a34cd12dbf79c54dd211c02887e`), mantendo o histórico de base original `d2a74426...`.
+- [x] Alinhamento conceitual com a `main` reconferida em 06/11/2026 (`f8eea14e03c687c4b2ba2a0f628c7c6948d7a6dd`), preservando a base histórica original `d2a74426...` e o RUC da revisão de 03/11.
 - [x] Classificação explícita de todos os componentes entre `IMPLEMENTADO`, `PARCIAL`, `NÃO_IMPLEMENTADO` e `SUPERADO`.
 - [x] Referência explícita às entregas reais da Sentinela Python, CLI v0.1 e estabilizações P0-01..P0-04.
 - [x] Vigência estrita de D05 (disparo manual, sem loop/daemon) e proibição de auto-merge reafirmadas.
@@ -246,3 +249,10 @@ Conforme auditoria de atualidade de 03/11/2026, cada elemento da arquitetura de 
 
 9. **Decisão PO:**
    - `HOMOLOGADO_DOCUMENTALMENTE_PELO_PO / SEM_MERGE`: homologação expressa em 03/11/2026, restrita ao HEAD `e6dc3a569626ac55b9d5b65dceb26e9044eac450`, registrada no [gate da PR #25](https://github.com/hallanbrito/CHDevFlow/pull/25#issuecomment-6614230031). A homologação histórica não autoriza integração nem se estende automaticamente a novo commit de correção documental. Qualquer merge exige novo gate específico do PO, com revalidação de HEAD, CI, diff e mergeabilidade.
+
+
+### 9.1 Reconciliação documental de 06/11/2026 (posterior ao RUC histórico)
+
+- **Baseline atual de alinhamento:** `main@f8eea14e03c687c4b2ba2a0f628c7c6948d7a6dd`. Referências a `a1aa3935...` nesta seção registram a revisão histórica de 03/11/2026, não a base atual. O `base_sha` do JSON ilustrativo é histórico e não autoriza execução.
+- **Correções pontuais:** CC-00 identificado como PR #23 (encerrada sem merge), CC-01 como PR #30 e LIVE FIX como PR #31; W2-B DRY_RUN da PR #57 incluído na evolução e na matriz. Execução real no host permanece `NÃO_IMPLEMENTADO`.
+- **Escopo e limites:** somente este Markdown na Draft PR #25. Esta atualização não reexecutou testes locais, não equivale a re-homologação documental e não autoriza merge, deploy ou agentes reais. A CI do novo HEAD deve ser verificada antes de qualquer gate de integração.
