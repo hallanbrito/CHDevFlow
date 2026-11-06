@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <meta name="modo-operacao" content="{{ modo_operacao }}">
+  <meta name="cc-last-success" content="{{ estado_sync.last_success_at if estado_sync and estado_sync.last_success_at else '' }}">
+  <meta name="cc-snapshot-id" content="{{ estado_sync.snapshot_id if estado_sync and estado_sync.snapshot_id else '' }}">
   <title>{% block title %}CHDevFlow Control Center{% endblock %}</title>
   <link rel="stylesheet" href="/static/css/styles.css">
   <script src="/static/js/app.js"></script>
