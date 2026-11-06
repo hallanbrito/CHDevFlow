@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from ch_control_center.dependencies import get_mission_service
 from ch_control_center.security import (
@@ -54,11 +55,11 @@ async def trigger_sync_now(
     validar_requisicao_post_segura(request, csrf_token=csrf_token)
 
     try:
-        resultado = mission_service.sincronizar_agora()
+        resultado = await run_in_threadpool(mission_service.sincronizar_agora)
         return JSONResponse(
-            status_code=200,
+            status_code=200 if resultado["status"] == "OK" else 503,
             content={
-                "status": "OK",
+                "status": resultado["status"],
                 "estado": resultado["estado"],
                 "stats": resultado["stats"],
             },
@@ -92,7 +93,7 @@ async def trigger_sync_form(
     validar_requisicao_post_segura(request, csrf_token=csrf_token)
 
     try:
-        mission_service.sincronizar_agora()
+        await run_in_threadpool(mission_service.sincronizar_agora)
     except Exception:
         # Erro fica registrado no estado de sincronização
         pass
