@@ -339,6 +339,9 @@ async function atualizarConteudoVisivel() {
   const scrollY = window.scrollY;
   const filtroAntes = document.getElementById("filtro-dados-insuficientes");
   const buscaAntes = filtroAntes ? filtroAntes.value : "";
+  const camposMissao = ["busca", "status", "esteira"].map(id => ({
+    id, valor: document.getElementById(id)?.value,
+  }));
   const raiaAntes = document.getElementById("secao-dados-insuficientes");
   const raiaAberta = raiaAntes ? raiaAntes.open : false;
   const modalAntes = document.querySelector(".modal-overlay.active");
@@ -357,6 +360,10 @@ async function atualizarConteudoVisivel() {
 
   mainAtual.replaceWith(mainNovo);
   inicializarFiltroDadosInsuficientes();
+  for (const campo of camposMissao) {
+    const novo = document.getElementById(campo.id);
+    if (novo && campo.valor != null) novo.value = campo.valor;
+  }
 
   const filtroNovo = document.getElementById("filtro-dados-insuficientes");
   if (filtroNovo && filtroAntes) {
