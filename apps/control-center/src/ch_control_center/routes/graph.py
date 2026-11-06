@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from ch_control_center.config import DIRETORIO_TEMPLATES
 from ch_control_center.dependencies import get_mission_service, get_project_service
@@ -25,7 +26,7 @@ async def graph_view(
     project_service: ProjectService = Depends(get_project_service),
 ) -> HTMLResponse:
     """Renderiza a visualização topológica do Grafo de Dependências com alertas de ciclo/órfãs."""
-    grafo = mission_service.obter_grafo_dag()
+    grafo = await run_in_threadpool(mission_service.obter_grafo_dag)
     estado_sync = mission_service.obter_estado_sincronizacao()
 
     contexto = {
@@ -43,5 +44,5 @@ async def graph_api(
     mission_service: MissionService = Depends(get_mission_service),
 ) -> dict[str, Any]:
     """Retorna os dados estruturados do Grafo DAG em JSON para renderizadores dinâmicos."""
-    grafo = mission_service.obter_grafo_dag()
+    grafo = await run_in_threadpool(mission_service.obter_grafo_dag)
     return grafo.para_dicionario()
