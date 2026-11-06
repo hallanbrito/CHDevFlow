@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from ch_control_center.config import DIRETORIO_TEMPLATES
 from ch_control_center.dependencies import get_mission_service, get_project_service
@@ -26,7 +27,7 @@ async def dashboard_view(
     erro_leitura = None
     try:
         # AUD-05: Única leitura atômica de snapshot para todo o contexto do dashboard
-        contexto_op = mission_service.obter_contexto_dashboard()
+        contexto_op = await run_in_threadpool(mission_service.obter_contexto_dashboard)
         stats = contexto_op["stats"]
         missoes = contexto_op["missoes"]
     except Exception as exc:
