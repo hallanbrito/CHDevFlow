@@ -26,7 +26,9 @@
       {% elif no.status_grafo == 'BLOQUEADA_ORFA' %}
         <span class="badge-status badge-orfa">ÓRFÃ</span>
       {% else %}
-        <span class="badge-status badge-bloqueada">Dados insuficientes</span>
+        <span class="badge-status badge-bloqueada" title="Verificação pendente: dados insuficientes">
+          {% if no.causas_diagnosticas %}{{ no.causas_diagnosticas[0] }}{% if no.causas_diagnosticas|length > 1 %} +{{ no.causas_diagnosticas|length - 1 }}{% endif %}{% else %}Dados insuficientes{% endif %}
+        </span>
       {% endif %}
     </div>
 
