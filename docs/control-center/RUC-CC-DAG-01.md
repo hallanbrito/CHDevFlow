@@ -20,7 +20,7 @@ Na R1, prova positiva interna também não supera dependência órfã, externa o
 
 Issue #59 e gate do PO lidos pelo conector GitHub. `origin/main` confirmado por `git ls-remote` e pela API de branch; ambos permaneceram no baseline. Criado worktree isolado e implementados leitor, fachada, normalização, DAG, apresentação mínima, testes e contrato em `CC-DAG-01-CONTRATO.md`. Nenhum campo/cartão do Project #2 foi alterado.
 
-Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anterior. Corrigi os três achados apenas no worktree existente, executei testes offline e atualizei este RUC. Nenhum outro projeto ou frente foi alterado.
+Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anterior. Corrigi os três achados apenas no worktree existente, executei testes offline e atualizei este RUC. O primeiro CI da R1 revelou uma expectativa antiga da rota do grafo: a fixture sem homologação verificável já não possui missão na antiga “Linha de Frente”. Ajustei o teste para exigir o aviso de dados insuficientes e a ausência de prova humana. Nenhum outro projeto ou frente foi alterado.
 
 ## 4. Evidências verificáveis
 
@@ -36,6 +36,8 @@ Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anter
 | E08 | OBSERVADO | [CI Integral 42267583587](https://github.com/hallanbrito/CHDevFlow/actions/runs/42267583587) do HEAD anterior `e880163`: `completed/success`; jobs de raiz, Sentinela e Control Center com `success`. A revisão independente relata 443 testes. |
 | E09 | OBSERVADO | Revisão da PR #60, HEAD `e880163`, apontou P1-A (órfã com prova positiva), P1-B (timeouts acumuláveis) e P2 (contagens visuais/RUC). |
 | E10 | OBSERVADO | R1 local: `56 passed, 4 deselected` nos testes selecionados do Control Center; Sentinela `Ran 73 tests`, `OK`; `compileall` e `git diff --check` sem erro. |
+| E11 | OBSERVADO | [CI Integral 42278591815](https://github.com/hallanbrito/CHDevFlow/actions/runs/42278591815) do commit R1 `6d8e72b`: raiz e Sentinela passaram; Control Center teve `85 passed, 1 failed`, exclusivamente `test_rota_grafo_html`, que ainda esperava “Linha de Frente” na fixture sem homologação. |
+| E12 | OBSERVADO | O teste de rota foi corrigido para verificar “Dados insuficientes — análise pendente” e “Homologação humana vinculada à missão não verificada”. |
 
 ## 5. Verificações e resultados
 
@@ -52,7 +54,8 @@ Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anter
 | R1: órfã com prova positiva e sucessora | PASSOU | Teste A→órfã; B→A, incluindo `UNKNOWN`/`INVALID` com prova positiva. |
 | R1: múltiplos timeouts e prazo global | PASSOU | Duas falhas interrompem consultas posteriores; resposta recebida após prazo vira `UNKNOWN`. |
 | R1: contagens visualmente distintas | PASSOU | Teste de estatísticas e renderização Jinja offline: etapa visual 1, homologação verificada 0. |
-| CI remoto do novo HEAD R1 | NÃO_EXECUTADO | Será verificado após push da R1; resultado final será registrado na PR e no relatório de entrega. |
+| Primeiro CI remoto da R1 | FALHOU | E11; uma expectativa legada da rota contradizia o bloqueio conservador. |
+| CI remoto do HEAD com correção de teste | PENDENTE | Verificar após push; resultado final deve constar do relatório de entrega e da página de Actions associada ao HEAD. |
 
 ## 6. Riscos e bloqueios
 
@@ -67,7 +70,7 @@ Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anter
 
 `apps/bootstrap/sentinela/src/ch_sentinela/github_reader.py`, `apps/bootstrap/sentinela/tests/test_github_reader.py`, `apps/control-center/src/ch_control_center/{adapters/sentinela_adapter.py,graph/dag_engine.py,services/mission_service.py,templates/graph.html,templates/missions.html}`, `apps/control-center/tests/{test_dag_engine.py,test_live_github_regression.py,test_mission_service.py}` e `docs/control-center/CC-DAG-01-CONTRATO.md`. Este RUC é exclusivamente documental.
 
-R1 alterou `github_reader.py`, `sentinela_adapter.py`, `dag_engine.py`, `mission_service.py`, `dashboard.html`, `graph.html`, `missions.html`, `test_dag_engine.py`, `test_live_github_regression.py`, o contrato técnico e este RUC. O contrato executivo da Sentinela e o Project #2 permaneceram intocados.
+R1 alterou `github_reader.py`, `sentinela_adapter.py`, `dag_engine.py`, `mission_service.py`, `dashboard.html`, `graph.html`, `missions.html`, `test_dag_engine.py`, `test_live_github_regression.py`, `test_routes_read_only.py`, o contrato técnico e este RUC. O contrato executivo da Sentinela e o Project #2 permaneceram intocados.
 
 ## 8. Recomendação técnica
 
