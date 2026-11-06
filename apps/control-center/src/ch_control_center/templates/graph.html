@@ -38,11 +38,11 @@
       {% if no.dependency_state == 'VERIFIED_EMPTY' %}
         <span>Dependências: <strong>Nenhuma</strong></span>
       {% elif no.dependency_refs %}
-        <span>Dependências: <strong>{{ no.dependency_refs | map(attribute='issue_ref') | join(', ') }}</strong></span>
+        <span>Depende de <strong>{{ no.dependency_refs | length }} missão(ões)</strong></span>
       {% elif no.dependencias %}
-        <span>Dependências: <strong>{{ no.dependencias | join(', ') }}</strong></span>
+        <span>Depende de <strong>{{ no.dependencias | length }} missão(ões)</strong></span>
       {% else %}
-        <span>Dependências: <em>Indisponíveis ({{ no.dependency_state }})</em></span>
+        <span><em>Dependências ainda não verificadas</em></span>
       {% endif %}
     </div>
 
