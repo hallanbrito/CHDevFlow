@@ -6,8 +6,8 @@
 - Executor declarado: Codex. Coordenação e auditoria independente: ChatGPT. Decisão final: PO Hallan.
 - Fonte: repositório local isolado `/tmp/chdevflow-cc-dag-01`, branch `codex/cc-dag-01`; consultas GitHub apenas de leitura para gate/baseline.
 - Baseline `origin/main` e `main` remota verificados: `f8eea14e03c687c4b2ba2a0f628c7c6948d7a6dd`.
-- SHA da implementação verificada: `f98b59cd890c87d4961bf3ab309f6b0f678fe664`. O commit documental deste RUC será o HEAD apresentado na Draft PR.
-- Observação: 06/11/2026, 18:04 UTC. Estado formal: `AWAITING_PO`.
+- SHA da implementação original: `f98b59cd890c87d4961bf3ab309f6b0f678fe664`. SHA da R1 com correção do teste e CI verde: `e365352cccfdbaefa3810e230824a06c32f27ac5`. O commit documental deste RUC será o HEAD apresentado na Draft PR.
+- Observação inicial: 06/11/2026, 18:04 UTC; R1 atualizada em 06/11/2026, 19:24 UTC. Estado formal: `AWAITING_PO`.
 - R1: [revisão independente da Draft PR #60](https://github.com/hallanbrito/CHDevFlow/pull/60) sobre o HEAD `e880163ff5275e725cec0df5fb1d9a35e34ba618`; correções P1-A, P1-B e P2 na mesma branch. O HEAD final da R1 consta na PR.
 
 ## 2. Resumo executivo
@@ -38,6 +38,7 @@ Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anter
 | E10 | OBSERVADO | R1 local: `56 passed, 4 deselected` nos testes selecionados do Control Center; Sentinela `Ran 73 tests`, `OK`; `compileall` e `git diff --check` sem erro. |
 | E11 | OBSERVADO | [CI Integral 42278591815](https://github.com/hallanbrito/CHDevFlow/actions/runs/42278591815) do commit R1 `6d8e72b`: raiz e Sentinela passaram; Control Center teve `85 passed, 1 failed`, exclusivamente `test_rota_grafo_html`, que ainda esperava “Linha de Frente” na fixture sem homologação. |
 | E12 | OBSERVADO | O teste de rota foi corrigido para verificar “Dados insuficientes — análise pendente” e “Homologação humana vinculada à missão não verificada”. |
+| E13 | OBSERVADO | [CI Integral 42279112809](https://github.com/hallanbrito/CHDevFlow/actions/runs/42279112809) do commit `e365352`: `completed/success`; raiz `290 tests, OK`, Sentinela `73 tests, OK`, Control Center `86 passed`. Compilação e prévia offline também passaram. |
 
 ## 5. Verificações e resultados
 
@@ -55,7 +56,7 @@ Na R1, li a revisão independente da PR #60 e confirmei o CI verde do HEAD anter
 | R1: múltiplos timeouts e prazo global | PASSOU | Duas falhas interrompem consultas posteriores; resposta recebida após prazo vira `UNKNOWN`. |
 | R1: contagens visualmente distintas | PASSOU | Teste de estatísticas e renderização Jinja offline: etapa visual 1, homologação verificada 0. |
 | Primeiro CI remoto da R1 | FALHOU | E11; uma expectativa legada da rota contradizia o bloqueio conservador. |
-| CI remoto do HEAD com correção de teste | PENDENTE | Verificar após push; resultado final deve constar do relatório de entrega e da página de Actions associada ao HEAD. |
+| CI remoto do HEAD com correção de teste | PASSOU | E13. O commit documental final deste RUC terá verificação própria, registrada na entrega. |
 
 ## 6. Riscos e bloqueios
 
