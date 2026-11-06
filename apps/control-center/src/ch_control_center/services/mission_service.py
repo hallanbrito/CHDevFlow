@@ -384,6 +384,9 @@ class MissionService:
                 # Se já havia snapshot prévio em memória, preserva-o com status STALE (F2)
                 if self._cache_visao is not None:
                     self._estado_sincronizacao.status = "STALE"
+                    # Backoff curto: evitar repetir leitura lenta em cada tela após falha.
+                    # O snapshot antigo continua explicitamente STALE, nunca autorizado.
+                    self._cache_timestamp = time.monotonic()
                     return self._cache_visao
 
                 # Se não há snapshot prévio (falha na inicialização), marca ERROR e propaga
