@@ -265,8 +265,10 @@ def test_r3_templates_mostram_issue_ou_fallback_e_dados_insuficientes():
     assert '<span class="node-id" title="ID interno: PVTI_sintetico_42">#42</span>' in grafo
     assert '<span class="node-id" title="ID interno: PVTI_sintetico_43">PVTI_sintetico_43</span>' in grafo
     assert "4. Dados insuficientes — análise pendente" in grafo
-    assert re.search(r'4\. Dados insuficientes.*?node-footer.*?Esteira:.*?CH:', grafo, re.S)
-    assert "Dependências: UNKNOWN • Origem: fixture_offline • Observado: não informado" in grafo
+    # R1 de UX supera a presença de rodapé técnico na face: campos completos ficam no modal.
+    assert "node-footer" not in grafo
+    assert "Dependências: UNKNOWN • Origem: fixture_offline • Observado: não informado" not in grafo
+    assert 'id="secao-dados-insuficientes"' in grafo
 
 
 def test_r3_alertas_do_grafo_mostram_issue_e_preservam_id_tecnico():
