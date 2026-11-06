@@ -57,7 +57,7 @@ async def trigger_sync_now(
     try:
         resultado = await run_in_threadpool(mission_service.sincronizar_agora)
         return JSONResponse(
-            status_code=200 if resultado["status"] == "OK" else 503,
+            status_code=200 if resultado["status"] in ("OK", "PARTIAL") else 503,
             content={
                 "status": resultado["status"],
                 "estado": resultado["estado"],
