@@ -32,7 +32,7 @@ class EstadoSincronizacao:
     """Estado do ciclo de sincronização de dados do Control Center (F2/F4)."""
 
     source: str
-    status: str = "OK"  # "SYNCING" | "OK" | "STALE" | "ERROR"
+    status: str = "PENDING"  # "PENDING" | "SYNCING" | "OK" | "STALE" | "ERROR"
     last_success_at: str | None = None
     last_attempt_at: str | None = None
     total_received: int = 0
@@ -69,7 +69,7 @@ class MissionService:
         self._cache_origem: str | None = None
         self._estado_sincronizacao = EstadoSincronizacao(
             source=self._modo_operacao,
-            status="OK",
+            status="PENDING",
         )
 
     def obter_modo_operacao(self) -> str:
@@ -87,7 +87,12 @@ class MissionService:
                     self._cache_timestamp = 0.0
                     self._cache_origem = None
                     self._estado_sincronizacao.source = modo
-                    self._estado_sincronizacao.status = "OK"
+                    self._estado_sincronizacao.status = "PENDING"
+                    self._estado_sincronizacao.last_success_at = None
+                    self._estado_sincronizacao.last_attempt_at = None
+                    self._estado_sincronizacao.total_received = 0
+                    self._estado_sincronizacao.total_recognized = 0
+                    self._estado_sincronizacao.snapshot_id = None
                     self._estado_sincronizacao.error_code = None
                     self._estado_sincronizacao.diagnostic = None
         return self._modo_operacao
@@ -308,6 +313,10 @@ class MissionService:
         Garante coalescência de requisições concorrentes e impede leituras repetitivas
         ao GitHub por tela/cartão, respeitando o TTL configurado.
         """
+        # Detecta leitura nova concluída enquanto um refresh forçado aguarda o lock.
+        # Evita duas consultas gh consecutivas no mesmo instante (ex.: duas abas).
+        geracao_observada = self._cache_timestamp
+
         # 1. Leitura rápida do cache sem lock se válido e fresco
         if not forcar_atualizacao:
             with self._lock_snapshot:
@@ -320,6 +329,10 @@ class MissionService:
 
         # 2. Seção crítica de atualização: apenas uma thread consulta a fonte
         with self._lock_snapshot:
+            if (forcar_atualizacao and self._cache_visao is not None
+                and self._cache_origem == self._modo_operacao
+                and self._cache_timestamp != geracao_observada):
+                return self._cache_visao
             # Double-check: outra thread pode ter acabado de atualizar enquanto aguardávamos o lock
             if not forcar_atualizacao:
                 if (
@@ -343,7 +356,7 @@ class MissionService:
                 # Atualiza estado de sincronização de sucesso (F4)
                 self._estado_sincronizacao.source = modo
                 self._estado_sincronizacao.status = "OK"
-                self._estado_sincronizacao.last_success_at = agora_iso
+                self._estado_sincronizacao.last_success_at = datetime.now(timezone.utc).isoformat()
                 self._estado_sincronizacao.total_received = len(snapshot.get("items", []))
                 self._estado_sincronizacao.total_recognized = len(visao["tarefas"])
                 self._estado_sincronizacao.error_code = None
