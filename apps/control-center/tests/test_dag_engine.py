@@ -184,6 +184,28 @@ def test_homologacao_positiva_com_dependencia_orfa_nao_libera_sucessora(dag: DAG
     assert "outro/repo#99" in res.dependencias_desconhecidas["A"]
 
 
+@pytest.mark.parametrize("ordem", [("B", "A", "C"), ("C", "A", "B")])
+def test_homologacao_positiva_com_dependencia_interna_pendente_nao_libera_sucessora(
+    ordem: tuple[str, ...], dag: DAGEngine,
+) -> None:
+    """B pendente -> A homologada -> C: a prova de A não sana B."""
+    tarefas = {
+        "B": {"id": "B", "stage": "BACKLOG", "dependency_state": "VERIFIED_EMPTY", "dependencies": []},
+        "A": {"id": "A", "stage": "HOMOLOGADA", "homologacao_verificada": True,
+              "dependency_state": "VERIFIED_NONEMPTY", "dependencies": ["B"]},
+        "C": {"id": "C", "stage": "BACKLOG", "dependency_state": "VERIFIED_NONEMPTY", "dependencies": ["A"]},
+    }
+    res = dag.construir_grafo([tarefas[no_id] for no_id in ordem])
+
+    assert res.nos["B"].status_grafo == STATUS_ELEGIVEL
+    assert res.nos["A"].status_grafo == STATUS_BLOQUEADA_DEP
+    assert "B" in res.nos["A"].motivo_bloqueio
+    assert res.nos["C"].status_grafo == STATUS_BLOQUEADA_DEP
+    assert "A" in res.nos["C"].motivo_bloqueio
+    assert res.total_concluidas == 0
+    assert res.total_elegiveis == 1
+
+
 def test_grafo_misto_isolamento_de_anomalias(dag: DAGEngine) -> None:
     """Um grafo que contém tarefas saudáveis e um ciclo isolado não deve corromper
     as tarefas saudáveis (princípio de isolamento)."""

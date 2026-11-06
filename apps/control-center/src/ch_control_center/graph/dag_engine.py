@@ -174,6 +174,20 @@ class DAGEngine:
             if nos[no_id].status_grafo == STATUS_CONCLUIDA:
                 nos[no_id].status_grafo = STATUS_BLOQUEADA_ORFA
 
+        # Uma prova positiva da missão não substitui a homologação dos seus
+        # pré-requisitos internos. Revogar até estabilizar cobre cadeias em
+        # qualquer ordem de entrada, antes de calcular graus e elegibilidade.
+        while True:
+            concluidas_com_pendencia = [
+                no for no in nos.values()
+                if no.status_grafo == STATUS_CONCLUIDA
+                and any(nos[dep_id].status_grafo != STATUS_CONCLUIDA for dep_id in no.dependencias)
+            ]
+            if not concluidas_com_pendencia:
+                break
+            for no in concluidas_com_pendencia:
+                no.status_grafo = STATUS_BLOQUEADA_DEP
+
         # 3. Cálculo de graus de entrada (considerando apenas dependências NÃO concluídas)
         for task_id, no in nos.items():
             if no.status_grafo == "CONCLUIDA":
