@@ -376,10 +376,12 @@ def test_f3_template_grafo_cartoes_minimos_e_modal_acessivel():
     assert 'modal-node-title' in html
     assert 'modal-node-issue' in html
 
-    # 3. Raia 4 recolhível e pesquisável
+    # 3. Raia 4 recolhível e pesquisável (recolhida por padrão na R1)
     assert "4. Dados insuficientes — análise pendente (1)" in html
     assert 'id="filtro-dados-insuficientes"' in html
-    assert "<details open" in html
+    assert 'id="secao-dados-insuficientes"' in html
+    assert "<details" in html
+    assert "<details open" not in html
 
 
 # ==============================================================================
