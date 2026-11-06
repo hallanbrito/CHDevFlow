@@ -158,3 +158,21 @@ A implementação atende com rigor técnico e evidências verificáveis a todos 
 1. Autorizar a homologação da missão CC-QUALITY-01 após o parecer da auditoria independente do ChatGPT.
 2. Deliberar sobre a proposta de preenchimento dos campos do Project #2 documentada na Seção 6 de `docs/control-center/DIAGNOSTICO-F0-CC-QUALITY-01.md`.
 3. Não realizar merge ou deploy até a homologação formal expressa.
+
+---
+
+## 10. R1 corretiva após auditoria independente do ChatGPT — pendente de testes finais
+
+**Data:** 2026-11-06. **Originador das alterações da R1:** ChatGPT por GitHub connector, em resposta direta ao PO. **Peão/AGY:** originador da F0–F5 inicial, não atribuir os commits corretivos ao AGY sem sua execução. Referência da auditoria: https://github.com/hallanbrito/CHDevFlow/pull/61#pullrequestreview-5808277156.
+
+**Escopo das mudanças publicadas na mesma branch `agy/cc-quality-01`, mantendo Draft empilhada sobre PR #60:**
+
+- **P1-A (UX):** macro dos cartões remove da face motivos longos, origem REST, horários ISO, rodapé Esteira/CH e chips redundantes; exibe apenas Issue, título, status/causa principal e dependências resumidas; demais campos permanecem no `data-node` e no modal. Quarta raia inicia recolhida, layout usa CSS Grid em vez de cartões de largura fixa desiguais. Alertas de segurança e bloqueios não foram desativados.
+- **P1-B (API):** `POST /api/sincronizar` devolve status real `STALE` com HTTP 503 quando GitHub falha depois de snapshot válido, sem enviar `OK` falso. `PARTIAL` representa snapshot novo com dependências `UNKNOWN/INVALID`, evitando alegar verificação completa. Horário de sucesso é registrado depois da consulta (não antes). Status inicial `PENDING`.
+- **P1-C (I/O):** rotas assíncronas que chamam a Sentinela agora usam `run_in_threadpool` para não bloquear o event loop com `gh`; duas chamadas forçadas concorrentes compartilham a mesma geração; após falha há backoff de 60s, exibindo `STALE` sem repetir imediatamente as 30 consultas em toda tela.
+- **P1-D (browser):** após sincronização, a página visível atualiza por `fetch`/substituição do conteúdo, **sem `window.location.reload()`**; restaura busca/filtros, seção expandida, modal compatível e rolagem. Sincronização em aba oculta continua suspensa; DEMO não faz polling. `PARTIAL` tem mensagem visual distinta; destaque do Dashboard explica homologação não comprovada e cadastro ausente separadamente.
+- **Regressão:** adicionados seis testes R1 em `test_cc_quality_recovery.py` (cartão mínimo, POST STALE, snapshot PARTIAL, refresh forçado concorrente, responsividade da API de status durante consulta lenta, atualização DOM sem reload). Atualizadas as expectativas do teste R3 de renderização: a exigência antiga de rodapé/origem textual no cartão foi superada pela decisão de UX do PO.
+
+**Estado exato desta seção:** `CH_AUDIT_R1_IMPLEMENTED_AWAITING_CI_AND_BROWSER`. A R1 foi escrita e publicada, **mas ainda não há execução de CI ou inspeção visual Firefox comprovada para seu novo HEAD**. O run histórico [42309655861](https://github.com/hallanbrito/CHDevFlow/actions/runs/42309655861) comprovou 466 testes **no commit antigo `f201d06`**, não neste patch. Não extrapolar seus resultados para os novos commits. O número total esperado é **472 testes** após seis testes adicionados, sujeito à execução real e correção de eventuais falhas. Nenhum dado do Project #2 foi alterado. Merge/release/deploy seguem proibidos até novos gates e aceitação expressa do PO.
+
+**Validação restante:** no worktree do AGY, `git fetch origin` + fast-forward seguro da branch `agy/cc-quality-01`, executar suites raiz/Sentinela/Control Center, compilar, verificar diff, despachar CI pelo GitHub CLI no HEAD final, coletar logs/screenshots de Dashboard/Missões/Grafo em LIVE; se houver falha, corrigir na mesma Draft PR e submeter nova evidência para reauditoria ChatGPT.
