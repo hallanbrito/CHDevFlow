@@ -135,11 +135,16 @@ class DAGEngine:
                 dependency_observed_at=item.get("dependency_observed_at"),
             )
             # Etapa visual de conclusão não prova a decisão humana vinculada.
-            if etapa == "HOMOLOGADA" and no.homologacao_verificada and not no.pendencias_dados:
+            deps_verificadas = no.dependency_state in ("VERIFIED_EMPTY", "VERIFIED_NONEMPTY")
+            if etapa == "HOMOLOGADA" and no.homologacao_verificada and deps_verificadas and not no.pendencias_dados:
                 no.status_grafo = STATUS_CONCLUIDA
             elif etapa in ETAPAS_FECHAMENTO_VISUAL:
                 if not no.homologacao_verificada:
                     no.pendencias_dados.append("Homologação humana vinculada à missão não verificada")
+                if etapa != "HOMOLOGADA":
+                    no.pendencias_dados.append("Etapa visual não satisfaz pré-requisito")
+                if not deps_verificadas:
+                    no.pendencias_dados.append("Dependências da missão não verificadas")
                 no.status_grafo = STATUS_BLOQUEADA_DADOS
             elif no.pendencias_dados:
                 no.status_grafo = STATUS_BLOQUEADA_DADOS
@@ -165,6 +170,9 @@ class DAGEngine:
         nos_em_ciclos: set[str] = {no_id for ciclo in ciclos_detectados for no_id in ciclo}
         for no_id in nos_em_ciclos:
             nos[no_id].status_grafo = STATUS_BLOQUEADA_CICLO
+        for no_id in dependencias_desconhecidas:
+            if nos[no_id].status_grafo == STATUS_CONCLUIDA:
+                nos[no_id].status_grafo = STATUS_BLOQUEADA_ORFA
 
         # 3. Cálculo de graus de entrada (considerando apenas dependências NÃO concluídas)
         for task_id, no in nos.items():

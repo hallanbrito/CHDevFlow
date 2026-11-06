@@ -21,7 +21,7 @@
         <option value="BLOQUEADA_DADOS" {% if filtro_status == 'BLOQUEADA_DADOS' %}selected{% endif %}>Dados insuficientes</option>
         <option value="BLOQUEADA_CICLO" {% if filtro_status == 'BLOQUEADA_CICLO' %}selected{% endif %}>Ciclos Detectados</option>
         <option value="BLOQUEADA_ORFA" {% if filtro_status == 'BLOQUEADA_ORFA' %}selected{% endif %}>Dependências Órfãs</option>
-        <option value="CONCLUIDA" {% if filtro_status == 'CONCLUIDA' %}selected{% endif %}>Concluídas</option>
+        <option value="CONCLUIDA" {% if filtro_status == 'CONCLUIDA' %}selected{% endif %}>Homologações verificadas</option>
       </select>
     </div>
 
@@ -109,7 +109,7 @@
           </td>
           <td>
             {% if m.status_grafo == 'CONCLUIDA' %}
-              <span class="badge-status badge-concluida">✓ CONCLUÍDA</span>
+              <span class="badge-status badge-concluida">✓ HOMOLOGADA VERIFICADA</span>
             {% elif m.status_grafo == 'ELEGIVEL' %}
               <span class="badge-status badge-elegivel">● ELEGÍVEL</span>
             {% elif m.status_grafo == 'BLOQUEADA_DADOS' %}
@@ -140,7 +140,7 @@
                   <div>
                     <strong>Status no Grafo:</strong>
                     {% if m.status_grafo == 'CONCLUIDA' %}
-                      <span class="badge-status badge-concluida">CONCLUÍDA</span>
+                      <span class="badge-status badge-concluida">HOMOLOGADA VERIFICADA</span>
                     {% elif m.status_grafo == 'ELEGIVEL' %}
                       <span class="badge-status badge-elegivel">ELEGÍVEL (SEM BLOQUEIOS)</span>
                     {% elif m.status_grafo == 'BLOQUEADA_DADOS' %}

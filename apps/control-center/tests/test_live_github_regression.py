@@ -7,13 +7,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+import re
 
 import pytest
+from jinja2 import Environment, FileSystemLoader
 
 from ch_control_center.adapters.sentinela_adapter import SentinelaAdapterErro
 from ch_control_center.adapters.sentinela_adapter import SentinelFacade
 from ch_sentinela.github_reader import LeitorGitHub
 from ch_control_center.config import MODO_LIVE_GITHUB
+from ch_control_center.config import DIRETORIO_TEMPLATES
 from ch_control_center.dependencies import get_mission_service
 from ch_control_center.services.mission_service import MissionService
 
@@ -178,11 +181,61 @@ def test_json_nativo_invalido_fica_invalid_e_bloqueado():
     assert visao["missoes"][0]["status_grafo"] == "BLOQUEADA_DADOS"
 
 
+def test_multiplos_timeouts_interrompem_consultas_restantes():
+    itens = [item_nativo(n) for n in range(1, 5)]
+    chamadas_api = []
+    def resposta(args: list[str]) -> str:
+        if "item-list" in args:
+            return json.dumps({"items": itens, "totalCount": len(itens)})
+        chamadas_api.append(args[-1])
+        raise TimeoutError("timeout simulado")
+    facade = SentinelFacade(leitor=LeitorGitHub(executor_customizado=resposta))
+    visao = MissionService(facade=facade).construir_visao_operacional_completa(facade.obter_snapshot_ao_vivo(), MODO_LIVE_GITHUB)
+    assert len(chamadas_api) == 2
+    assert [m["dependency_state"] for m in visao["missoes"]] == ["UNKNOWN"] * 4
+    assert visao["stats"]["total_elegiveis"] == 0
+    assert "interrompida" in visao["missoes"][2]["dependency_diagnostic"]
+
+
+def test_resposta_apos_prazo_global_nao_e_aceita(monkeypatch):
+    import ch_control_center.adapters.sentinela_adapter as modulo_adapter
+    instante = [0.0]
+    monkeypatch.setattr(modulo_adapter.time, "monotonic", lambda: instante[0])
+    itens = [item_nativo(1), item_nativo(2)]
+    chamadas_api = []
+    def resposta(args: list[str]) -> str:
+        if "item-list" in args:
+            return json.dumps({"items": itens, "totalCount": 2})
+        chamadas_api.append(args[-1])
+        instante[0] = 31.0
+        return "[[]]"
+    facade = SentinelFacade(leitor=LeitorGitHub(executor_customizado=resposta))
+    visao = MissionService(facade=facade).construir_visao_operacional_completa(facade.obter_snapshot_ao_vivo(), MODO_LIVE_GITHUB)
+    assert len(chamadas_api) == 1
+    assert [m["dependency_state"] for m in visao["missoes"]] == ["UNKNOWN", "UNKNOWN"]
+    assert visao["stats"]["total_elegiveis"] == 0
+
+
 def test_ids_duplicados_do_project_bloqueiam_grafo_inteiro():
     a, b = item_nativo(1), item_nativo(2)
     b["id"] = a["id"]
     with pytest.raises(SentinelaAdapterErro, match="duplicado"):
         MissionService().construir_visao_operacional_completa({"items": [a, b]}, MODO_LIVE_GITHUB)
+
+
+def test_dashboard_separa_etapa_visual_de_homologacao_verificada():
+    item = item_nativo(1)
+    item["etapa CH"] = "HOMOLOGADA"
+    item["dependencies"] = []
+    visao = MissionService().construir_visao_operacional_completa({"items": [item]}, "DEMO_OFFLINE")
+    assert visao["stats"]["total_etapas_conclusao_observadas"] == 1
+    assert visao["stats"]["total_concluidas"] == 0
+    ambiente = Environment(loader=FileSystemLoader(str(DIRETORIO_TEMPLATES)), autoescape=True)
+    ambiente.globals["csrf_token"] = "fixture"
+    html = ambiente.get_template("dashboard.html").render(stats=visao["stats"], missoes=visao["missoes"], modo_operacao="DEMO_OFFLINE")
+    assert re.search(r"Homologações verificadas.*?stat-value[^>]*>0<", html, re.S)
+    assert re.search(r"Etapas visuais de conclusão.*?stat-value[^>]*>1<", html, re.S)
+    assert "não comprovam homologação" in html
 
 
 def configurar_live(monkeypatch, snapshot):

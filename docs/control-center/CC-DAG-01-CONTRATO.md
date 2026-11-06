@@ -10,9 +10,13 @@ Escopo: leitura e apresentação somente leitura das relações `blocked_by` das
 
 O `MissionService` mapeia referências canônicas para IDs dos itens presentes no Project. Uma dependência fora da amostra permanece como referência canônica e bloqueia a sucessora. IDs duplicados tornam o grafo inconclusivo. Os dados do Project e das Issues são lidos na mesma requisição do painel, mas o GitHub não oferece transação atômica entre esses endpoints; `observed_at` descreve o instante de cada resposta, não um snapshot global imutável.
 
+A leitura ao vivo tem orçamento total de 30 segundos, incluindo o Project e todas as Issues. Cada subprocesso recebe somente o tempo restante; resultados que chegam após o prazo viram `UNKNOWN`. Duas falhas consecutivas interrompem novas consultas de dependências nesta requisição, e os itens restantes também ficam `UNKNOWN`. Não há cache ou reaproveitamento de leitura antiga.
+
 ## Regra de desbloqueio
 
 `INTEGRADA`, `DONE`, `CLOSED`, `PROD_OK` e `Etapa CH=HOMOLOGADA` isoladamente não satisfazem uma dependência. O DAG só reconhece conclusão para pré-requisitos quando há etapa `HOMOLOGADA`, dados íntegros e prova de homologação humana vinculada à missão. **O Control Center atual não dispõe de um verificador confiável dessa prova.** Por isso o `MissionService` fornece `homologacao_verificada=False` em toda leitura ao vivo e de demonstração: a dependência permanece bloqueada mesmo que a etapa visual seja `HOMOLOGADA`.
+
+Mesmo na entrada interna de teste com prova positiva, dependência órfã, externa ao Project ou estado `UNKNOWN`/`INVALID` impede que a missão satisfaça sua sucessora. O dashboard mostra contagens distintas para etapas visuais de conclusão e homologações verificadas; a primeira nunca libera pré-requisitos.
 
 O sinal aceito pelo `DAGEngine` é uma entrada interna do serviço, destinada a um futuro verificador autorizado; não é um campo do Project nem uma autorização executiva. Nenhuma classificação `ELEGIVEL` permite iniciar Codex, AGY ou outro agente. O contrato executivo separado da Sentinela permanece obrigatório e inalterado.
 

@@ -7,6 +7,7 @@ ele consome estritamente as interfaces públicas estáveis de 'ch_sentinela'.
 from __future__ import annotations
 
 import json
+import time
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +35,10 @@ from ch_sentinela.sentinel import EventoSentinela, Sentinela
 
 class SentinelaAdapterErro(RuntimeError):
     """Exceção levantada para falhas na camada adaptadora da Sentinela."""
+
+
+ORCAMENTO_LEITURA_SEGUNDOS = 30.0
+MAX_FALHAS_CONSECUTIVAS = 2
 
 
 class SentinelFacade:
@@ -88,12 +93,14 @@ class SentinelFacade:
         Raises:
             SentinelaAdapterErro: Se ocorrer falha na execução ou validação estrutural.
         """
+        prazo = time.monotonic() + ORCAMENTO_LEITURA_SEGUNDOS
         try:
-            snapshot = self.leitor.listar_itens_projeto()
+            snapshot = self.leitor.listar_itens_projeto(timeout_segundos=max(0.001, prazo - time.monotonic()))
             self.validar_estrutura_snapshot(snapshot)
             # A observação de dependências pertence à mesma visão da requisição.
             # Uma falha individual permanece explícita; jamais vira lista vazia.
             enriquecido = deepcopy(snapshot)
+            falhas_consecutivas = 0
             for item in enriquecido["items"]:
                 if not isinstance(item, dict):
                     continue
@@ -108,11 +115,22 @@ class SentinelFacade:
                 if isinstance(numero, bool) or not isinstance(numero, int) or numero <= 0 or repo != self.leitor.repositorio or content.get("url") != f"https://github.com/{repo}/issues/{numero}":
                     item["dependency_observation"] = {"dependency_state": "INVALID", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": "Identidade da Issue no Project inválida."}
                     continue
+                restante = prazo - time.monotonic()
+                if restante <= 0 or falhas_consecutivas >= MAX_FALHAS_CONSECUTIVAS:
+                    item["dependency_observation"] = {"dependency_state": "UNKNOWN", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": "Leitura interrompida pelo orçamento temporal ou por falhas consecutivas."}
+                    continue
                 try:
-                    item["dependency_observation"] = self.leitor.obter_dependencias_issue(numero, repo)
+                    observacao = self.leitor.obter_dependencias_issue(numero, repo, timeout_segundos=restante)
+                    if time.monotonic() >= prazo:
+                        item["dependency_observation"] = {"dependency_state": "UNKNOWN", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": "Orçamento temporal esgotado durante a leitura."}
+                    else:
+                        item["dependency_observation"] = observacao
+                        falhas_consecutivas = 0
                 except LeitorGitHubFormatoErro as exc:
+                    falhas_consecutivas += 1
                     item["dependency_observation"] = {"dependency_state": "INVALID", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": sanitizar_texto_segredos(str(exc))}
                 except LeitorGitHubErro as exc:
+                    falhas_consecutivas += 1
                     item["dependency_observation"] = {"dependency_state": "UNKNOWN", "dependency_refs": [], "observed_at": observado, "source": "github_rest:blocked_by", "diagnostic": sanitizar_texto_segredos(str(exc))}
             return enriquecido
         except LeitorGitHubErro as exc:

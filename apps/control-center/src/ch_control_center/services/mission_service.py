@@ -16,7 +16,7 @@ from ch_control_center.config import (
     MODO_LIVE_GITHUB,
     obter_modo_operacao,
 )
-from ch_control_center.graph.dag_engine import DAGEngine, ResultadoGrafoDAG
+from ch_control_center.graph.dag_engine import DAGEngine, ETAPAS_FECHAMENTO_VISUAL, ResultadoGrafoDAG
 
 
 class MissionService:
@@ -229,6 +229,7 @@ class MissionService:
             "total_elegiveis": grafo.total_elegiveis,
             "total_bloqueadas": grafo.total_bloqueadas,
             "total_concluidas": grafo.total_concluidas,
+            "total_etapas_conclusao_observadas": sum(t["stage"].upper() in ETAPAS_FECHAMENTO_VISUAL for t in tarefas),
             "total_ciclos": len(grafo.ciclos_detectados),
             "total_orfas": len(grafo.dependencias_desconhecidas),
             "modo_operacao": modo,
@@ -309,13 +310,4 @@ class MissionService:
 
     def obter_resumo_estatisticas(self) -> dict[str, Any]:
         """Calcula métricas e contadores para os cartões de resumo do Dashboard."""
-        grafo = self.obter_grafo_dag()
-        return {
-            "total_tarefas": grafo.total_tarefas,
-            "total_elegiveis": grafo.total_elegiveis,
-            "total_bloqueadas": grafo.total_bloqueadas,
-            "total_concluidas": grafo.total_concluidas,
-            "total_ciclos": len(grafo.ciclos_detectados),
-            "total_orfas": len(grafo.dependencias_desconhecidas),
-            "modo_operacao": self._modo_operacao,
-        }
+        return self.construir_visao_operacional_completa()["stats"]

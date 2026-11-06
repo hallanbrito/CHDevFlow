@@ -87,7 +87,7 @@
     <!-- Nível 1: Tarefas Elegíveis e Concluídas -->
     <div>
       <h4 style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.75rem;">
-        1. Linha de Frente (Concluídas & Elegíveis Imediatas)
+        1. Homologadas verificadas e elegíveis no DAG
       </h4>
       <div class="graph-level">
         {% for id, no in grafo.nos.items() %}
@@ -96,7 +96,7 @@
               <div class="node-header">
                 <span class="node-id">{{ no.id }}</span>
                 {% if no.status_grafo == 'CONCLUIDA' %}
-                  <span class="badge-status badge-concluida">CONCLUÍDA</span>
+                  <span class="badge-status badge-concluida">HOMOLOGADA VERIFICADA</span>
                 {% else %}
                   <span class="badge-status badge-elegivel">ELEGÍVEL</span>
                 {% endif %}

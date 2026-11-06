@@ -58,7 +58,7 @@ class LeitorGitHubFormatoErro(LeitorGitHubErro):
 
 def executar_comando_gh(
     argumentos: list[str],
-    timeout_segundos: int = 30,
+    timeout_segundos: float = 30,
     executor_customizado: Callable[[list[str]], str] | None = None,
 ) -> str:
     """Executa o comando `gh` de forma segura com lista de argumentos e sem shell.
@@ -77,6 +77,8 @@ def executar_comando_gh(
         ViolacaoPoliticaSegurancaErro: Se for detectada tentativa de mutação.
         LeitorGitHubErro: Se o comando falhar, expirar ou retornar erro de rede.
     """
+    if timeout_segundos <= 0:
+        raise LeitorGitHubErro("Prazo da consulta ao GitHub esgotado.")
     # 1. Defesa em profundidade: bloqueia qualquer argumento mutável
     for arg in argumentos:
         arg_limpo = arg.strip().lower()
@@ -124,6 +126,7 @@ def executar_comando_gh(
 def executar_consulta_json(
     argumentos: list[str],
     executor_customizado: Callable[[list[str]], str] | None = None,
+    timeout_segundos: float = 30,
 ) -> dict[str, Any]:
     """Executa uma consulta gh e converte a resposta para dicionário JSON validado.
 
@@ -137,7 +140,7 @@ def executar_consulta_json(
     Raises:
         LeitorGitHubErro: Se a saída não for JSON válido ou não for um objeto.
     """
-    saida_bruta = executar_comando_gh(argumentos, executor_customizado=executor_customizado)
+    saida_bruta = executar_comando_gh(argumentos, timeout_segundos=timeout_segundos, executor_customizado=executor_customizado)
     try:
         dados = json.loads(saida_bruta)
     except json.JSONDecodeError as exc:
@@ -313,7 +316,7 @@ class LeitorGitHub:
 
         return dados
 
-    def obter_dependencias_issue(self, numero_issue: int, repositorio: str | None = None) -> dict[str, Any]:
+    def obter_dependencias_issue(self, numero_issue: int, repositorio: str | None = None, timeout_segundos: float = 30) -> dict[str, Any]:
         """Lê todas as páginas da relação nativa blocked_by, sem inferir conclusão.
 
         A CLI encerra com erro se uma página falhar. --slurp preserva as páginas
@@ -327,7 +330,7 @@ class LeitorGitHub:
 
         fonte = f"/repos/{repo}/issues/{numero_issue}/dependencies/blocked_by"
         args = ["api", "--method", "GET", "--paginate", "--slurp", f"{fonte}?per_page=100"]
-        bruto = executar_comando_gh(args, executor_customizado=self._executor)
+        bruto = executar_comando_gh(args, timeout_segundos=timeout_segundos, executor_customizado=self._executor)
         try:
             paginas = json.loads(bruto)
         except json.JSONDecodeError as exc:
@@ -410,6 +413,7 @@ class LeitorGitHub:
         self,
         numero_projeto: int = NUMERO_PROJETO_PADRAO,
         proprietario: str = PROPRIETARIO_PADRAO,
+        timeout_segundos: float = 30,
     ) -> dict[str, Any]:
         """Consulta os itens do GitHub Project com validação estrita de integridade.
 
@@ -439,7 +443,7 @@ class LeitorGitHub:
             "-L",
             str(MAXIMO_ITEMS_PROJECT),
         ]
-        dados = executar_consulta_json(args, executor_customizado=self._executor)
+        dados = executar_consulta_json(args, executor_customizado=self._executor, timeout_segundos=timeout_segundos)
         validar_snapshot_projeto(dados)
         return dados
 

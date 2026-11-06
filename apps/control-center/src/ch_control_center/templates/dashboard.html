@@ -33,7 +33,7 @@
   <div class="stat-card" style="border-left: 4px solid var(--status-elegivel);">
     <span class="stat-title" style="color: var(--status-elegivel);">Elegíveis (Grafo)</span>
     <span class="stat-value" style="color: var(--status-elegivel);">{{ stats.total_elegiveis }}</span>
-    <span class="stat-desc">Pré-requisitos concluídos</span>
+    <span class="stat-desc">Pré-requisitos verificados; sem autorização executiva</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid var(--status-bloqueada);">
@@ -43,9 +43,15 @@
   </div>
 
   <div class="stat-card" style="border-left: 4px solid var(--status-concluida);">
-    <span class="stat-title" style="color: var(--status-concluida);">Concluídas</span>
+    <span class="stat-title" style="color: var(--status-concluida);">Homologações verificadas</span>
     <span class="stat-value" style="color: var(--status-concluida);">{{ stats.total_concluidas }}</span>
-    <span class="stat-desc">Etapa de conclusão observada</span>
+    <span class="stat-desc">Satisfazem pré-requisitos no DAG</span>
+  </div>
+
+  <div class="stat-card">
+    <span class="stat-title">Etapas visuais de conclusão</span>
+    <span class="stat-value">{{ stats.total_etapas_conclusao_observadas }}</span>
+    <span class="stat-desc">Project: INTEGRADA, HOMOLOGADA, DONE, CLOSED ou PROD_OK; não comprovam homologação</span>
   </div>
 
   <div class="stat-card" style="border-left: 4px solid {% if stats.total_ciclos > 0 %}var(--status-ciclo){% else %}var(--border-color){% endif %};">
@@ -73,7 +79,7 @@
     Pílula Didática: O que significa uma tarefa ser "Elegível" no Grafo?
   </div>
   <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.5rem;">
-    Estar <strong>Elegível</strong> no grafo significa apenas que todas as tarefas predecessoras foram concluídas com sucesso na branch <code>main</code> (grau de entrada zero).
+    Estar <strong>Elegível</strong> no grafo significa que não há pré-requisitos pendentes segundo os dados verificados nesta leitura.
     <strong>Importante:</strong> Isso NÃO significa que a tarefa tem autorização para ser executada por robôs!
     Pelo Método C.H., a execução de qualquer ferramenta exige o consentimento explícito e formal de Hallan através de um contrato de autorização assinado.
   </p>
@@ -124,7 +130,7 @@
           </td>
           <td>
             {% if m.status_grafo == 'CONCLUIDA' %}
-              <span class="badge-status badge-concluida">✓ CONCLUÍDA</span>
+              <span class="badge-status badge-concluida">✓ HOMOLOGADA VERIFICADA</span>
             {% elif m.status_grafo == 'ELEGIVEL' %}
               <span class="badge-status badge-elegivel">● ELEGÍVEL</span>
             {% elif m.status_grafo == 'BLOQUEADA_CICLO' %}
