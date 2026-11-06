@@ -194,7 +194,7 @@
     {% set bloqueadas_dados = grafo.nos.values() | selectattr('status_grafo', 'equalto', 'BLOQUEADA_DADOS') | list %}
     {% if bloqueadas_dados %}
     <div style="margin-top: 1.25rem;">
-      <details class="card" style="margin: 0; padding: 1rem; border: 1px solid var(--border-color);">
+      <details id="secao-dados-insuficientes" class="card" style="margin: 0; padding: 1rem; border: 1px solid var(--border-color);">
         <summary style="font-size: 0.85rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: space-between;">
           <span>4. Dados insuficientes — análise pendente ({{ bloqueadas_dados|length }})</span>
           <span style="font-size: 0.75rem; font-weight: 400; text-transform: none; color: var(--text-muted);">Clique para recolher/expandir</span>
