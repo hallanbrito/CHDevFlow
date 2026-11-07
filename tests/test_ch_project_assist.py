@@ -644,6 +644,8 @@ class AdmissionOffline(unittest.TestCase):
     def test_preview_and_legacy_cli_paths_stay_separate(self):
         with mock.patch.object(app, "fetch_project", return_value=payload(item(43))), \
              mock.patch.object(app.legacy, "issue_state", return_value="OPEN"), \
+             mock.patch.object(app.legacy.ch_stage_evidence, "probe",
+                               return_value={"status": "CLEAR", "references": []}), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(app.main(["--issues", "43"]), 0)
 
