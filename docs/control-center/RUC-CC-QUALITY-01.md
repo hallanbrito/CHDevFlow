@@ -281,13 +281,59 @@ Em obediência ao rigor epistemológico do Método C.H.:
 
 ---
 
-## 11. Conclusão da Validação R1 e Estado da Entrega
+## 12. Validação e Fechamento da R2: Frontend Real e Smoke E2E Automatizado
 
-A missão de recuperação CC-QUALITY-01 com o ciclo de correções R1 encontra-se tecnicamente validada com evidências locais, remotas e analíticas completas.
+**Data:** 2026-11-06.
+**Originador das correções da R2:** ChatGPT por GitHub connector, em resposta ao relato de P0 do PO (HEAD `f9a526c`).
+**Originador da execução E2E e ajustes de teste:** Peão (Google Antigravity / AGY) em worktree isolada (`agy/cc-quality-01`).
+**Referência da ordem:** https://github.com/hallanbrito/CHDevFlow/pull/61#issuecomment-6699882412
+
+### 12.1 Correções Implementadas e Verificadas
+1. **Cache Busting e Desacoplamento de Ativos Estáticos:**
+   - Inclusão do parâmetro de versão `?v=cc-quality-r2-20261106` e atributo `defer` nos scripts e estilos em `base.html`.
+   - Adição do cabeçalho `Cache-Control: no-store, max-age=0` nas respostas de `/static/*` no FastAPI, impedindo que o navegador sirva bundles JS/CSS antigos após atualizações.
+   - Indicador visual `#cc-js-health` no SSR: exibe alerta discreto se o JS falhar ao carregar, e desaparece imediatamente quando `app.js` conclui o bootstrap e define `document.documentElement.dataset.ccJsReady = "true"`.
+2. **Busca Robusta por Número de Issue:**
+   - Correção em `MissionService.listar_missoes`: a busca agora aceita `#59`, `59`, `issue_ref`, número, título e ID interno, eliminando a restrição anterior que só buscava por texto do título.
+   - Busca instantânea no frontend em `missions.html` / `app.js` com contagem dinâmica de resultados e preservação do formulário GET como fallback resiliente.
+3. **Ajuste na Infraestrutura de Teste ASGI (`conftest.py`):**
+   - Configurado `"spec_version": "2.4"` no escopo ASGI do `ASGIClient`, habilitando o streaming adequado de `FileResponse` do Starlette sem encerramento prematuro por falso disconnect.
+
+### 12.2 Cobertura de Testes Automatizados (475 Testes PASS)
+- **Control Center (`pytest apps/control-center/tests`):** 112 testes aprovados (1.51s).
+- **Sentinela (`apps/bootstrap/sentinela/tests`):** 73 testes aprovados (0.095s).
+- **Raiz / CLI / Governança (`tests/`):** 290 testes aprovados (45.40s).
+- Total consolidado: **475 testes PASS** (100% de sucesso).
+
+### 12.3 Smoke Test E2E Automatizado em Navegador Real (`browser_smoke.py`)
+Utilizando Playwright contra o servidor local rodando em `LIVE_GITHUB` (`http://127.0.0.1:8000`), executou-se a suíte completa de interações reais no **Firefox** e no **Chromium**:
+
+- **Fatos Observados e Aprovados no Navegador:**
+  1. `JavaScript inicializado e heartbeat OK`: tag `html[data-cc-js-ready="true"]` confirmada; aviso `#cc-js-health` oculto com sucesso.
+  2. `Botão de tema funcional`: clique no botão de alternância de tema altera dinamicamente a classe `dark` no elemento raiz.
+  3. `Cartão → modal → Esc`: clique real em cartão da Raia 1 abre o modal `#modal-detalhes-missao` exibindo dados da missão; pressionar tecla `Escape` fecha o modal e restaura o foco.
+  4. `Raia expandiu e filtro reagiu ao texto`: Raia 4 inicia fechada (`open=false`); clique no `<summary>` abre a raia; preenchimento de `#5` no `#filtro-dados-insuficientes` filtra instantaneamente os cartões visíveis.
+  5. `Atualizar agora concluiu preservando busca e expansão`: clique em `#btn-atualizar-agora` dispara sincronização suave via `fetch`, conclui a atualização e preserva tanto o texto do filtro quanto o estado expandido da raia.
+  6. `Busca instantânea reagiu sem botão`: na tela `/missoes`, digitação de `#7` filtra a tabela em tempo real.
+  7. `Busca por número de Issue via formulário GET`: submissão do formulário envia `busca=%237` e retorna a missão correta com SSR.
+- **Saúde do Console e Rede:**
+  - **Zero erros de JavaScript no Console** (inspecionado via `page.on("pageerror")` e `page.on("console")`).
+  - **Zero requisições falhadas na rede** (inspecionado via `page.on("requestfailed")`).
+- **Evidências Visuais E2E:**
+  - Arquivadas em `docs/control-center/evidencias_r2/`:
+    - `smoke_dashboard.png`
+    - `smoke_grafo.png`
+    - `smoke_missoes.png`
+
+---
+
+## 13. Conclusão Final e Estado da Entrega
+
+A missão de recuperação CC-QUALITY-01 e os ciclos R1 e R2 encontram-se integralmente implementados, testados e validados com automação E2E de navegador real, testes de regressão e evidências auditáveis.
 
 - **Draft PR:** #61 (https://github.com/hallanbrito/CHDevFlow/pull/61)
 - **Branch:** `agy/cc-quality-01` (empilhada sobre `codex/cc-dag-01` / PR #60)
-- **CI Integral Final:** Run [42314423375](https://github.com/hallanbrito/CHDevFlow/actions/runs/42314423375) (`success`, 472 testes aprovados)
+- **CI Integral:** 475 testes locais aprovados; CI remota disparada no HEAD final.
 - **Custo:** R$ 0,00 mantido
 - **Segurança:** Invariantes C.H. D01, D05 e D06 estritamente preservadas. Nenhum merge, push na `main`, alteração de campos do Project #2 ou despacho real de agentes realizado.
 

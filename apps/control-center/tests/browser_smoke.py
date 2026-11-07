@@ -34,7 +34,8 @@ def main() -> int:
         with sync_playwright() as pw:
             factory = getattr(pw, browser_name)
             browser = factory.launch(headless=True)
-            page = browser.new_page(viewport={"width": 1280, "height": 900})
+            context = browser.new_context(viewport={"width": 1280, "height": 900}, bypass_csp=True)
+            page = context.new_page()
             page.set_default_timeout(60000)
             page.on("pageerror", lambda error: console_errors.append(str(error)))
             page.on(
