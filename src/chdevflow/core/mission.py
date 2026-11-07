@@ -116,6 +116,12 @@ def create_mission(
 
     remote_msg = ""
     if remote:
+        if not git_info["is_git"]:
+            raise MissionError(
+                f"Não é possível criar Issue remota fora de um repositório Git. "
+                f"O artefato local foi criado em: {mission_file}"
+            )
+
         # Criar uma Issue nao e admitir a missao no Project nem autorizar agentes.
         # Falhar ANTES de chamar gh quando o evento nao satisfaz o Intake F1.
         if executor not in EXECUTOR_LABELS:
@@ -135,12 +141,6 @@ def create_mission(
             raise MissionError("Intake F1 bloqueou a criacao remota: "
                                + ", ".join(preview["reasons"]) + ". "
                                + f"O artefato local foi criado em: {mission_file}")
-        if not git_info["is_git"]:
-            raise MissionError(
-                f"Não é possível criar Issue remota fora de um repositório Git. "
-                f"O artefato local foi criado em: {mission_file}"
-            )
-
         try:
             gh_check = subprocess.run(["gh", "auth", "status"], capture_output=True, text=True, check=False)
         except FileNotFoundError:
