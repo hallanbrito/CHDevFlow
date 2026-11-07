@@ -189,15 +189,15 @@ Após o alinhamento das asserções e inclusão das evidências, a suíte comple
 ### 10.3 CI Integral Remota (GitHub Actions)
 - **Workflow:** CHDevFlow CI Integral (`.github/workflows/w1-checks.yml`)
 - **Disparo:** manual via `gh workflow run w1-checks.yml --ref agy/cc-quality-01`
-- **Run ID:** `42314122884`
-- **URL da Execução:** https://github.com/hallanbrito/CHDevFlow/actions/runs/42314122884
+- **Run ID Final:** `42314423375` (executado no HEAD `0833ef8`)
+- **URL da Execução:** https://github.com/hallanbrito/CHDevFlow/actions/runs/42314423375
 - **Ref / Branch:** `agy/cc-quality-01`
-- **Resultado:** `success` (concluído em 1m14s)
+- **Resultado:** `success` (concluído em 54s)
 - **Contagem de Testes no CI:**
   - `python-checks` — Testes CLI e Governança Raiz: **290 testes** OK (45.96s)
   - `python-checks` — Testes Sentinela: **73 testes** OK (0.055s)
   - `python-checks` — Testes Control Center: **109 testes** OK (1.07s)
-  - Total consolidado no CI: **472 testes PASS**.
+  - Total consolidado no CI: **472 testes PASS** (Run histórico preliminar: 42314122884).
 
 ### 10.4 Testes no Navegador Firefox em `LIVE_GITHUB`
 O servidor foi executado localmente em `127.0.0.1:8000` em modo `LIVE_GITHUB` (`CH_CC_MODE=LIVE_GITHUB`) contra o repositório `hallanbrito/CHDevFlow` e Project #2 real.
@@ -210,7 +210,7 @@ O servidor foi executado localmente em `127.0.0.1:8000` em modo `LIVE_GITHUB` (`
      - `GET /` (Dashboard repetido): **0.004s** (4ms)
      - **Subprocessos `gh` em navegação interna quente:** **0** (leitura puramente em memória).
 2. **Comportamento Observado na UI:**
-   - **Dashboard (`/`):** exibe alerta transparente informando status `PARTIAL`, com discriminação de 25 missões com cadastro incompleto, 16 consultas indisponíveis e 20 homologações humanas não verificadas.
+   - **Dashboard (`/`):** exibe alerta transparente informando status `PARTIAL`, com discriminação de 25 missões com cadastro incompleto, 16 consultas indisponíveis e 20 homologações humanas não verificadas quando o timeout de 30s é atingido; ou status `OK` com 27 bloqueadas e 3 elegíveis em snapshot completo.
    - **Grafo DAG (`/grafo`):** Raia 4 (`secao-dados-insuficientes`) inicia recolhida por padrão; resumo exibe `4. Dados insuficientes — análise pendente (27)`. Ao clicar em um cartão, o modal acessível abre imediatamente exibindo os dados completos sem expor URLs REST na face.
    - **Sincronização em Tempo Real (`/api/sincronizacao`):** API reporta com precisão `PARTIAL`, `DEPENDENCIES_PARTIAL`, sem alegar falso sucesso enquanto houver relações inconclusivas.
    - **Resiliência a Falhas:** em caso de falha transitória do GitHub com cache existente, o sistema entra em `STALE` (HTTP 503) e exibe banner de aviso sem quebrar a aplicação.
@@ -222,7 +222,56 @@ O servidor foi executado localmente em `127.0.0.1:8000` em modo `LIVE_GITHUB` (`
    - `docs/control-center/evidencias_r1/firefox_missoes_desktop.png` (Desktop 1280x900)
    - `docs/control-center/evidencias_r1/firefox_missoes_mobile.png` (Mobile 375x812)
 
-### 10.5 Análise do Item Pendente (Acesso Frio) e Proposta Futura
+### 10.5 Reconciliação dos Contadores (29 vs 27) e Análise das 16 Relações Inconclusivas
+
+Atendendo à conferência do Gate de Encerramento (comentário 6699465197), realizou-se a inspeção atômica de snapshots ao vivo via script analítico direto:
+
+1. **Reconciliação Exata (Dentro do Mesmo Snapshot):**
+   - **Snapshot Completo (`8e11dafe52723b36`, 2026-11-07T00:29:33Z):**
+     - `total_tarefas`: 30 | `total_elegiveis`: 3 (#6, #58, #59) | `total_bloqueadas`: 27 | `total_dados_insuficientes`: 27
+     - `COUNT(status=BLOQUEADA_DADOS)` na Raia 4: **27**
+     - **Diferença entre o contador `total_dados_insuficientes` e a Raia 4:** **EXATAMENTE 0 (Zero nós)**.
+     - `contagem_por_causa`: `Cadastro incompleto`: 25, `Consulta/dependência indisponível`: 0, `Homologação não verificada`: 20.
+     - `total_ciclos`: 0 | `total_orfas`: 0 | `status`: `OK`.
+   - **Snapshot Parcial Anterior (`9f318b6633dad089`, 2026-11-06T23:44:08Z):**
+     - `total_tarefas`: 30 | `total_elegiveis`: 1 (#6) | `total_bloqueadas`: 29 | `total_dados_insuficientes`: 29
+     - `COUNT(status=BLOQUEADA_DADOS)` na Raia 4: **29**
+     - **Diferença entre o contador e a Raia 4:** **EXATAMENTE 0 (Zero nós)**.
+     - `contagem_por_causa`: `Cadastro incompleto`: 25, `Consulta/dependência indisponível`: 16, `Homologação não verificada`: 20.
+     - `status`: `PARTIAL` (`DEPENDENCIES_PARTIAL`).
+   - **Conclusão:** A divergência **29 vs 27 NÃO decorre de definições divergentes no código ou erro de totalização**. Em **ambos** os snapshots, o contador de métricas e os cartões da Raia 4 foram **100% idênticos e atômicos**.
+
+2. **Causa Raiz das 16 Relações UNKNOWN/INVALID e da Flutuação 27 vs 29:**
+   - Na camada adaptadora da Sentinela (`sentinela_adapter.py`), a consulta de dependências ao vivo é regida pelo orçamento estrito `ORCAMENTO_LEITURA_SEGUNDOS = 30.0`.
+   - As 30 tarefas são processadas sequencialmente na ordem em que o GitHub Project #2 as devolve. As Issues #59 e #58 ocupam as posições 29 e 30 (as duas últimas).
+   - Quando a latência da API do GitHub excede 30 segundos acumulados durante a iteração (após inspecionar ~14 itens), o prazo se esgota (`prazo - time.monotonic() <= 0`).
+   - Os 16 itens subsequentes (posições 15 a 30) são interrompidos por timeout e recebem conservadoramente `dependency_state = UNKNOWN` com diagnóstico: `"Leitura interrompida pelo orçamento temporal ou por falhas consecutivas."`.
+   - As Issues #59 e #58, por estarem no fim da fila, recebem `CAUSA_CONSULTA_INDISPONIVEL` nessa circunstância. Pela regra fail-closed (`UNKNOWN != VERIFIED_EMPTY`), ambas deixam de ser `ELEGIVEL` e são deslocadas para `BLOQUEADA_DADOS`, elevando o total de bloqueadas por dados de 27 para 29.
+   - Quando a execução conclui dentro dos 30s (como no snapshot `8e11dafe52723b36`), todas as dependências são verificadas (`VERIFIED_EMPTY`), e as Issues #59 e #58 permanecem legitimamente como `ELEGIVEL`, resultando em 27 bloqueadas.
+
+### 10.6 Separação Formal de Evidências (CI vs Renderização vs Interações Dinâmicas)
+
+Em obediência ao rigor epistemológico do Método C.H.:
+1. **Evidência Comprovada por CI Integral:**
+   - Execução das 3 suítes automatizadas (472 testes) no GitHub Actions (Run `42314423375`).
+   - Teste de contrato JS (`test_r1_f4_js_atualiza_dom_sem_reload_integral`): comprova que `app.js` não invoca `window.location.reload()`, implementa `atualizarConteudoVisivel()`, preserva scroll e reconecta listeners.
+   - Teste de template (`test_f3_template_grafo_cartoes_minimos_e_modal_acessivel`): comprova marcação ARIA, atributos `role="button"`, `role="dialog"`, `aria-modal="true"` e `<details id="secao-dados-insuficientes"` fechado por padrão.
+2. **Evidência Comprovada por Renderização Estática no Firefox:**
+   - Execução real do Mozilla Firefox 159.0.1 em modo headless capturando as 6 telas desktop e mobile em `docs/control-center/evidencias_r1/`.
+3. **Interações Dinâmicas de Clique em Navegador Gráfico (Fato Observado vs Automação):**
+   - **DECLARAÇÃO FACTUAL:** Por ausência de driver de automação de navegador (ex.: WebDriver, Geckodriver, Selenium ou Playwright) no ambiente headless local do Peão, a interação dinâmica de clique humano na UI gráfica é classificada formalmente como **NÃO VERIFICADA POR AUTOMAÇÃO E2E**.
+   - Para garantir a homologação visual pelo PO Hallan em seu navegador interativo local, disponibiliza-se o checklist operacional abaixo:
+
+> #### Checklist de Teste Manual do PO (Firefox / Chromium Local)
+> 1. Iniciar servidor: `CH_CC_MODE=LIVE_GITHUB uv run --project apps/control-center ch-control-center`
+> 2. Acessar `http://127.0.0.1:8000/grafo`:
+>    - [ ] **Raia 4:** Confirmar que a seção "4. Dados insuficientes — análise pendente" inicia recolhida. Clicar no cabeçalho e verificar que se expande exibindo os cartões.
+>    - [ ] **Filtro da Raia 4:** Digitar no campo `#filtro-dados-insuficientes` (ex.: "W2") e observar a filtragem instantânea dos cartões sem recarga.
+>    - [ ] **Modal de Detalhes:** Clicar em qualquer cartão da Raia 1 (ex.: #6) ou Raia 4 (ex.: #28). Verificar abertura do modal `#modal-detalhes-missao` com título, issue, status, diagnóstico completo e link GitHub.
+>    - [ ] **Fechamento do Modal:** Pressionar `Esc` ou clicar no botão "✕" / "Fechar" e confirmar que o modal fecha e o foco retorna ao cartão.
+>    - [ ] **Atualização Suave (F4):** Com um termo digitado no filtro ou com a Raia 4 expandida, clicar em "Atualizar agora" na barra superior. Verificar que o badge muda para `SYNCING` e depois `OK`/`PARTIAL` sem recarregar a página (`window.location.reload` inexistente), preservando o texto digitado e a seção aberta.
+
+### 10.7 Análise do Item Pendente (Acesso Frio) e Proposta Futura
 - **Diagnóstico:** O tempo de primeiro acesso frio em `LIVE_GITHUB` permanece em ~25s. Esse tempo decorre das consultas pontuais sequenciais via subprocessos `gh` para inspecionar dependências cruzadas de issues quando essas não constam na tabela do Project #2.
 - **Rigor Técnico:** O ganho exponencial de performance proporcionado pelo cache (de 25s para 4ms) aplica-se exclusivamente aos acessos subsequentes durante a janela de TTL (60s). Não se extrapola o ganho para a primeira consulta.
 - **Proposta para Fatias Futuras (Pós-CC-QUALITY-01):**
@@ -234,11 +283,11 @@ O servidor foi executado localmente em `127.0.0.1:8000` em modo `LIVE_GITHUB` (`
 
 ## 11. Conclusão da Validação R1 e Estado da Entrega
 
-A missão de recuperação CC-QUALITY-01 com o ciclo de correções R1 encontra-se tecnicamente validada com evidências locais, remotas e visuais completas.
+A missão de recuperação CC-QUALITY-01 com o ciclo de correções R1 encontra-se tecnicamente validada com evidências locais, remotas e analíticas completas.
 
 - **Draft PR:** #61 (https://github.com/hallanbrito/CHDevFlow/pull/61)
 - **Branch:** `agy/cc-quality-01` (empilhada sobre `codex/cc-dag-01` / PR #60)
-- **CI Integral:** Run 42314122884 (`success`, 472 testes)
+- **CI Integral Final:** Run [42314423375](https://github.com/hallanbrito/CHDevFlow/actions/runs/42314423375) (`success`, 472 testes aprovados)
 - **Custo:** R$ 0,00 mantido
 - **Segurança:** Invariantes C.H. D01, D05 e D06 estritamente preservadas. Nenhum merge, push na `main`, alteração de campos do Project #2 ou despacho real de agentes realizado.
 
