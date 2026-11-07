@@ -11,6 +11,7 @@ from chdevflow.core.doctor import render_doctor_human, run_doctor
 from chdevflow.core.evidence import render_evidence_human, run_verification
 from chdevflow.core.init import run_init
 from chdevflow.core.mission import create_mission
+from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
 from chdevflow.core.status import get_project_status, render_status_human
@@ -190,6 +191,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=120.0,
         help="Timeout máximo por comando de verificação em segundos (padrão: 120.0s).",
     )
+
+    # CH-GOV-01: validação de entrada sem rede e sem mutação
+    parser_intake = subparsers.add_parser("intake", help="Inspeciona entrada de missões (somente leitura).")
+    intake_subs = parser_intake.add_subparsers(dest="intake_action", metavar="<ação>")
+    intake_check = intake_subs.add_parser("check", help="Valida metadados de uma Issue, sem conceder autorização.")
+    intake_check.add_argument("--event-json", type=Path, required=True)
+    intake_check.add_argument("--json", action="store_true")
+    intake_check.add_argument("--enforce", action="store_true")
 
     # Subcomando: mission
     parser_mission = subparsers.add_parser(
@@ -409,6 +418,17 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"Erro em 'ch verify': {exc}", file=sys.stderr)
             return 1
+
+    if args.command == "intake":
+        if getattr(args, "intake_action", None) != "check":
+            print("Uso: ch intake check --event-json <arquivo>", file=sys.stderr)
+            return 1
+        intake_argv = ["--event-json", str(args.event_json)]
+        if args.json:
+            intake_argv.append("--json")
+        if args.enforce:
+            intake_argv.append("--enforce")
+        return run_intake_check(intake_argv)
 
     if args.command == "mission":
         if not getattr(args, "mission_action", None):

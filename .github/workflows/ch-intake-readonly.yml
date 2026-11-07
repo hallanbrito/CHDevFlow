@@ -1,0 +1,26 @@
+name: CH Intake (somente leitura)
+
+"on":
+  issues:
+    types: [opened, edited, labeled, unlabeled, reopened]
+
+# Nunca escreve em Issues, etiquetas ou GitHub Projects.
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  check-intake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout de código confiável da main
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Preparar Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Validação determinística do evento (sem escrita)
+        run: python scripts/ch_intake_check.py --event-json "$GITHUB_EVENT_PATH" --json --enforce
