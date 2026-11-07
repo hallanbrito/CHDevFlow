@@ -5,12 +5,14 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 from chdevflow import __version__
 from chdevflow.core.doctor import render_doctor_human, run_doctor
 from chdevflow.core.evidence import render_evidence_human, run_verification
 from chdevflow.core.init import run_init
 from chdevflow.core.mission import create_mission
+from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
 from chdevflow.core.status import get_project_status, render_status_human
@@ -191,6 +193,31 @@ def build_parser() -> argparse.ArgumentParser:
         help="Timeout máximo por comando de verificação em segundos (padrão: 120.0s).",
     )
 
+    # CH-GOV-01: validação de entrada sem rede e sem mutação
+    parser_intake = subparsers.add_parser("intake", help="Inspeciona entrada de missões (somente leitura).")
+    intake_subs = parser_intake.add_subparsers(dest="intake_action", metavar="<ação>")
+    intake_check = intake_subs.add_parser("check", help="Valida metadados de uma Issue, sem conceder autorização.")
+    intake_check.add_argument("--event-json", type=Path, required=True)
+    intake_check.add_argument("--json", action="store_true")
+    intake_check.add_argument("--enforce", action="store_true")
+
+    # Roteamento exclusivo: a admissao reside em scripts/ch_project_assist.py.
+    parser_project = subparsers.add_parser(
+        "project", help="Operacoes assistidas no GitHub Project, sem escrita por padrao."
+    )
+    project_subs = parser_project.add_subparsers(dest="project_action", metavar="<ação>")
+    parser_project_admit = project_subs.add_parser(
+        "admit", help="Previa e plano de admissao assistida de uma Issue."
+    )
+    parser_project_admit.add_argument("--issue", type=int, required=True)
+    parser_project_admit.add_argument("--dry-run", action="store_true")
+    parser_project_admit.add_argument("--autonomy", choices=["CH-0", "CH-1", "CH-2", "CH-3"])
+    parser_project_admit.add_argument("--approval-comment", type=int)
+    parser_project_admit.add_argument("--plan-file", type=Path)
+    parser_project_admit.add_argument("--apply-plan", type=Path)
+    parser_project_admit.add_argument("--confirm")
+    parser_project_admit.add_argument("--audit-file", type=Path)
+
     # Subcomando: mission
     parser_mission = subparsers.add_parser(
         "mission",
@@ -219,14 +246,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser_mission_new.add_argument(
         "--executor",
         type=str,
-        default="AGY",
-        help="Executor da missão (ex.: AGY, Codex).",
+        default=None,
+        help="Executor da missão (obrigatório com --remote; padrão local: AGY).",
     )
     parser_mission_new.add_argument(
         "--autonomy",
         choices=["CH-0", "CH-1", "CH-2", "CH-3"],
-        default="CH-2",
-        help="Nível de autonomia proposto.",
+        default=None,
+        help="Nível de autonomia proposto (obrigatório com --remote; padrão local: CH-2).",
     )
     parser_mission_new.add_argument(
         "--remote",
@@ -410,16 +437,63 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Erro em 'ch verify': {exc}", file=sys.stderr)
             return 1
 
+    if args.command == "intake":
+        if getattr(args, "intake_action", None) != "check":
+            print("Uso: ch intake check --event-json <arquivo>", file=sys.stderr)
+            return 1
+        intake_argv = ["--event-json", str(args.event_json)]
+        if args.json:
+            intake_argv.append("--json")
+        if args.enforce:
+            intake_argv.append("--enforce")
+        return run_intake_check(intake_argv)
+
+    if args.command == "project":
+        if args.project_action != "admit":
+            print("Uso: ch project admit --issue <N> --dry-run", file=sys.stderr)
+            return 1
+        # Roteamento somente; o script concentra os gates e as mutations.
+        script = Path(__file__).resolve().parents[2] / "scripts" / "ch_project_assist.py"
+        if not script.is_file():
+            print("Erro: admissao exige checkout/editable do CHDevFlow com scripts/ presente.",
+                  file=sys.stderr)
+            return 1
+        command = [sys.executable, str(script), "admit", "--issue", str(args.issue)]
+        if args.dry_run:
+            command.append("--dry-run")
+        for flag, value in (
+            ("--autonomy", args.autonomy),
+            ("--approval-comment", args.approval_comment),
+            ("--plan-file", args.plan_file),
+            ("--apply-plan", args.apply_plan),
+            ("--confirm", args.confirm),
+            ("--audit-file", args.audit_file),
+        ):
+            if value is not None:
+                command.extend([flag, str(value)])
+        try:
+            return subprocess.run(command, check=False).returncode
+        except OSError as exc:
+            print(f"Erro ao iniciar admissao: {type(exc).__name__}", file=sys.stderr)
+            return 1
+
     if args.command == "mission":
         if not getattr(args, "mission_action", None):
             print("Uso: ch mission new \"<título>\" [--remote]", file=sys.stderr)
             return 1
+        if args.remote and (args.executor is None or args.autonomy is None):
+            print("Erro em 'ch mission': --remote exige --executor e --autonomy "
+                  "explicitamente.", file=sys.stderr)
+            return 1
+        # Compatibilidade: preservar os defaults históricos apenas em modo local.
+        executor = args.executor if args.executor is not None else "AGY"
+        autonomy = args.autonomy if args.autonomy is not None else "CH-2"
         try:
             path, msg = create_mission(
                 title=args.title,
                 project_path=args.path,
-                executor=args.executor,
-                autonomy=args.autonomy,
+                executor=executor,
+                autonomy=autonomy,
                 remote=args.remote,
             )
             print(msg)

@@ -1,0 +1,16 @@
+{
+  "action": "labeled",
+  "issue": {
+    "number": 62,
+    "title": "CH-DATA-01 — Regularização auditável dos campos do Project #2",
+    "labels": [
+      {
+        "name": "ch:workflow"
+      },
+      {
+        "name": "ch:agy"
+      }
+    ],
+    "body": "# CH-DATA-01\n\n## C — Contexto\nDiagnosticar os campos vazios; implementação ainda não autorizada.\n\n> **Autonomia**: CH-1 (somente leitura)\n"
+  }
+}
