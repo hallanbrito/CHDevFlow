@@ -28,6 +28,10 @@ CH1_DIGEST = "68bcb20520d315853acd8073a548f2ec3dcabf02b3e766c3992a1197b4a2f88f"
 SNAPSHOT_DIGEST = "7460350916057bd5f14bf0934560fff247f548d03dc0e531e5e6ebbb486f41c6"
 PRESERVE = ("Etapa CH", "Esteira", "Status", "Prioridade CH", "Risco CH", "Decisao PO")
 MAX_PLAN_AGE = timedelta(hours=24)
+# W-DATA-01-B: R2 com contrato separado; o fluxo R1 permanece intacto.
+RESUME_SCHEMA = "CHDEVFLOW-CHDATA01-AUTONOMY-RESUME/1"
+RESUME_ISSUES = (10, 12, 13, 24)
+R1_APPLY_DIGEST = "3393caca4c2b328644dbc10580eae1cabc798e80573a1196db3dbb90973bc26d"
 
 
 def digest(data: Any) -> str:
@@ -286,6 +290,218 @@ def check_live(plan: dict, context: dict, verified: set[int]) -> None:
             raise ValueError(f"#{n}: divergência LIVE no lote; abortar sem retry")
 
 
+
+def read_r1_audit(path: Path) -> tuple[list[dict], str]:
+    """Aceita exclusivamente o log R1 com #8 verificada e sem outras tentativas."""
+    raw = path.read_bytes()
+    if not raw or len(raw) > 1000000 or not raw.endswith(b"\n"):
+        raise ValueError("RUC R1 inválida ou truncada")
+    events = [json.loads(line) for line in raw.splitlines()]
+    if (len(events) != 6 or any(not isinstance(e, dict) or
+            e.get("protocol") != "RUC/1.0" or e.get("mission") != "W-DATA-01-A" or
+            e.get("plan_sha256") != R1_APPLY_DIGEST for e in events)):
+        raise ValueError("RUC R1 não corresponde ao plano pinado")
+    if ([e.get("event") for e in events] !=
+            ["PREFLIGHT", "AUTH_VERIFIED", "START", "ATTEMPT", "VERIFIED", "ABORT"] or
+            events[2].get("issues") != list(ISSUES) or
+            events[3].get("issue") != 8 or events[3].get("field") != FIELD or
+            events[3].get("before") is not None or events[3].get("after_expected") != "CH-1" or
+            events[4].get("issue") != 8 or events[4].get("field") != FIELD or
+            events[4].get("after") != "CH-1" or
+            events[3].get("card_id") != events[4].get("card_id") or
+            events[5].get("confirmed") != [8] or events[5].get("uncertain_issue") is not None):
+        raise ValueError("RUC R1 não comprova execução exclusiva e verificada de #8")
+    return events, hashlib.sha256(raw).hexdigest()
+
+
+def make_resume_plan(ch1: dict, context: dict, events: list[dict],
+                     audit_sha: str, *, captured_at: str | None = None) -> dict:
+    reference = validate_ch1(ch1)
+    if (len(events) != 6 or events[4].get("event") != "VERIFIED" or
+            events[4].get("issue") != 8 or
+            events[4].get("card_id") != reference[8]["card_id"] or
+            not isinstance(audit_sha, str) or len(audit_sha) != 64):
+        raise ValueError("Prova R1 não vincula o cartão #8")
+    project_id, field_id, options = _project_schema(context)
+    cards = _items(context)
+    precondition, changes = None, []
+    for n in ISSUES:
+        card, historic = cards[n], reference[n]
+        if (card["id"] != historic["card_id"] or field_id != historic["field_id"] or
+                options[TARGETS[n]] != historic["option_id"]):
+            raise ValueError(f"#{n}: identidade/options mudaram desde CH-1")
+        preserve = _preserved(card)
+        for key in ("Etapa CH", "Esteira"):
+            old = historic["preserve"][key]
+            if preserve[key] != (None if old == "NÃO_OBSERVADO" else old):
+                raise ValueError(f"#{n}: campo {key} mudou")
+        actual = _value(card, FIELD)
+        if actual != ("CH-1" if n == 8 else None):
+            raise ValueError(f"#{n}: pré-condição de Autonomia CH divergente")
+        entry = {"issue": n, "card_id": card["id"],
+                 "issue_url": f"https://github.com/{REPO}/issues/{n}",
+                 "field": FIELD, "field_id": field_id,
+                 "option_id": options[TARGETS[n]],
+                 "before": "CH-1" if n == 8 else None,
+                 "after": TARGETS[n], "preserve_before": preserve}
+        if n == 8:
+            precondition = entry
+        else:
+            changes.append(entry)
+    data = {"schema": RESUME_SCHEMA, "repo": REPO, "owner": OWNER,
+            "project": PROJECT, "project_id": project_id, "field": FIELD,
+            "field_id": field_id, "source_ch1_digest_sha256": CH1_DIGEST,
+            "source_snapshot_digest_sha256": SNAPSHOT_DIGEST,
+            "source_r1_plan_sha256": R1_APPLY_DIGEST,
+            "source_r1_audit_sha256": audit_sha,
+            "prepared_at_utc": captured_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "issues": list(RESUME_ISSUES), "precondition": precondition,
+            "changes": changes, "mutations_authorized": False}
+    return {**data, "digest_sha256": digest(data)}
+
+
+def validate_resume_plan(plan: dict) -> list[dict]:
+    keys = {"schema", "repo", "owner", "project", "project_id", "field",
+            "field_id", "source_ch1_digest_sha256", "source_snapshot_digest_sha256",
+            "source_r1_plan_sha256", "source_r1_audit_sha256", "prepared_at_utc",
+            "issues", "precondition", "changes", "mutations_authorized", "digest_sha256"}
+    if not isinstance(plan, dict) or set(plan) != keys:
+        raise ValueError("Schema R2 inválido")
+    assert_digest(plan)
+    if (plan["schema"] != RESUME_SCHEMA or plan["owner"] != OWNER or
+            plan["repo"] != REPO or plan["project"] != PROJECT or
+            plan["field"] != FIELD or plan["issues"] != list(RESUME_ISSUES) or
+            plan["source_ch1_digest_sha256"] != CH1_DIGEST or
+            plan["source_snapshot_digest_sha256"] != SNAPSHOT_DIGEST or
+            plan["source_r1_plan_sha256"] != R1_APPLY_DIGEST or
+            not isinstance(plan["source_r1_audit_sha256"], str) or
+            len(plan["source_r1_audit_sha256"]) != 64 or
+            plan["mutations_authorized"] is not False or
+            not isinstance(plan["project_id"], str) or not plan["project_id"] or
+            not isinstance(plan["field_id"], str) or not plan["field_id"] or
+            not isinstance(plan["changes"], list) or len(plan["changes"]) != 4):
+        raise ValueError("R2 fora da allowlist")
+    for n, item in zip(ISSUES, [plan["precondition"], *plan["changes"]]):
+        if (not isinstance(item, dict) or set(item) !=
+                {"issue", "card_id", "issue_url", "field", "field_id", "option_id",
+                 "before", "after", "preserve_before"} or item["issue"] != n or
+                item["field"] != FIELD or item["field_id"] != plan["field_id"] or
+                item["after"] != TARGETS[n] or
+                item["before"] != ("CH-1" if n == 8 else None) or
+                item["issue_url"] != f"https://github.com/{REPO}/issues/{n}" or
+                not isinstance(item["card_id"], str) or
+                not item["card_id"].startswith("PVTI_") or
+                not isinstance(item["option_id"], str) or not item["option_id"] or
+                not isinstance(item["preserve_before"], dict) or
+                set(item["preserve_before"]) != set(PRESERVE) or
+                any(v is not None and not isinstance(v, str)
+                    for v in item["preserve_before"].values())):
+            raise ValueError(f"#{n}: campo/estado inválido no plano R2")
+    timestamp = datetime.fromisoformat(plan["prepared_at_utc"].replace("Z", "+00:00"))
+    if timestamp.tzinfo is None or not (-timedelta(minutes=2) <=
+            datetime.now(timezone.utc) - timestamp <= MAX_PLAN_AGE):
+        raise ValueError("Plano R2 expirado ou horário inválido")
+    return plan["changes"]
+
+
+def check_resume_live(plan: dict, context: dict, verified: set[int]) -> None:
+    project_id, field_id, options = _project_schema(context)
+    if project_id != plan["project_id"] or field_id != plan["field_id"]:
+        raise ValueError("ID Project/Field R2 alterado")
+    items = _items(context)
+    for entry in [plan["precondition"], *plan["changes"]]:
+        n = entry["issue"]
+        expected = entry["after"] if n == 8 or n in verified else None
+        card = items[n]
+        if (card["id"] != entry["card_id"] or
+                options[entry["after"]] != entry["option_id"] or
+                _value(card, FIELD) != expected or
+                _preserved(card) != entry["preserve_before"]):
+            raise ValueError(f"#{n}: estado LIVE divergente, abortar R2")
+
+
+def resume_approval_statement(plan_sha: str) -> str:
+    return (f"APROVO CH-DATA-01 RETOMAR PROJECT#2 LOTE01-R2 SHA256={plan_sha} "
+            "#8=CH-1(PRESERVAR) #10=CH-1 #12=CH-0 #13=CH-0 #24=CH-1 CAMPO=Autonomia CH")
+
+
+def verify_resume_approval(comment: dict, plan: dict, comment_id: int) -> str:
+    if (not isinstance(comment, dict) or type(comment_id) is not int or
+            comment.get("id") != comment_id or
+            comment.get("issue_url") != f"https://api.github.com/repos/{REPO}/issues/62" or
+            not isinstance(comment.get("user"), dict) or
+            comment["user"].get("login") != OWNER):
+        raise ValueError("Aprovação R2 não publicada pelo PO na Issue #62")
+    body = comment.get("body")
+    if (not isinstance(body, str) or
+            resume_approval_statement(plan["digest_sha256"]) not in body.splitlines() or
+            "ACEITO RISCO RESIDUAL DE CONCORRENCIA SEM CAS ATOMICO" not in body.splitlines() or
+            not isinstance(comment.get("created_at"), str) or
+            not isinstance(comment.get("updated_at"), str)):
+        raise ValueError("Comentário R2 sem digest e risco exatos")
+    return digest({"id": comment_id, "author": OWNER, "body": body,
+                   "issue_url": comment["issue_url"],
+                   "created_at": comment["created_at"], "updated_at": comment["updated_at"]})
+
+
+def apply_resume_plan(plan: dict, comment_id: int, *,
+                      schema_reader: Callable[[], dict], items_reader: Callable[[], dict],
+                      proof_reader: Callable[[int], dict], graphql_set: Callable[[dict], str],
+                      audit: Callable[[dict], None], interactive: bool,
+                      prompt: Callable[[str], str]) -> int:
+    """Cache de schema apenas; itens LIVE são relidos antes/depois de cada mutation."""
+    changes = validate_resume_plan(plan)
+    if not interactive or not callable(audit):
+        raise ValueError("TTY e auditoria R2 obrigatórios")
+    verified: set[int] = set()
+    uncertain = None
+    fingerprint = verify_resume_approval(proof_reader(comment_id), plan, comment_id)
+    try:
+        initial = schema_reader()
+        check_resume_live(plan, initial, verified)
+        schema_cache = {"project": initial["project"], "fields": initial["fields"]}
+        audit({"event": "PREFLIGHT_R2", "r1_audit_sha256": plan["source_r1_audit_sha256"],
+               "approval_comment_id": comment_id, "approval_fingerprint": fingerprint})
+        phrase = "APROVO CH-DATA-01 R2 " + plan["digest_sha256"][:12]
+        if prompt(f"Digite exatamente '{phrase}' (gate R2 do PO): ") != phrase:
+            raise ValueError("Confirmação interativa R2 ausente")
+        audit({"event": "AUTH_VERIFIED_R2", "approval_comment_id": comment_id})
+        audit({"event": "START_R2", "issues": list(RESUME_ISSUES), "precondition_issue": 8})
+        for change in changes:
+            n = change["issue"]
+            if verify_resume_approval(proof_reader(comment_id), plan, comment_id) != fingerprint:
+                raise ValueError("Autorização R2 mudou")
+            check_resume_live(plan, {**schema_cache, "items": items_reader()}, verified)
+            audit({"event": "ATTEMPT_R2", "issue": n, "field": FIELD,
+                   "card_id": change["card_id"], "before": None,
+                   "after_expected": change["after"]})
+            uncertain = n
+            got = graphql_set({"projectId": plan["project_id"],
+                               "itemId": change["card_id"], "fieldId": plan["field_id"],
+                               "optionId": change["option_id"]})
+            if got != change["card_id"]:
+                raise RuntimeError(f"#{n}: GraphQL retornou card divergente")
+            check_resume_live(plan, {**schema_cache, "items": items_reader()}, verified | {n})
+            audit({"event": "VERIFIED_R2", "issue": n, "field": FIELD,
+                   "card_id": change["card_id"], "before": None, "after": change["after"]})
+            verified.add(n)
+            uncertain = None
+        check_resume_live(plan, schema_reader(), verified)
+        audit({"event": "COMPLETE_R2", "confirmed": sorted(verified),
+               "mutations_verified": len(verified), "execution_authorized": False})
+        return len(verified)
+    except Exception as exc:
+        event = ("UNCERTAIN_R2" if uncertain is not None else
+                 "BLOCKED_PREWRITE_R2" if not verified else "ABORT_R2")
+        try:
+            audit({"event": event, "confirmed": sorted(verified),
+                   "uncertain_issue": uncertain, "reason_type": type(exc).__name__})
+        except Exception:
+            pass
+        raise RuntimeError(f"RETOMADA R2 PARCIAL: {len(verified)} verificadas; "
+                           f"incerta=#{uncertain}; não repetir sem reconciliação") from exc
+
+
 def approval_statement(digest_sha256: str) -> str:
     return (f"APROVO CH-DATA-01 APLICAR PROJECT#2 LOTE01 SHA256={digest_sha256} "
             "#8=CH-1 #10=CH-1 #12=CH-0 #13=CH-0 #24=CH-1 CAMPO=Autonomia CH")
@@ -381,9 +597,9 @@ def _audit_open(path: Path):
     return os.fdopen(fd, "w", encoding="utf-8")
 
 
-def _audit_record(handle, plan_sha: str):
+def _audit_record(handle, plan_sha: str, *, mission: str = "W-DATA-01-A"):
     def write(record: dict) -> None:
-        entry = {"protocol": "RUC/1.0", "mission": "W-DATA-01-A",
+        entry = {"protocol": "RUC/1.0", "mission": mission,
                  "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                  "plan_sha256": plan_sha, **record}
         handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
@@ -400,11 +616,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--approval-comment", type=int)
     parser.add_argument("--confirm", help="Digest completo de plano executável (além do TTY)")
     parser.add_argument("--audit-file", type=Path)
+    parser.add_argument("--resume-r2", action="store_true")
+    parser.add_argument("--r1-audit", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.apply_plan is None:
             if (args.approval_comment or args.confirm or args.audit_file):
                 raise ValueError("Argumentos de escrita proibidos em dry-run")
+            if args.resume_r2 != (args.r1_audit is not None):
+                raise ValueError("R2 exige --resume-r2 e --r1-audit juntos")
+            if args.resume_r2 and args.plan_output is None:
+                raise ValueError("R2 exige --plan-output exclusivo")
             if not args.ch1_plan:
                 raise ValueError("Informe --ch1-plan em modo de leitura")
             ch1 = json.loads(args.ch1_plan.read_text(encoding="utf-8"))
@@ -412,25 +634,48 @@ def main(argv: list[str] | None = None) -> int:
                 validate_ch1(ch1)
                 print("CH-1 homologado; MATRIZ APENAS CONSULTIVA; nenhuma chamada de escrita")
                 return 0
-            plan = make_apply_plan(ch1, live_reader())
+            if args.resume_r2:
+                events, audit_sha = read_r1_audit(args.r1_audit)
+                plan = make_resume_plan(ch1, live_reader(), events, audit_sha)
+                validate_resume_plan(plan)
+            else:
+                plan = make_apply_plan(ch1, live_reader())
             _write_unique(args.plan_output, plan)
             print("PLANO EXECUTÁVEL GERADO, NÃO AUTORIZADO PARA EXECUÇÃO")
             print("Digest SHA-256:", plan["digest_sha256"])
             return 0
-        if (args.ch1_plan or args.plan_output or args.approval_comment is None
-                or not args.confirm or args.audit_file is None):
+        if (args.ch1_plan or args.plan_output or args.resume_r2
+                or args.approval_comment is None or not args.confirm or args.audit_file is None):
             raise ValueError("Aplicação exige --apply-plan --confirm --approval-comment --audit-file")
         plan = json.loads(args.apply_plan.read_text(encoding="utf-8"))
-        validate_apply_plan(plan)
+        if plan.get("schema") == RESUME_SCHEMA:
+            validate_resume_plan(plan)
+            if args.r1_audit is None:
+                raise ValueError("R2 exige a auditoria R1 original")
+            _, audit_sha = read_r1_audit(args.r1_audit)
+            if audit_sha != plan["source_r1_audit_sha256"]:
+                raise ValueError("RUC R1 não coincide com plano R2")
+        else:
+            if args.r1_audit is not None:
+                raise ValueError("RUC R1 não pertence à aplicação R1")
+            validate_apply_plan(plan)
         if args.confirm != plan["digest_sha256"]:
             raise ValueError("Digest completo incorreto")
         if not sys.stdin.isatty():
             raise ValueError("Aplicação exige TTY humano")
         with _audit_open(args.audit_file) as out:
-            result = apply_plan(plan, args.approval_comment, reader=live_reader,
-                                proof_reader=approval_reader, graphql_set=set_only,
-                                audit=_audit_record(out, plan["digest_sha256"]),
-                                interactive=True, prompt=input)
+            audit = _audit_record(out, plan["digest_sha256"],
+                      mission="W-DATA-01-B" if plan["schema"] == RESUME_SCHEMA else "W-DATA-01-A")
+            if plan["schema"] == RESUME_SCHEMA:
+                result = apply_resume_plan(plan, args.approval_comment,
+                             schema_reader=live_reader,
+                             items_reader=lambda: _module().fetch_project(),
+                             proof_reader=approval_reader, graphql_set=set_only,
+                             audit=audit, interactive=True, prompt=input)
+            else:
+                result = apply_plan(plan, args.approval_comment, reader=live_reader,
+                                    proof_reader=approval_reader, graphql_set=set_only,
+                                    audit=audit, interactive=True, prompt=input)
         print(f"LOTE VERIFICADO: {result} campos Autonomia CH")
         return 0
     except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
