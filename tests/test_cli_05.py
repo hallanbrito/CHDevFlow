@@ -174,7 +174,9 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         target = Path(self.test_dir) / "RemoteInvalid"
         target.mkdir()
         self._init_git_repo(target)
-        with patch("chdevflow.core.mission.subprocess.run") as mocked:
+        with patch("chdevflow.core.mission.check_git_status", return_value={
+            "is_git": True, "branch": "main", "commit_sha": "a" * 40
+        }), patch("chdevflow.core.mission.subprocess.run") as mocked:
             with self.assertRaisesRegex(MissionError, "Executor remoto invalido"):
                 create_mission("Nao criar", project_path=target, executor="Outro",
                                autonomy="CH-1", remote=True)
