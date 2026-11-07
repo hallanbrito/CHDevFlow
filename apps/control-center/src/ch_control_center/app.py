@@ -63,6 +63,9 @@ def create_app() -> FastAPI:
             "form-action 'self'; "
             "base-uri 'self';"
         )
+        # No painel local, evitar JS/CSS de versões antigas após atualização da branch.
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["X-Governanca-Modo"] = "SOMENTE_LEITURA"
         return response
 
