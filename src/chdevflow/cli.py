@@ -228,14 +228,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser_mission_new.add_argument(
         "--executor",
         type=str,
-        default="AGY",
-        help="Executor da missão (ex.: AGY, Codex).",
+        default=None,
+        help="Executor da missão (obrigatório com --remote; padrão local: AGY).",
     )
     parser_mission_new.add_argument(
         "--autonomy",
         choices=["CH-0", "CH-1", "CH-2", "CH-3"],
-        default="CH-2",
-        help="Nível de autonomia proposto.",
+        default=None,
+        help="Nível de autonomia proposto (obrigatório com --remote; padrão local: CH-2).",
     )
     parser_mission_new.add_argument(
         "--remote",
@@ -434,12 +434,19 @@ def main(argv: list[str] | None = None) -> int:
         if not getattr(args, "mission_action", None):
             print("Uso: ch mission new \"<título>\" [--remote]", file=sys.stderr)
             return 1
+        if args.remote and (args.executor is None or args.autonomy is None):
+            print("Erro em 'ch mission': --remote exige --executor e --autonomy "
+                  "explicitamente.", file=sys.stderr)
+            return 1
+        # Compatibilidade: preservar os defaults históricos apenas em modo local.
+        executor = args.executor if args.executor is not None else "AGY"
+        autonomy = args.autonomy if args.autonomy is not None else "CH-2"
         try:
             path, msg = create_mission(
                 title=args.title,
                 project_path=args.path,
-                executor=args.executor,
-                autonomy=args.autonomy,
+                executor=executor,
+                autonomy=autonomy,
                 remote=args.remote,
             )
             print(msg)
