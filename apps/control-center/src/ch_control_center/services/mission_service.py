@@ -16,7 +16,7 @@ from ch_control_center.config import (
     MODO_LIVE_GITHUB,
     obter_modo_operacao,
 )
-from ch_control_center.graph.dag_engine import DAGEngine, ResultadoGrafoDAG
+from ch_control_center.graph.dag_engine import DAGEngine, ETAPAS_FECHAMENTO_VISUAL, ResultadoGrafoDAG
 
 
 class MissionService:
@@ -66,10 +66,12 @@ class MissionService:
         snapshot = self.facade.obter_snapshot_demo()
         return snapshot, MODO_DEMO_OFFLINE
 
-    def normalizar_itens_snapshot(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    def normalizar_itens_snapshot(self, snapshot: dict[str, Any], origem: str | None = None) -> list[dict[str, Any]]:
         """Normaliza as tarefas a partir de um snapshot imutável em memória (AUD-05)."""
         itens = snapshot.get("items", [])
         tarefas_processadas: list[dict[str, Any]] = []
+        ids_vistos: set[str] = set()
+        refs_vistas: set[str] = set()
 
         for item in itens:
             if not isinstance(item, dict):
@@ -95,10 +97,18 @@ class MissionService:
                 continue
 
             item_id = str(item.get("id") or f"W-{content.get('number', '0')}")
+            if item_id in ids_vistos:
+                raise SentinelaAdapterErro("ID de item do Project duplicado; grafo inconclusivo.")
+            ids_vistos.add(item_id)
             titulo = content.get("title") or item.get("title") or "Sem título"
             numero = content.get("number")
             repo = content.get("repository", "hallanbrito/CHDevFlow")
             url = content.get("url", "#")
+            issue_ref = f"{repo}#{numero}" if isinstance(numero, int) and not isinstance(numero, bool) and numero > 0 else None
+            if issue_ref in refs_vistas:
+                raise SentinelaAdapterErro("Issue duplicada no Project; grafo inconclusivo.")
+            if issue_ref:
+                refs_vistas.add(issue_ref)
             # Nomes nativos do Project têm espaços. Campos ausentes permanecem
             # desconhecidos: Status=Done não equivale a homologação pelo PO.
             stage = item.get("etapa CH") or item.get("etapa_ch")
@@ -113,16 +123,41 @@ class MissionService:
                 valores.append(valor.strip())
             stage, esteira, autonomia = valores
 
-            deps_raw = item.get("dependencies")
-            deps_informadas = isinstance(deps_raw, list) and all(
-                isinstance(dep, str) and bool(dep.strip()) for dep in deps_raw
-            )
-            deps = [dep.strip() for dep in deps_raw] if deps_informadas else []
+            observacao = item.get("dependency_observation") if origem == MODO_LIVE_GITHUB else None
+            if origem == MODO_LIVE_GITHUB:
+                estado_deps = observacao.get("dependency_state") if isinstance(observacao, dict) else "UNKNOWN"
+                refs = observacao.get("dependency_refs") if isinstance(observacao, dict) else None
+                source = observacao.get("source") if isinstance(observacao, dict) else "github_rest:blocked_by"
+                observed_at = observacao.get("observed_at") if isinstance(observacao, dict) else None
+                fonte_esperada = f"github_rest:/repos/{repo}/issues/{numero}/dependencies/blocked_by"
+                if (not isinstance(observacao, dict) or observacao.get("issue_ref") != issue_ref
+                    or not isinstance(refs, list) or estado_deps not in ("VERIFIED_EMPTY", "VERIFIED_NONEMPTY")
+                    or (estado_deps == "VERIFIED_EMPTY" and refs) or (estado_deps == "VERIFIED_NONEMPTY" and not refs)
+                    or (estado_deps in ("VERIFIED_EMPTY", "VERIFIED_NONEMPTY") and (source != fonte_esperada or not isinstance(observed_at, str) or not observed_at))
+                    or any(not isinstance(ref, dict) or not isinstance(ref.get("issue_ref"), str) or not ref.get("issue_ref") or not isinstance(ref.get("url"), str) or not isinstance(ref.get("node_id"), str) for ref in refs)):
+                    if estado_deps not in ("INVALID", "UNKNOWN"):
+                        estado_deps = "INVALID"
+                    refs = []
+                dependency_refs = refs
+                deps = []  # resolvidas depois que todas as Issues do Project forem indexadas
+                deps_informadas = estado_deps in ("VERIFIED_EMPTY", "VERIFIED_NONEMPTY")
+                diagnostic = observacao.get("diagnostic") if isinstance(observacao, dict) else None
+            else:
+                deps_raw = item.get("dependencies")
+                deps_informadas = isinstance(deps_raw, list) and all(isinstance(dep, str) and bool(dep.strip()) for dep in deps_raw)
+                deps = [dep.strip() for dep in deps_raw] if deps_informadas else []
+                estado_deps = ("VERIFIED_NONEMPTY" if deps else "VERIFIED_EMPTY") if deps_informadas else "UNKNOWN"
+                dependency_refs = []
+                source, observed_at, diagnostic = "fixture_offline", None, None
             if not deps_informadas:
-                pendencias_dados.append("Dependências não informadas ou inválidas")
+                pendencias_dados.append("Dependências desconhecidas ou inválidas")
+            if issue_ref is None or url != f"https://github.com/{repo}/issues/{numero}":
+                pendencias_dados.append("Identidade da Issue inválida")
 
             tarefas_processadas.append({
                 "id": item_id,
+                "project_item_id": item.get("id"),
+                "issue_ref": issue_ref,
                 "number": numero,
                 "title": titulo,
                 "stage": stage,
@@ -131,17 +166,35 @@ class MissionService:
                 "repository": repo,
                 "url": url,
                 "dependencies": deps,
+                "dependency_refs": dependency_refs,
+                "dependency_state": estado_deps,
+                "dependency_source": source,
+                "dependency_observed_at": observed_at,
+                "dependency_diagnostic": diagnostic,
                 "dependencies_informadas": deps_informadas,
+                "homologacao_verificada": False,
                 "pendencias_dados": pendencias_dados,
                 "raw_item": item,
             })
 
+        if origem == MODO_LIVE_GITHUB:
+            indice = {t["issue_ref"]: t["id"] for t in tarefas_processadas if t["issue_ref"]}
+            for tarefa in tarefas_processadas:
+                if not tarefa["dependencies_informadas"]:
+                    continue
+                resolvidas = [indice.get(ref["issue_ref"], ref["issue_ref"]) for ref in tarefa["dependency_refs"]]
+                if len(set(resolvidas)) != len(resolvidas):
+                    tarefa["dependency_state"] = "INVALID"
+                    tarefa["dependencies_informadas"] = False
+                    tarefa["pendencias_dados"].append("Dependências duplicadas")
+                else:
+                    tarefa["dependencies"] = resolvidas
         return tarefas_processadas
 
     def processar_tarefas_brutas(self) -> list[dict[str, Any]]:
         """Lê o snapshot ativo e normaliza a lista de tarefas para processamento do grafo."""
-        snapshot, _ = self.obter_snapshot_ativo()
-        return self.normalizar_itens_snapshot(snapshot)
+        snapshot, modo = self.obter_snapshot_ativo()
+        return self.normalizar_itens_snapshot(snapshot, modo)
 
     def construir_visao_operacional_completa(
         self,
@@ -150,15 +203,15 @@ class MissionService:
     ) -> dict[str, Any]:
         """Gera a visão consolidada a partir de uma ÚNICA leitura de snapshot (AUD-05).
 
-        Garante consistência atômica: grafo, lista de missões e contadores métricos
-        derivam exatamente do mesmo snapshot imutável.
+        Grafo, lista e métricas derivam do mesmo conjunto de respostas desta
+        requisição. A API GitHub não fornece transação atômica entre endpoints.
         """
         if snapshot is None:
             snapshot, modo = self.obter_snapshot_ativo()
         else:
             modo = origem or self._modo_operacao
 
-        tarefas = self.normalizar_itens_snapshot(snapshot)
+        tarefas = self.normalizar_itens_snapshot(snapshot, modo)
         grafo = self.dag_engine.construir_grafo(tarefas)
 
         # Enriquecimento atômico das tarefas com o estado do grafo
@@ -176,6 +229,7 @@ class MissionService:
             "total_elegiveis": grafo.total_elegiveis,
             "total_bloqueadas": grafo.total_bloqueadas,
             "total_concluidas": grafo.total_concluidas,
+            "total_etapas_conclusao_observadas": sum(t["stage"].upper() in ETAPAS_FECHAMENTO_VISUAL for t in tarefas),
             "total_ciclos": len(grafo.ciclos_detectados),
             "total_orfas": len(grafo.dependencias_desconhecidas),
             "modo_operacao": modo,
@@ -256,13 +310,4 @@ class MissionService:
 
     def obter_resumo_estatisticas(self) -> dict[str, Any]:
         """Calcula métricas e contadores para os cartões de resumo do Dashboard."""
-        grafo = self.obter_grafo_dag()
-        return {
-            "total_tarefas": grafo.total_tarefas,
-            "total_elegiveis": grafo.total_elegiveis,
-            "total_bloqueadas": grafo.total_bloqueadas,
-            "total_concluidas": grafo.total_concluidas,
-            "total_ciclos": len(grafo.ciclos_detectados),
-            "total_orfas": len(grafo.dependencias_desconhecidas),
-            "modo_operacao": self._modo_operacao,
-        }
+        return self.construir_visao_operacional_completa()["stats"]

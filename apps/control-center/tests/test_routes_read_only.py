@@ -53,7 +53,8 @@ def test_rota_grafo_html(client) -> None:
     assert resp.status_code == 200
     assert "Grafo Visual de Dependências" in resp.text
     assert "ALERTA CRÍTICO: Ciclo(s) de Dependência Circular" in resp.text
-    assert "Linha de Frente" in resp.text
+    assert "Dados insuficientes — análise pendente" in resp.text
+    assert "Homologação humana vinculada à missão não verificada" in resp.text
 
 
 def test_rota_estudante_html(client) -> None:
