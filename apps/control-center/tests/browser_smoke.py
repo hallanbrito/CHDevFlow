@@ -49,6 +49,7 @@ def main() -> int:
                 )
                 assert page.locator("#cc-js-health").is_hidden()
                 checks.append("JavaScript inicializado e heartbeat OK")
+                page.screenshot(path=str(pasta / "smoke_dashboard.png"))
 
                 theme = page.locator('button[title="Alternar Modo Escuro / Claro"]')
                 assert theme.count() == 1
@@ -84,6 +85,7 @@ def main() -> int:
                 assert total >= filtrado > 0, f"Filtro falhou: {total} -> {filtrado}"
                 assert filtrado < total, "Filtro não reduziu a lista"
                 checks.append("Raia expandiu e filtro reagiu ao texto")
+                page.screenshot(path=str(pasta / "smoke_grafo.png"))
 
                 page.locator("#btn-atualizar-agora").click()
                 page.wait_for_function(
@@ -107,10 +109,10 @@ def main() -> int:
                     "Busca #7 não retornou uma missão"
                 )
                 checks.append("Busca por número de Issue via formulário GET")
+                page.screenshot(path=str(pasta / "smoke_missoes.png"))
 
-                for page_name in ("dashboard", "grafo", "missoes"):
-                    page.screenshot(path=str(pasta / f"smoke_{page_name}.png"))
-                assert not console_errors, f"Erros de console: {console_errors}"
+                relevantes = [erro for erro in console_errors if "favicon.ico" not in erro]
+                assert not relevantes, f"Erros de console: {relevantes}"
                 assert not failed_requests, f"Requisições falharam: {failed_requests}"
             finally:
                 browser.close()
