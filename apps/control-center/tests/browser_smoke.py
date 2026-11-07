@@ -103,6 +103,10 @@ def main() -> int:
 
                 page.goto(base + "/missoes", wait_until="domcontentloaded", timeout=75000)
                 page.locator('input[name="busca"]').fill("#7")
+                assert "Missões Encontradas (1)" in page.locator("body").inner_text(), (
+                    "Busca instantânea não filtrou a tabela"
+                )
+                checks.append("Busca instantânea reagiu sem botão")
                 page.get_by_role("button", name="Filtrar", exact=True).click()
                 assert "busca=%237" in page.url, f"Formulário GET não submeteu busca: {page.url}"
                 assert "Missões Encontradas (1)" in page.locator("body").inner_text(), (
