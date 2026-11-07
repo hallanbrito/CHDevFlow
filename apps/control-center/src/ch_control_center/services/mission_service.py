@@ -435,8 +435,16 @@ class MissionService:
             if filtro_esteira and filtro_esteira != "TODAS" and m["esteira"].upper() != filtro_esteira.upper():
                 continue
             if termo_busca:
-                busca = termo_busca.lower()
-                if busca not in m["title"].lower() and busca not in m["id"].lower():
+                busca = termo_busca.strip().casefold()
+                numero_issue = m.get("number")
+                referencias = [
+                    str(m.get("title") or ""),
+                    str(m.get("id") or ""),
+                    str(m.get("issue_ref") or ""),
+                    f"#{numero_issue}" if numero_issue else "",
+                    str(numero_issue) if numero_issue else "",
+                ]
+                if busca and not any(busca in referencia.casefold() for referencia in referencias):
                     continue
 
             resultado.append(m)
