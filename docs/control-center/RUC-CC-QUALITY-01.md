@@ -10,9 +10,9 @@
 - **Autonomia e Prova:** CH-2 expressamente autorizada pelo PO no comentário #6695121056
 - **Ambiente:** Linux (CachyOS x86_64), Python 3.13 / UV, worktree isolada `/home/hallan/.gemini/antigravity/worktrees/CHDevFlow/recuperacao_control_center_ch2`, branch `agy/cc-quality-01`
 - **Fonte de Dados:** `LIVE_GITHUB` (GitHub Project #2 e API REST `blocked_by` via `gh`) / `DEMO_OFFLINE`
-- **Timestamp:** 2026-11-06T20:08:00Z
+- **Timestamp:** 2026-11-06T22:20:00-03:00
 - **Baseline:** Commit `761af5a3db75a83d71e39490f092c577713e243d` (HEAD da PR #60 / CC-DAG-01 R3 em `codex/cc-dag-01`)
-- **CI Run ID:** [42309655861](https://github.com/hallanbrito/CHDevFlow/actions/runs/42309655861) (Completed: `success`)
+- **CI Run ID:** [42323408135](https://github.com/hallanbrito/CHDevFlow/actions/runs/42323408135) (Completed: `success`, 475 testes PASS)
 - **Resultado Técnico:** APROVADO_TECNICAMENTE (sujeito à auditoria do ChatGPT e homologação do PO)
 - **Custo Adicional Comprovado:** R$ 0,00
 
@@ -373,9 +373,10 @@ Arquivadas no repositório em `docs/control-center/evidencias_r2/`:
 A missão de recuperação CC-QUALITY-01 e as lacunas apontadas na auditoria técnica R2 encontram-se rigorosamente superadas:
 1. **CSP de Produção Estrita:** Verificada e homologada em Chromium e Firefox sem qualquer bypass no harness e sem relaxamento nas diretivas do produto.
 2. **Endpoint de Sincronização:** Validado com checagem de código HTTP 200, resposta estruturada `OK` e integridade de UI.
-3. **CI Integral Remota:** 475 testes PASS no repositório.
+3. **CI Integral Remota:** 475 testes PASS no GitHub Actions ([Run 42323408135](https://github.com/hallanbrito/CHDevFlow/actions/runs/42323408135): 290 Raiz, 73 Sentinela, 112 Control Center).
 4. **Governança e Segurança C.H.:** Sem merge, sem push na branch `main`, sem alterações no Project #2, sem despacho de agentes reais e custo zero (R$ 0,00).
 
 - **Draft PR:** #61 (https://github.com/hallanbrito/CHDevFlow/pull/61)
 - **Branch:** `agy/cc-quality-01`
+- **HEAD Auditado:** `ec4b2f940c7c148c9ef24319c5edebbe12793344`
 - **Estado Formal:** `READY_FOR_CHATGPT_REVIEW`.
