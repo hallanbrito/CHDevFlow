@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -124,6 +125,9 @@ class TestChIntake(unittest.TestCase):
             [sys.executable, "-m", "chdevflow", "intake", "check",
              "--event-json", str(fixture), "--enforce", "--json"],
             cwd=ROOT, capture_output=True, text=True, check=False, timeout=20,
+            env={**os.environ, "PYTHONPATH": os.pathsep.join(
+                filter(None, [str(ROOT / "src"), os.environ.get("PYTHONPATH", "")])
+            )},
         )
         self.assertEqual(2, done.returncode, done.stderr)
         payload = json.loads(done.stdout)
