@@ -599,7 +599,7 @@ class AdmissionOffline(unittest.TestCase):
             self.apply(plan, writer=fail_second)
         self.assertEqual(self.events[-1]["verified_fields"], ["Esteira"])
         self.assertEqual(self.events[-1]["uncertain"], "Etapa CH")
-        self.assertEqual(self.context["items"]["items"][0]["esteira"], "ChatGPT")
+        self.assertEqual(self.context["items"]["items"][0]["Esteira"], "ChatGPT")
 
     def test_readback_wrong_value_blocks(self):
         plan = self.plan()
