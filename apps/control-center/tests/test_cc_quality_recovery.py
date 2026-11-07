@@ -582,3 +582,61 @@ def test_r1_f4_js_atualiza_dom_sem_reload_integral():
     assert "window.scrollTo(scrollX, scrollY)" in js
     assert 'filtroNovo.dispatchEvent(new Event("input"' in js
     assert "visibilitychange" in js
+
+
+# ==============================================================================
+# R2 / P0 real — Navegador do PO não respondeu aos controles
+# ==============================================================================
+
+def test_r2_busca_localiza_numero_da_issue_sem_dependencia_do_titulo():
+    """Busca '#59' deve funcionar mesmo que o título não mencione 59."""
+    item = gerar_item_sintetico(59, etapa="BACKLOG")
+    item["title"] = "Contrato das dependências"
+    item["content"]["title"] = "Contrato das dependências"
+    facade = MagicMock(spec=SentinelFacade)
+    facade.obter_snapshot_ao_vivo.return_value = {"items": [item], "totalCount": 1}
+    facade.sanitizar.side_effect = lambda value: value
+    service = MissionService(facade=facade)
+    service.alternar_modo_operacao(MODO_LIVE_GITHUB)
+    assert len(service.listar_missoes(termo_busca="#59")) == 1
+    assert len(service.listar_missoes(termo_busca="59")) == 1
+    assert len(service.listar_missoes(termo_busca="Contrato")) == 1
+    assert len(service.listar_missoes(termo_busca="#404")) == 0
+
+
+def test_r2_busca_get_http_filtra_por_issue(client):
+    """A busca da UI via GET não depende do JavaScript para encontrar #59."""
+    from ch_control_center.dependencies import get_mission_service
+
+    item = gerar_item_sintetico(59, etapa="BACKLOG")
+    item["title"] = "Contrato sem número no título"
+    item["content"]["title"] = "Contrato sem número no título"
+    service = get_mission_service()
+    facade = MagicMock(spec=SentinelFacade)
+    facade.obter_snapshot_ao_vivo.return_value = {"items": [item], "totalCount": 1}
+    facade.sanitizar.side_effect = lambda value: value
+    service.facade = facade
+    service.alternar_modo_operacao(MODO_LIVE_GITHUB)
+    response = client.get("/missoes?busca=%2359")
+    assert response.status_code == 200
+    assert "Missões Encontradas (1)" in response.text
+    assert "Contrato sem número no título" in response.text
+    assert 'value="#59"' in response.text
+
+
+def test_r2_ativos_js_css_tem_cache_bust_e_no_store(client):
+    """O navegador do PO não deve usar app.js antigo com HTML R2 novo."""
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "/static/js/app.js?v=cc-quality-r2-20261106" in page.text
+    assert "/static/css/styles.css?v=cc-quality-r2-20261106" in page.text
+    assert 'id="cc-js-health"' in page.text
+
+    js = client.get("/static/js/app.js?v=cc-quality-r2-20261106")
+    assert js.status_code == 200
+    assert "no-store" in js.headers.get("cache-control", "")
+    assert "ccJsReady" in js.text
+
+    css = client.get("/static/css/styles.css?v=cc-quality-r2-20261106")
+    assert css.status_code == 200
+    assert "no-store" in css.headers.get("cache-control", "")
