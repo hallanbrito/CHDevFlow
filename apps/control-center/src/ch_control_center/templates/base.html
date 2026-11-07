@@ -8,8 +8,8 @@
   <meta name="cc-last-success" content="{{ estado_sync.last_success_at if estado_sync and estado_sync.last_success_at else '' }}">
   <meta name="cc-snapshot-id" content="{{ estado_sync.snapshot_id if estado_sync and estado_sync.snapshot_id else '' }}">
   <title>{% block title %}CHDevFlow Control Center{% endblock %}</title>
-  <link rel="stylesheet" href="/static/css/styles.css">
-  <script src="/static/js/app.js"></script>
+  <link rel="stylesheet" href="/static/css/styles.css?v=cc-quality-r2-20261106">
+  <script src="/static/js/app.js?v=cc-quality-r2-20261106" defer></script>
 </head>
 <body>
   <div class="app-container">
@@ -89,6 +89,7 @@
         </div>
 
         <div class="header-right">
+          <span id="cc-js-health" role="alert" style="font-size:0.72rem;color:var(--status-ciclo);font-weight:700;">⚠️ Interações não iniciadas: verifique o JavaScript.</span>
           <!-- Widget de Sincronização UX (CC-QUALITY-01 / F4) -->
           <div class="sync-widget" style="display: inline-flex; align-items: center; gap: 0.5rem; margin-right: 0.5rem;">
             <div id="sync-indicator" class="sync-status-badge sync-{{ estado_sync.status|lower if estado_sync else 'ok' }}" title="Estado da sincronização: {{ estado_sync.status if estado_sync else 'OK' }}">
