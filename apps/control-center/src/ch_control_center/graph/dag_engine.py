@@ -29,6 +29,8 @@ class NoGrafo:
     dependency_refs: list[dict[str, Any]] = field(default_factory=list)
     dependency_source: str | None = None
     dependency_observed_at: str | None = None
+    dependency_diagnostic: str | None = None
+    causas_diagnosticas: list[str] = field(default_factory=list)
     dependentes: list[str] = field(default_factory=list) # Tarefas que dependem desta
     grau_entrada: int = 0        # Número de dependências não concluídas
     status_grafo: str = "PENDENTE" # ELEGIVEL, BLOQUEADA_POR_DEPENDENCIA, BLOQUEADA_CICLO, BLOQUEADA_ORFA, CONCLUIDA
@@ -55,6 +57,8 @@ class ResultadoGrafoDAG:
     total_elegiveis: int
     total_bloqueadas: int
     total_concluidas: int
+    total_dados_insuficientes: int = 0
+    contagem_por_causa: dict[str, int] = field(default_factory=dict)
 
     def para_dicionario(self) -> dict[str, Any]:
         """Converte o resultado completo para dicionário serializável."""
@@ -71,6 +75,8 @@ class ResultadoGrafoDAG:
             "total_elegiveis": self.total_elegiveis,
             "total_bloqueadas": self.total_bloqueadas,
             "total_concluidas": self.total_concluidas,
+            "total_dados_insuficientes": self.total_dados_insuficientes,
+            "contagem_por_causa": self.contagem_por_causa,
         }
 
 
@@ -80,6 +86,13 @@ STATUS_BLOQUEADA_DEP: str = "BLOQUEADA_POR_DEPENDENCIA"
 STATUS_BLOQUEADA_CICLO: str = "BLOQUEADA_CICLO"
 STATUS_BLOQUEADA_ORFA: str = "BLOQUEADA_ORFA"
 STATUS_BLOQUEADA_DADOS: str = "BLOQUEADA_DADOS"
+
+CAUSA_CADASTRO_INCOMPLETO: str = "Cadastro incompleto"
+CAUSA_CONSULTA_INDISPONIVEL: str = "Consulta/dependência indisponível"
+CAUSA_HOMOLOGACAO_NAO_VERIFICADA: str = "Homologação não verificada"
+CAUSA_AGUARDANDO_PREDECESSORA: str = "Aguardando predecessora"
+CAUSA_ANOMALIA_CICLO: str = "Anomalia: dependência circular (ciclo)"
+CAUSA_ANOMALIA_ORFA: str = "Anomalia: dependência ausente (órfã)"
 
 ETAPAS_FECHAMENTO_VISUAL: tuple[str, ...] = ("INTEGRADA", "HOMOLOGADA", "DONE", "CLOSED", "PROD_OK")
 
@@ -133,6 +146,7 @@ class DAGEngine:
                 dependency_refs=list(item.get("dependency_refs", [])),
                 dependency_source=item.get("dependency_source"),
                 dependency_observed_at=item.get("dependency_observed_at"),
+                dependency_diagnostic=item.get("dependency_diagnostic"),
             )
             # Etapa visual de conclusão não prova a decisão humana vinculada.
             deps_verificadas = no.dependency_state in ("VERIFIED_EMPTY", "VERIFIED_NONEMPTY")
@@ -229,9 +243,10 @@ class DAGEngine:
         # 5. Classificação dos nós que não puderam ser ordenados (Ciclos)
         # AUD-04: nos_em_ciclos contém só membros do laço, não sucessoras.
 
-        # 6. Atualização final de status e motivos de bloqueio
+        # 6. Atualização final de status, motivos de bloqueio e causas diagnósticas
         for task_id, no in nos.items():
             if no.status_grafo == STATUS_CONCLUIDA:
+                no.causas_diagnosticas = []
                 continue
 
             if task_id in nos_em_ciclos:
@@ -252,10 +267,52 @@ class DAGEngine:
                 deps_abertas = [d for d in no.dependencias if d in nos and nos[d].status_grafo != STATUS_CONCLUIDA]
                 no.motivo_bloqueio = f"Aguardando conclusão de: {', '.join(deps_abertas)}"
 
-        # Estatísticas
-        total_elegiveis = sum(1 for n in nos.values() if n.status_grafo == "ELEGIVEL")
+            # Discriminação precisa das causas diagnósticas (F1: sem falsa unificação)
+            causas: list[str] = []
+            termos_cadastro = ("não informada", "não informado", "Identidade da Issue", "Dependências duplicadas")
+            if any(any(t in p for t in termos_cadastro) for p in no.pendencias_dados):
+                causas.append(CAUSA_CADASTRO_INCOMPLETO)
+
+            termos_consulta = ("desconhecidas ou inválidas", "não verificadas", "orçamento temporal", "falhas consecutivas")
+            diag = str(no.dependency_diagnostic or "")
+            if (
+                no.dependency_state in ("UNKNOWN", "INVALID")
+                or any(any(t in p for t in termos_consulta) for p in no.pendencias_dados)
+                or any(t in diag for t in termos_consulta)
+            ):
+                causas.append(CAUSA_CONSULTA_INDISPONIVEL)
+
+            if (
+                no.etapa_ch in ETAPAS_FECHAMENTO_VISUAL
+                and not no.homologacao_verificada
+            ) or any("Homologação humana" in p for p in no.pendencias_dados):
+                causas.append(CAUSA_HOMOLOGACAO_NAO_VERIFICADA)
+
+            if no.status_grafo == STATUS_BLOQUEADA_DEP:
+                causas.append(CAUSA_AGUARDANDO_PREDECESSORA)
+
+            if no.status_grafo == STATUS_BLOQUEADA_CICLO:
+                causas.append(CAUSA_ANOMALIA_CICLO)
+
+            if no.status_grafo == STATUS_BLOQUEADA_ORFA or dependencias_desconhecidas.get(task_id):
+                causas.append(CAUSA_ANOMALIA_ORFA)
+
+            no.causas_diagnosticas = causas
+
+        # Estatísticas coerentes e atômicas derivadas dos nós do grafo
+        total_elegiveis = sum(1 for n in nos.values() if n.status_grafo == STATUS_ELEGIVEL)
         total_bloqueadas = sum(1 for n in nos.values() if n.status_grafo.startswith("BLOQUEADA"))
-        total_concluidas = sum(1 for n in nos.values() if n.status_grafo == "CONCLUIDA")
+        total_concluidas = sum(1 for n in nos.values() if n.status_grafo == STATUS_CONCLUIDA)
+        total_dados_insuficientes = sum(1 for n in nos.values() if n.status_grafo == STATUS_BLOQUEADA_DADOS or bool(n.pendencias_dados))
+
+        contagem_por_causa = {
+            CAUSA_CADASTRO_INCOMPLETO: sum(1 for n in nos.values() if CAUSA_CADASTRO_INCOMPLETO in n.causas_diagnosticas),
+            CAUSA_CONSULTA_INDISPONIVEL: sum(1 for n in nos.values() if CAUSA_CONSULTA_INDISPONIVEL in n.causas_diagnosticas),
+            CAUSA_HOMOLOGACAO_NAO_VERIFICADA: sum(1 for n in nos.values() if CAUSA_HOMOLOGACAO_NAO_VERIFICADA in n.causas_diagnosticas),
+            CAUSA_AGUARDANDO_PREDECESSORA: sum(1 for n in nos.values() if CAUSA_AGUARDANDO_PREDECESSORA in n.causas_diagnosticas),
+            CAUSA_ANOMALIA_CICLO: sum(1 for n in nos.values() if CAUSA_ANOMALIA_CICLO in n.causas_diagnosticas),
+            CAUSA_ANOMALIA_ORFA: sum(1 for n in nos.values() if CAUSA_ANOMALIA_ORFA in n.causas_diagnosticas),
+        }
 
         agora_utc = datetime.now(timezone.utc).isoformat()
 
@@ -272,6 +329,8 @@ class DAGEngine:
             total_elegiveis=total_elegiveis,
             total_bloqueadas=total_bloqueadas,
             total_concluidas=total_concluidas,
+            total_dados_insuficientes=total_dados_insuficientes,
+            contagem_por_causa=contagem_por_causa,
         )
 
     def _identificar_ciclos_dfs(
