@@ -7,10 +7,18 @@ let pollingIntervalId = null;
 let ultimoSucessoTimestamp = Date.now();
 
 document.addEventListener("DOMContentLoaded", () => {
-  inicializarTema();
-  inicializarSincronizacao();
-  inicializarAcessibilidadeModais();
-  inicializarFiltroDadosInsuficientes();
+  const aviso = document.getElementById("cc-js-health");
+  try {
+    inicializarTema();
+    inicializarSincronizacao();
+    inicializarAcessibilidadeModais();
+    inicializarFiltroDadosInsuficientes();
+    document.documentElement.dataset.ccJsReady = "true";
+    if (aviso) aviso.style.display = "none";
+  } catch (erro) {
+    console.error("CHDevFlow: falha ao inicializar controles da interface", erro);
+    if (aviso) aviso.textContent = "⚠️ Falha na inicialização do painel. Abra o Console (F12).";
+  }
 });
 
 // --- Gerenciamento de Tema (Dark Mode / Light Mode) ---
