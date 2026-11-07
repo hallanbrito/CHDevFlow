@@ -1,6 +1,8 @@
 name: "Fatia W — Método C.H."
 description: "Crie uma tarefa verificável com escopo e evidências."
 title: "W-XX — "
+# Etiqueta de entrada para Intake F1; Auto-add do Project #2 foi desativado pelo PO.
+labels: ["ch:workflow"]
 body:
   - type: markdown
     attributes:
