@@ -25,12 +25,31 @@ O template `fatia-w.yml` aplica apenas `ch:workflow`. O campo dropdown `Esteira`
 
 **Não** configurar `projects:` no template; não reativar Auto-add para compensar a ausência da etiqueta.
 
-## Limites pendentes para auditoria
+## Parser da CLI — aditamento de escopo do PO (07/11/2026)
 
-1. **CH-2 implícito no parser:** `src/chdevflow/cli.py` ainda define `default="CH-2"` e `default="AGY"` e os transmite diretamente a `create_mission`. **Não é tecnicamente possível distinguir os argumentos omitidos dos explicitamente fornecidos modificando apenas `mission.py`.** Esse arquivo está fora da allowlist W-F2.1. Necessário gate de alteração de escopo específico para cumprir integralmente o requisito de autonomia/executor explícitos; até lá a Draft PR NÃO deve ser homologada ou integrada.
-2. O contrato F1 permanece intocado (fora do escopo). Seu check retorna 0 inclusive para `OUT_OF_SCOPE`; qualquer futura admissão F2.2 deverá conferir `content_status == CONTENT_VALID`, não apenas o código de saída.
+O PO autorizou adicionar **exclusivamente** `src/chdevflow/cli.py` à allowlist para corrigir os defaults e manter compatibilidade local.
+
+- `--executor`: `default=None`.
+- `--autonomy`: `default=None`.
+- **Criação remota (`--remote`)**: se qualquer um dos argumentos for omitido, `ch mission new` retorna `1`, imprime mensagem explícita em `stderr` exigindo **ambos** os parâmetros e não chama `create_mission` nem `gh`.
+- **Geração local (sem `--remote`)**: preservar `AGY` e `CH-2` apenas como fallbacks na CLI, podendo sobrescrever individualmente quando houver argumento explícito.
+
+Exemplo de criação remota **apenas quando for autorizada como operação real**:
+
+```sh
+ch mission new "Validar contrato" --remote --executor Codex --autonomy CH-1
+```
+
+A autonomia nesse exemplo é **proposta**, não aprovada pelo PO. A Issue é somente candidata à F1 e não recebe automaticamente cadastro no Project #2.
+
+## Limites para auditoria
+
+1. O parser da CLI foi ajustado dentro do aditamento concedido; o requisito de parâmetros explícitos foi coberto com testes em `tests/test_cli_05.py`.
+2. O contrato F1 permanece intocado (fora do escopo). Seu check retorna 0 inclusive para `OUT_OF_SCOPE`; futura admissão F2.2 deverá conferir `content_status == CONTENT_VALID`, não apenas o código de saída.
 3. O Auto-add foi desligado manualmente pelo PO; sua configuração continua recuperável e **não deve ser reativada** enquanto a entrada for insegura.
 4. W-F2.2, `addProjectV2ItemById`, os três campos do Project e read-back são uma fatia separada, com gate posterior, após integração de W-F2.1.
+5. A mudança de obrigatoriedade vale para o comando de linha `ch mission new --remote`. O uso direto da API Python `create_mission(remote=True)` não integra o contrato do parser alterado neste aditamento; exige avaliação própria se for exposto como interface pública.
+
 
 ## Validação prevista
 
@@ -39,4 +58,4 @@ O template `fatia-w.yml` aplica apenas `ch:workflow`. O campo dropdown `Esteira`
 - Revisão independente e homologação do PO com HEAD/CI verificados.
 - **Sem escrita de Project, abertura de Issues de teste reais, merge ou execução de agentes.**
 
-**Estado do contrato:** `DRAFT / AWAITING_CLI_PARSER_SCOPE_GATE`.
+**Estado do contrato:** `W-F2.1_IMPLEMENTADA / AWAITING_CI_FINAL_AND_PO_REVIEW`.
