@@ -9,6 +9,15 @@ import sys
 
 from chdevflow.adapters.base import sanitize_output
 from chdevflow.core.status import check_git_status
+from chdevflow.core.intake import validate_issue
+
+# Etiquetas de executor: mesmo contrato do Intake F1.
+EXECUTOR_LABELS = {
+    "Hallan": "ch:po",
+    "ChatGPT": "ch:chatgpt",
+    "Codex": "ch:codex",
+    "AGY": "ch:agy",
+}
 
 
 class MissionError(ValueError):
@@ -62,6 +71,7 @@ def generate_mission_markdown(
 - **Ações autorizadas**: Apenas modificações locais compatíveis com o nível de autonomia formalmente autorizado pelo PO.
 
 ## V — Verificar
+- **Verificações e evidências exigidas**: Executar `ch verify`, registrar a saída dos testes aplicáveis, anexar evidências estruturadas e gerar RUC/1.0.
 - [ ] Checks de verificação executados com `ch verify` (PASS)
 - [ ] Relatório Universal C.H. gerado com `ch ruc`
 - [ ] Sem vazamento de credenciais ou tokens em arquivos/logs
@@ -106,6 +116,25 @@ def create_mission(
 
     remote_msg = ""
     if remote:
+        # Criar uma Issue nao e admitir a missao no Project nem autorizar agentes.
+        # Falhar ANTES de chamar gh quando o evento nao satisfaz o Intake F1.
+        if executor not in EXECUTOR_LABELS:
+            raise MissionError("Executor remoto invalido: selecione Hallan, ChatGPT, Codex ou AGY. "
+                               f"O artefato local foi criado em: {mission_file}")
+        if autonomy not in {"CH-0", "CH-1", "CH-2", "CH-3"}:
+            raise MissionError("Autonomia proposta invalida para Issue remota. "
+                               f"O artefato local foi criado em: {mission_file}")
+        labels = ["ch:workflow", EXECUTOR_LABELS[executor]]
+        preview = validate_issue({
+            "number": 1,  # Identificador sintetico somente para validacao pura.
+            "title": f"W: {title}",
+            "body": content,
+            "labels": labels,
+        })
+        if preview["content_status"] != "CONTENT_VALID":
+            raise MissionError("Intake F1 bloqueou a criacao remota: "
+                               + ", ".join(preview["reasons"]) + ". "
+                               + f"O artefato local foi criado em: {mission_file}")
         if not git_info["is_git"]:
             raise MissionError(
                 f"Não é possível criar Issue remota fora de um repositório Git. "
@@ -134,6 +163,7 @@ def create_mission(
             "--title", f"W: {title}",
             "--body", content,
             "--label", "ch:workflow",
+            "--label", EXECUTOR_LABELS[executor],
         ]
         try:
             res = subprocess.run(cmd, cwd=str(target), capture_output=True, text=True, check=False)
