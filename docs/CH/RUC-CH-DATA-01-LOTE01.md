@@ -1,8 +1,8 @@
 # RUC/1.0 — W-DATA-01-A / Aplicador Autonomia CH — CH-2 isolado
 
-> **Missão:** [CH-DATA-01 / Issue #62](https://github.com/hallanbrito/CHDevFlow/issues/62)  
-> **PO:** Hallan · **Executor:** ChatGPT · **Base:** `main` (`d99f7176d3335bd5426a479fe05b5840848822bd`)  
-> **Branch:** `chatgpt/ch-data-01-autonomy-reconciler` · **PR:** Draft, não integrada  
+> **Missão:** [CH-DATA-01 / Issue #62](https://github.com/hallanbrito/CHDevFlow/issues/62)
+> **PO:** Hallan · **Executor:** ChatGPT · **Base:** `main` (`d99f7176d3335bd5426a479fe05b5840848822bd`)
+> **Branch:** `chatgpt/ch-data-01-autonomy-reconciler` · **PR:** Draft, não integrada
 > **Gate:** CH-2 **somente código isolado e testes fakes**. Sem autorização de mutation no Project #2.
 
 ## 1. Objetivo / referências pinadas
