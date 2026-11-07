@@ -45,7 +45,7 @@
 <!-- Tabela Completa de Missões -->
 <div class="card">
   <div class="card-header">
-    <span class="card-title">Missões Encontradas ({{ missoes|length }})</span>
+    <span id="contador-missoes" class="card-title" aria-live="polite">Missões Encontradas ({{ missoes|length }})</span>
     <span style="font-size: 0.75rem; color: var(--text-muted);">Origem: {{ modo_operacao }}</span>
   </div>
 
@@ -212,5 +212,6 @@
       </tbody>
     </table>
   </div>
+  <p id="mensagem-busca-vazia" role="status" style="display:none;margin-top:0.75rem;color:var(--text-secondary);">Nenhuma missão corresponde à busca. Limpe o campo ou use Filtrar para consultar novamente.</p>
 </div>
 {% endblock %}
