@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 import sys
+import subprocess
 
 from chdevflow import __version__
 from chdevflow.core.doctor import render_doctor_human, run_doctor
@@ -199,6 +200,23 @@ def build_parser() -> argparse.ArgumentParser:
     intake_check.add_argument("--event-json", type=Path, required=True)
     intake_check.add_argument("--json", action="store_true")
     intake_check.add_argument("--enforce", action="store_true")
+
+    # Roteamento exclusivo: a admissao reside em scripts/ch_project_assist.py.
+    parser_project = subparsers.add_parser(
+        "project", help="Operacoes assistidas no GitHub Project, sem escrita por padrao."
+    )
+    project_subs = parser_project.add_subparsers(dest="project_action", metavar="<ação>")
+    parser_project_admit = project_subs.add_parser(
+        "admit", help="Previa e plano de admissao assistida de uma Issue."
+    )
+    parser_project_admit.add_argument("--issue", type=int, required=True)
+    parser_project_admit.add_argument("--dry-run", action="store_true")
+    parser_project_admit.add_argument("--autonomy", choices=["CH-0", "CH-1", "CH-2", "CH-3"])
+    parser_project_admit.add_argument("--approval-comment", type=int)
+    parser_project_admit.add_argument("--plan-file", type=Path)
+    parser_project_admit.add_argument("--apply-plan", type=Path)
+    parser_project_admit.add_argument("--confirm")
+    parser_project_admit.add_argument("--audit-file", type=Path)
 
     # Subcomando: mission
     parser_mission = subparsers.add_parser(
@@ -429,6 +447,35 @@ def main(argv: list[str] | None = None) -> int:
         if args.enforce:
             intake_argv.append("--enforce")
         return run_intake_check(intake_argv)
+
+    if args.command == "project":
+        if args.project_action != "admit":
+            print("Uso: ch project admit --issue <N> --dry-run", file=sys.stderr)
+            return 1
+        # Roteamento somente; o script concentra os gates e as mutations.
+        script = Path(__file__).resolve().parents[2] / "scripts" / "ch_project_assist.py"
+        if not script.is_file():
+            print("Erro: admissao exige checkout/editable do CHDevFlow com scripts/ presente.",
+                  file=sys.stderr)
+            return 1
+        command = [sys.executable, str(script), "admit", "--issue", str(args.issue)]
+        if args.dry_run:
+            command.append("--dry-run")
+        for flag, value in (
+            ("--autonomy", args.autonomy),
+            ("--approval-comment", args.approval_comment),
+            ("--plan-file", args.plan_file),
+            ("--apply-plan", args.apply_plan),
+            ("--confirm", args.confirm),
+            ("--audit-file", args.audit_file),
+        ):
+            if value is not None:
+                command.extend([flag, str(value)])
+        try:
+            return subprocess.run(command, check=False).returncode
+        except OSError as exc:
+            print(f"Erro ao iniciar admissao: {type(exc).__name__}", file=sys.stderr)
+            return 1
 
     if args.command == "mission":
         if not getattr(args, "mission_action", None):

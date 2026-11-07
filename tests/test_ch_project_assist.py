@@ -379,5 +379,302 @@ class Execution(unittest.TestCase):
             self.assertEqual(app.validate_plan(json.loads(path.read_text())), [43])
 
 
+
+# W-F2.2: todos os caminhos usam fixtures e adaptadores falsos — zero mutacao remota.
+class AdmissionOffline(unittest.TestCase):
+    def setUp(self):
+        self.number = 84
+        self.issue = {
+            "number": self.number, "id": "I_issue84",
+            "state": "OPEN", "title": "W: Entrada controlada",
+            "url": f"https://github.com/{REPO}/issues/{self.number}",
+            "labels": [{"name": "ch:workflow"}, {"name": "ch:chatgpt"}],
+            "body": (
+                "- **Executor declarado**: ChatGPT\n"
+                "- **Autonomia proposta**: CH-2 (PENDENTE DE AUTORIZAÇÃO HUMANA)\n"
+                "- **Objetivo / valor**: Entrada controlada\n"
+                "- **Escopo permitido**: Validar a entrada de uma Issue\n"
+                "- **Critérios de aceitação**: Testes offline aprovados\n"
+                "- **Base SHA**: " + "a" * 40 + "\n"
+                "- **Verificações e evidências exigidas**: Testes e RUC\n"
+            ),
+        }
+        options = {
+            "Esteira": ["Hallan", "ChatGPT", "Codex", "AGY"],
+            "Etapa CH": ["BACKLOG", "PRONTA"],
+            "Autonomia CH": ["CH-0", "CH-1", "CH-2"],
+        }
+        self.context = {
+            "issue": self.issue,
+            "project": {"id": "PVT_project2"},
+            "fields": {"fields": [
+                {"id": f"FIELD_{name}", "name": name,
+                 "type": "ProjectV2SingleSelectField",
+                 "options": [{"id": f"OPT_{name}_{value}", "name": value}
+                             for value in values]}
+                for name, values in options.items()
+            ]},
+            "items": {"totalCount": 0, "items": []},
+            "activity": {"status": "CLEAR"},
+        }
+        self.approval = {
+            "id": 9875, "user": {"login": "hallanbrito"},
+            "issue_url": f"https://api.github.com/repos/{REPO}/issues/63",
+            "updated_at": "2026-11-07T12:00:00Z",
+            "body": f"CH-GOV-01 ADMIT PROJECT#2 ISSUE#{self.number} "
+                    "ESTEIRA=ChatGPT ETAPA=BACKLOG AUTONOMIA=CH-0",
+        }
+        self.calls = []
+        self.events = []
+
+    def read(self, number):
+        self.assertEqual(number, self.number)
+        return copy.deepcopy(self.context)
+
+    def read_approval(self, comment_id):
+        self.assertEqual(comment_id, self.approval["id"])
+        return copy.deepcopy(self.approval)
+
+    def write(self, operation, params):
+        self.calls.append((operation, copy.deepcopy(params)))
+        if operation == "add":
+            self.assertEqual(params["contentId"], "I_issue84")
+            new_item = item(self.number)
+            new_item["id"] = "PVTI_new"
+            self.context["items"]["items"].append(new_item)
+            self.context["items"]["totalCount"] += 1
+            return "PVTI_new"
+        self.assertEqual(operation, "set")
+        self.assertEqual(params["itemId"], "PVTI_new")
+        mapping = {f"FIELD_{name}": name for name in app.ADMIT_FIELDS}
+        field_name = mapping[params["fieldId"]]
+        field = [f for f in self.context["fields"]["fields"]
+                 if f["name"] == field_name][0]
+        target = [v["name"] for v in field["options"]
+                  if v["id"] == params["optionId"]][0]
+        self.context["items"]["items"][0][field_name] = target
+        return "PVTI_new"
+
+    def plan(self, *, autonomy="CH-0", approval=True):
+        proof = self.approval if approval else None
+        return app.make_admit_plan(self.number, self.read(self.number),
+                                   autonomy=autonomy, approval=proof)
+
+    def apply(self, plan=None, writer=None):
+        plan = plan or self.plan()
+        return app.apply_admit_plan(
+            plan, plan["digest"], reader=self.read,
+            approval_reader=self.read_approval,
+            graphql=writer or self.write,
+            interactive=True,
+            prompt=lambda *_: "APROVO ADMISSAO " + plan["digest"][:12],
+            audit=self.events.append,
+        )
+
+    def test_f1_content_valid_but_not_authorized(self):
+        plan = self.plan(approval=False)
+        self.assertEqual(plan["action"], "ADD")
+        self.assertIsNone(plan["approval_id"])
+        self.assertEqual(plan["autonomy"], "CH-0")
+        self.assertEqual([f["name"] for f in plan["fields"]],
+                         list(app.ADMIT_FIELDS))
+        with self.assertRaisesRegex(ValueError, "autorizacao"):
+            self.apply(plan)
+        self.assertFalse(self.calls)
+
+    def test_full_sequence_add_three_fields_and_readback(self):
+        plan = self.plan()
+        self.assertEqual(self.apply(plan), "PVTI_new")
+        self.assertEqual([op for op, _ in self.calls], ["add", "set", "set", "set"])
+        self.assertEqual([event["event"] for event in self.events],
+                         ["PREFLIGHT", "ATTEMPT_ADD", "VERIFIED_ADD",
+                          "ATTEMPT_FIELD", "VERIFIED_FIELD",
+                          "ATTEMPT_FIELD", "VERIFIED_FIELD",
+                          "ATTEMPT_FIELD", "VERIFIED_FIELD", "COMPLETE"])
+        self.assertEqual(self.context["items"]["items"][0]["Autonomia CH"], "CH-0")
+        self.assertEqual(self.context["items"]["items"][0]["Esteira"], "ChatGPT")
+        self.assertEqual(self.context["items"]["items"][0]["Etapa CH"], "BACKLOG")
+        self.assertFalse(self.events[-1]["execution_authorized"])
+
+    def test_idempotent_already_complete_no_writes(self):
+        entry = item(self.number, lane="ChatGPT", stage="BACKLOG")
+        entry["Autonomia CH"] = "CH-0"
+        self.context["items"] = payload(entry)
+        plan = self.plan()
+        self.assertEqual(plan["action"], "ALREADY_REGISTERED")
+        self.assertEqual(self.apply(plan), entry["id"])
+        self.assertFalse(self.calls)
+
+    def test_existing_partial_blocks_without_repair(self):
+        self.context["items"] = payload(item(self.number, lane="ChatGPT"))
+        with self.assertRaisesRegex(ValueError, "parcial/conflitante"):
+            self.plan()
+        self.assertFalse(self.calls)
+
+    def test_duplicate_cards_blocks(self):
+        self.context["items"] = payload(item(self.number), item(self.number))
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            self.plan()
+
+    def test_missing_field_or_option_blocks(self):
+        for mode in ["field", "option"]:
+            saved = copy.deepcopy(self.context)
+            if mode == "field":
+                self.context["fields"]["fields"].pop()
+            else:
+                self.context["fields"]["fields"][-1]["options"] = []
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                self.plan()
+            self.context = saved
+
+    def test_po_approval_verifies_author_and_exact_values(self):
+        for change in [
+            ("user", {"login": "outro"}),
+            ("body", "AUTORIZO GENÉRICO"),
+            ("issue_url", f"https://api.github.com/repos/{REPO}/issues/999"),
+        ]:
+            saved = copy.deepcopy(self.approval)
+            self.approval[change[0]] = change[1]
+            with self.subTest(change=change[0]), self.assertRaises(ValueError):
+                self.plan()
+            self.approval = saved
+        self.assertEqual(self.plan()["autonomy"], "CH-0")
+
+    def test_higher_autonomy_cannot_be_copied_from_issue_body(self):
+        with self.assertRaisesRegex(ValueError, "nao aprovou"):
+            self.plan(autonomy="CH-2")
+        self.assertEqual(self.plan()["autonomy"], "CH-0")
+
+    def test_digest_and_changed_snapshot_block_before_writes(self):
+        plan = self.plan()
+        with self.assertRaisesRegex(ValueError, "Digest"):
+            app.apply_admit_plan(plan, "0" * 64, reader=self.read,
+                                 approval_reader=self.read_approval,
+                                 interactive=True, audit=self.events.append)
+        self.context["items"]["items"].append(item(999))
+        self.context["items"]["totalCount"] += 1
+        with self.assertRaisesRegex(ValueError, "Plano obsoleto"):
+            self.apply(plan)
+        self.assertFalse(self.calls)
+
+    def test_po_approval_edit_between_plan_and_apply_blocks(self):
+        plan = self.plan()
+        self.approval["updated_at"] = "2026-11-07T12:01:00Z"
+        with self.assertRaisesRegex(ValueError, "Plano obsoleto"):
+            self.apply(plan)
+        self.assertFalse(self.calls)
+
+    def test_noninteractive_and_wrong_confirmation_block(self):
+        plan = self.plan()
+        with self.assertRaisesRegex(ValueError, "interativo"):
+            app.apply_admit_plan(plan, plan["digest"], reader=self.read,
+                                 approval_reader=self.read_approval,
+                                 interactive=False, audit=self.events.append)
+        with self.assertRaisesRegex(ValueError, "Confirmacao"):
+            app.apply_admit_plan(plan, plan["digest"], reader=self.read,
+                                 approval_reader=self.read_approval, interactive=True,
+                                 prompt=lambda *_: "INCORRETO", audit=self.events.append)
+        self.assertFalse(self.calls)
+
+    def test_timeout_after_add_never_retries(self):
+        plan = self.plan()
+        def uncertain(operation, params):
+            if operation == "add":
+                self.write(operation, params)
+                raise RuntimeError("connection dropped after add")
+            self.fail("Unexpected field write")
+        with self.assertRaisesRegex(RuntimeError, "nao repetir"):
+            self.apply(plan, writer=uncertain)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.events[-1]["uncertain"], "addProjectV2ItemById")
+
+    def test_failure_after_one_field_is_partial_and_blocked(self):
+        plan = self.plan()
+        def fail_second(operation, params):
+            if operation == "set" and len(self.calls) == 2:
+                self.calls.append(("set-failed", params))
+                raise RuntimeError("network failed")
+            return self.write(operation, params)
+        with self.assertRaisesRegex(RuntimeError, "nao repetir"):
+            self.apply(plan, writer=fail_second)
+        self.assertEqual(self.events[-1]["verified_fields"], ["Esteira"])
+        self.assertEqual(self.events[-1]["uncertain"], "Etapa CH")
+        self.assertEqual(self.context["items"]["items"][0]["Esteira"], "ChatGPT")
+
+    def test_readback_wrong_value_blocks(self):
+        plan = self.plan()
+        def bad_write(operation, params):
+            if operation == "set":
+                self.calls.append((operation, params))
+                return "PVTI_new"  # Finge sucesso sem alterar os campos.
+            return self.write(operation, params)
+        with self.assertRaisesRegex(RuntimeError, "nao repetir"):
+            self.apply(plan, writer=bad_write)
+        self.assertEqual(self.events[-1]["uncertain"], "Esteira")
+        self.assertEqual(len(self.calls), 2)
+
+    def test_dry_run_main_never_calls_graphql(self):
+        writer = mock.Mock()
+        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+            self.assertEqual(app.admit_main(
+                ["--issue", str(self.number), "--dry-run"],
+                reader=self.read, approval_reader=self.read_approval,
+                graphql=writer), 0)
+        self.assertIn("SEM ESCRITA", stdout.getvalue())
+        self.assertIn("Autonomia CH: CH-0", stdout.getvalue())
+        writer.assert_not_called()
+
+    def test_plan_file_exclusive_and_permission(self):
+        with tempfile.TemporaryDirectory() as td:
+            filename = Path(td) / "plan.json"
+            command = ["--issue", str(self.number), "--plan-file", str(filename),
+                       "--approval-comment", str(self.approval["id"])]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(app.admit_main(
+                    command, reader=self.read,
+                    approval_reader=self.read_approval), 0)
+            data = json.loads(filename.read_text())
+            self.assertEqual(data["digest"], self.plan()["digest"])
+            self.assertEqual(filename.stat().st_mode & 0o777, 0o600)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(app.admit_main(
+                    command, reader=self.read,
+                    approval_reader=self.read_approval), 1)
+
+    def test_preview_and_legacy_cli_paths_stay_separate(self):
+        with mock.patch.object(app, "fetch_project", return_value=payload(item(43))), \
+             mock.patch.object(app.legacy, "issue_state", return_value="OPEN"), \
+             mock.patch.object(app.legacy.ch_stage_evidence, "probe",
+                               return_value={"status": "CLEAR", "references": []}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(app.main(["--issues", "43"]), 0)
+
+    def test_graphql_adapter_uses_two_explicit_mutations(self):
+        output = {
+            "data": {
+                "addProjectV2ItemById": {"item": {"id": "PVTI_NEW"}},
+                "updateProjectV2ItemFieldValue": {"projectV2Item": {"id": "PVTI_NEW"}},
+            }
+        }
+        with mock.patch.object(app.legacy, "gh_json", return_value=output) as gh:
+            self.assertEqual(app._admit_graphql(
+                "add", {"projectId": "PVT", "contentId": "I1"}), "PVTI_NEW")
+            self.assertIn("addProjectV2ItemById", gh.call_args.args[3])
+            self.assertEqual(app._admit_graphql(
+                "set", {"projectId": "PVT", "itemId": "PVTI_NEW",
+                        "fieldId": "F1", "optionId": "O1"}), "PVTI_NEW")
+            self.assertIn("updateProjectV2ItemFieldValue", gh.call_args.args[3])
+
+    def test_ch_cli_routes_only_no_domain_logic(self):
+        from chdevflow.cli import main as ch_main
+        fake = subprocess.CompletedProcess(args=[], returncode=0)
+        with mock.patch("chdevflow.cli.subprocess.run", return_value=fake) as called:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(ch_main(["project", "admit", "--issue",
+                                         str(self.number), "--dry-run"]), 0)
+        args = called.call_args.args[0]
+        self.assertIn("ch_project_assist.py", args[1])
+        self.assertEqual(args[2:], ["admit", "--issue", str(self.number), "--dry-run"])
+
 if __name__ == "__main__":
     unittest.main()
