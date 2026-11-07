@@ -288,5 +288,202 @@ class Contract(unittest.TestCase):
         with self.assertRaises(ValueError): app.set_only({"operation":"add"})
 
 
+
+def r1_evidence():
+    shared = {"protocol": "RUC/1.0", "mission": "W-DATA-01-A",
+              "plan_sha256": app.R1_APPLY_DIGEST, "timestamp_utc": "2026-11-07T18:22:26Z"}
+    detail = [
+        {"event": "PREFLIGHT"}, {"event": "AUTH_VERIFIED"},
+        {"event": "START", "issues": list(app.ISSUES)},
+        {"event": "ATTEMPT", "issue": 8, "field": app.FIELD, "before": None,
+         "after_expected": "CH-1", "card_id": "PVTI_8"},
+        {"event": "VERIFIED", "issue": 8, "field": app.FIELD, "after": "CH-1",
+         "card_id": "PVTI_8"},
+        {"event": "ABORT", "confirmed": [8], "uncertain_issue": None}
+    ]
+    return [{**shared, **x} for x in detail]
+
+
+def r2_context():
+    c = context()
+    c["items"]["items"][0][app.FIELD] = "CH-1"
+    return c
+
+
+def r2_plan(c=None):
+    c = c or r2_context()
+    ch1 = ch1_plan(context())
+    with patch.object(app, "CH1_DIGEST", ch1["digest_sha256"]):
+        p = app.make_resume_plan(ch1, c, r1_evidence(), "a" * 64)
+    p["source_ch1_digest_sha256"] = app.CH1_DIGEST
+    p["digest_sha256"] = app.digest(app.unsigned(p))
+    return p
+
+
+def r2_approval(p, comment_id=987):
+    return {"id": comment_id, "user": {"login": app.OWNER},
+            "issue_url": f"https://api.github.com/repos/{app.REPO}/issues/62",
+            "created_at": "2026-11-07T19:00:00Z",
+            "updated_at": "2026-11-07T19:00:00Z",
+            "body": app.resume_approval_statement(p["digest_sha256"]) + "\n"
+                    + "ACEITO RISCO RESIDUAL DE CONCORRENCIA SEM CAS ATOMICO"}
+
+
+class R2Contract(unittest.TestCase):
+    """Todos os cenários são fakes offline; não chamam gh nem GraphQL real."""
+
+    def setUp(self):
+        self.c = r2_context()
+        self.p = r2_plan(self.c)
+
+    def sign(self, p):
+        p["digest_sha256"] = app.digest(app.unsigned(p))
+        return p
+
+    def execute(self, *, c=None, consent=True, permission=True, error_at=None,
+                after_write=False, audit=None):
+        c = copy.deepcopy(c or self.c)
+        proof = r2_approval(self.p)
+        calls = {"schema": 0, "items": 0, "writes": []}
+        events = []
+        def schema():
+            calls["schema"] += 1
+            return copy.deepcopy(c)
+        def items():
+            calls["items"] += 1
+            if error_at == "quota" and calls["items"] == 3:
+                raise RuntimeError("GraphQL API rate limit")
+            return copy.deepcopy(c["items"])
+        def write(data):
+            calls["writes"].append(copy.deepcopy(data))
+            if error_at == len(calls["writes"]) and not after_write:
+                raise TimeoutError("mock pre-write timeout")
+            item = next(x for x in c["items"]["items"] if x["id"] == data["itemId"])
+            item[app.FIELD] = {"opt0": "CH-0", "opt1": "CH-1"}[data["optionId"]]
+            if error_at == len(calls["writes"]) and after_write:
+                raise TimeoutError("mock post-write timeout")
+            return data["itemId"]
+        def start():
+            return app.apply_resume_plan(
+                self.p, 987, schema_reader=schema, items_reader=items,
+                proof_reader=lambda _: proof, graphql_set=write,
+                audit=audit or events.append, interactive=permission,
+                prompt=lambda _: ("APROVO CH-DATA-01 R2 " + self.p["digest_sha256"][:12])
+                      if consent else "NAO")
+        return start, calls, events, c, proof
+
+    def test_only_four_changes_and_eight_is_precondition(self):
+        self.assertEqual(self.p["issues"], [10, 12, 13, 24])
+        self.assertEqual(self.p["precondition"]["issue"], 8)
+        self.assertEqual(self.p["precondition"]["before"], "CH-1")
+        self.assertEqual([x["after"] for x in self.p["changes"]],
+                         ["CH-1", "CH-0", "CH-0", "CH-1"])
+        self.assertEqual(len(app.validate_resume_plan(self.p)), 4)
+        with self.assertRaises(ValueError):
+            app.validate_apply_plan(self.p)
+
+    def test_eight_missing_or_wrong_value_blocks(self):
+        for wrong in (None, "CH-0"):
+            c = copy.deepcopy(self.c)
+            c["items"]["items"][0][app.FIELD] = wrong
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                app.check_resume_live(self.p, c, set())
+            with patch.object(app, "CH1_DIGEST", ch1_plan(context())["digest_sha256"]):
+                with self.assertRaises(ValueError):
+                    app.make_resume_plan(ch1_plan(context()), c, r1_evidence(), "a" * 64)
+
+    def test_no_overwrite_of_existing_pending(self):
+        c = copy.deepcopy(self.c)
+        c["items"]["items"][1][app.FIELD] = "CH-1"
+        with self.assertRaises(ValueError): app.check_resume_live(self.p, c, set())
+
+    def test_protected_fields_and_ids_fail_closed(self):
+        for key, val in [("Etapa CH", "HOMOLOGADA"), ("Esteira", "AGY"),
+                         ("Prioridade CH", "P0"), ("status", "Done")]:
+            c = copy.deepcopy(self.c)
+            c["items"]["items"][0][key] = val
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                app.check_resume_live(self.p, c, set())
+        c = copy.deepcopy(self.c)
+        c["items"]["items"][1]["id"] = "PVTI_X"
+        with self.assertRaises(ValueError): app.check_resume_live(self.p, c, set())
+
+    def test_digest_and_scope_cannot_be_forged(self):
+        for key, val in [("source_r1_plan_sha256", "0"*64),
+                         ("issues", [8, 10, 12, 13, 24]),
+                         ("source_ch1_digest_sha256", "0"*64)]:
+            p = copy.deepcopy(self.p)
+            p[key] = val
+            self.sign(p)
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                app.validate_resume_plan(p)
+        p = copy.deepcopy(self.p)
+        p["changes"][0]["after"] = "CH-2"
+        with self.assertRaises(ValueError): app.validate_resume_plan(p)
+
+    def test_r1_audit_exact_sequence_and_sha(self):
+        import hashlib
+        ev = r1_evidence()
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)/"r1.jsonl"
+            p.write_text("".join(json.dumps(x) + "\n" for x in ev))
+            got, sha = app.read_r1_audit(p)
+            self.assertEqual(got, ev)
+            self.assertEqual(sha, hashlib.sha256(p.read_bytes()).hexdigest())
+            ev[3]["issue"] = 10
+            p.write_text("".join(json.dumps(x) + "\n" for x in ev))
+            with self.assertRaises(ValueError): app.read_r1_audit(p)
+
+    def test_success_four_mutations_and_schema_cache(self):
+        run, call, events, c, _ = self.execute()
+        self.assertEqual(run(), 4)
+        self.assertEqual(call["schema"], 2)
+        self.assertEqual(call["items"], 8)
+        self.assertEqual([x["itemId"] for x in call["writes"]],
+                         ["PVTI_10", "PVTI_12", "PVTI_13", "PVTI_24"])
+        self.assertEqual(c["items"]["items"][0][app.FIELD], "CH-1")
+        self.assertEqual(sum(e["event"] == "VERIFIED_R2" for e in events), 4)
+        self.assertEqual(events[-1]["event"], "COMPLETE_R2")
+
+    def test_tty_and_human_confirmation_no_writes(self):
+        for kwargs in [{"permission": False}, {"consent": False}]:
+            run, calls, _, _, _ = self.execute(**kwargs)
+            with self.assertRaises((RuntimeError, ValueError)): run()
+            self.assertEqual(calls["writes"], [])
+
+    def test_new_approval_author_and_risk_required(self):
+        proof = r2_approval(self.p)
+        self.assertTrue(app.verify_resume_approval(proof, self.p, 987))
+        proof["user"]["login"] = "intruso"
+        with self.assertRaises(ValueError):
+            app.verify_resume_approval(proof, self.p, 987)
+        proof = r2_approval(self.p)
+        proof["body"] = proof["body"].splitlines()[0]
+        with self.assertRaises(ValueError):
+            app.verify_resume_approval(proof, self.p, 987)
+
+    def test_graphql_quota_after_first_verified_stops_no_retry(self):
+        run, calls, events, _, _ = self.execute(error_at="quota")
+        with self.assertRaisesRegex(RuntimeError, "1 verificadas"): run()
+        self.assertEqual(len(calls["writes"]), 1)
+        self.assertEqual(events[-1]["event"], "ABORT_R2")
+
+    def test_timeout_before_after_write_is_uncertain(self):
+        for after in (False, True):
+            run, calls, events, _, _ = self.execute(error_at=2, after_write=after)
+            with self.subTest(after=after), self.assertRaisesRegex(RuntimeError, "incerta=#12"):
+                run()
+            self.assertEqual(len(calls["writes"]), 2)
+            self.assertEqual(events[-1]["event"], "UNCERTAIN_R2")
+
+    def test_audit_failure_prevents_mutation(self):
+        def audit(event):
+            if event["event"] == "ATTEMPT_R2":
+                raise OSError("mock disk full")
+        run, calls, _, _, _ = self.execute(audit=audit)
+        with self.assertRaises(RuntimeError): run()
+        self.assertEqual(calls["writes"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
