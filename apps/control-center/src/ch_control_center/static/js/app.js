@@ -13,6 +13,7 @@ document.addEventListener("DOMContentLoaded", () => {
     inicializarSincronizacao();
     inicializarAcessibilidadeModais();
     inicializarFiltroDadosInsuficientes();
+    inicializarBuscaInstantaneaMissoes();
     document.documentElement.dataset.ccJsReady = "true";
     if (aviso) aviso.style.display = "none";
   } catch (erro) {
@@ -263,6 +264,28 @@ function inicializarFiltroDadosInsuficientes() {
   });
 }
 
+// --- Busca imediata e acessível na tabela de Missões (fallback GET disponível) ---
+function inicializarBuscaInstantaneaMissoes() {
+  const campo = document.getElementById("busca");
+  const linhas = document.querySelectorAll(".table-responsive tbody tr");
+  if (!campo || !linhas.length) return;
+  const contador = document.getElementById("contador-missoes");
+  const vazia = document.getElementById("mensagem-busca-vazia");
+  const aplicar = () => {
+    const termo = campo.value.trim().toLocaleLowerCase("pt-BR");
+    let visiveis = 0;
+    linhas.forEach((linha) => {
+      const encontrado = !termo || linha.textContent.toLocaleLowerCase("pt-BR").includes(termo);
+      linha.style.display = encontrado ? "" : "none";
+      if (encontrado) visiveis++;
+    });
+    if (contador) contador.textContent = "Missões Encontradas (" + visiveis + ")";
+    if (vazia) vazia.style.display = visiveis === 0 ? "block" : "none";
+  };
+  campo.addEventListener("input", aplicar);
+  if (campo.value.trim()) aplicar();
+}
+
 // --- Sincronização UX & Polling Econômico 60s (F4) ---
 function inicializarSincronizacao() {
   const modoMeta = document.querySelector('meta[name="modo-operacao"]');
@@ -368,10 +391,13 @@ async function atualizarConteudoVisivel() {
 
   mainAtual.replaceWith(mainNovo);
   inicializarFiltroDadosInsuficientes();
+  inicializarBuscaInstantaneaMissoes();
   for (const campo of camposMissao) {
     const novo = document.getElementById(campo.id);
     if (novo && campo.valor != null) novo.value = campo.valor;
   }
+  const buscaRestaurada = document.getElementById("busca");
+  if (buscaRestaurada) buscaRestaurada.dispatchEvent(new Event("input", { bubbles: true }));
 
   const filtroNovo = document.getElementById("filtro-dados-insuficientes");
   if (filtroNovo && filtroAntes) {
