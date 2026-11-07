@@ -149,7 +149,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
             if cmd[:3] == ["gh", "issue", "create"]:
                 issued.append(cmd)
                 return subprocess.CompletedProcess(
-                    cmd, 0, "https://github.com/hallanbrito/CHDevFlow/issues/97\\n", "")
+                    cmd, 0, "https://github.com/hallanbrito/CHDevFlow/issues/97\n", "")
             return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
 
         with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_gh), \
