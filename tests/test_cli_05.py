@@ -108,6 +108,62 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         expected_file = target / "prompts" / "MISSAO-NOVA-TAREFA-LOCAL.md"
         self.assertTrue(expected_file.exists())
 
+    def test_cli_remote_requires_explicit_executor_and_autonomy(self) -> None:
+        target = Path(self.test_dir) / "RemoteRequired"
+        target.mkdir()
+        cases = [
+            [],
+            ["--executor", "AGY"],
+            ["--autonomy", "CH-1"],
+        ]
+        for missing in cases:
+            with self.subTest(args=missing), \
+                 patch("chdevflow.cli.create_mission") as create, \
+                 patch("sys.stderr", new_callable=io.StringIO) as err:
+                code = cli_main(["mission", "new", "Sem argumentos",
+                                 "--path", str(target), "--remote", *missing])
+                self.assertEqual(code, 1)
+                self.assertIn("--executor e --autonomy", err.getvalue())
+                create.assert_not_called()
+
+    def test_cli_local_defaults_preserved(self) -> None:
+        target = Path(self.test_dir) / "LocalDefaults"
+        target.mkdir()
+        with patch("chdevflow.cli.create_mission", return_value=(None, "LOCAL")) as create, \
+             patch("sys.stdout", new_callable=io.StringIO):
+            code = cli_main(["mission", "new", "Local", "--path", str(target)])
+        self.assertEqual(code, 0)
+        self.assertEqual(create.call_args.kwargs["executor"], "AGY")
+        self.assertEqual(create.call_args.kwargs["autonomy"], "CH-2")
+        self.assertFalse(create.call_args.kwargs["remote"])
+
+    def test_cli_remote_explicit_values_succeed(self) -> None:
+        target = Path(self.test_dir) / "RemoteExplicit"
+        target.mkdir()
+        self._init_git_repo(target)
+        issued = []
+
+        def fake_gh(cmd, *args, **kwargs):
+            if cmd[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            if cmd[:3] == ["gh", "issue", "create"]:
+                issued.append(cmd)
+                return subprocess.CompletedProcess(
+                    cmd, 0, "https://github.com/hallanbrito/CHDevFlow/issues/97\\n", "")
+            return _ORIG_SUBPROCESS_RUN(cmd, *args, **kwargs)
+
+        with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_gh), \
+             patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = cli_main(["mission", "new", "Com autorizacao proposta",
+                             "--path", str(target), "--remote",
+                             "--executor", "Codex", "--autonomy", "CH-1"])
+        self.assertEqual(code, 0)
+        self.assertIn("issues/97", out.getvalue())
+        self.assertEqual(len(issued), 1)
+        self.assertIn("ch:codex", issued[0])
+        self.assertIn("ch:workflow", issued[0])
+        self.assertIn("CH-1", issued[0][issued[0].index("--body") + 1])
+
     def test_create_mission_remote_success_mocked(self) -> None:
         target = Path(self.test_dir) / "RemoteAppSuccess"
         target.mkdir()
@@ -136,7 +192,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         # Também testa execução via CLI com retorno 0
         buf_out = io.StringIO()
         with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), patch("sys.stdout", buf_out):
-            code = cli_main(["mission", "new", "Tarefa Remota OK CLI", "--path", str(target), "--remote"])
+            code = cli_main(["mission", "new", "Tarefa Remota OK CLI", "--path", str(target), "--remote", "--executor", "AGY", "--autonomy", "CH-2"])
         self.assertEqual(code, 0)
         self.assertIn("Issue remota criada: https://github.com/hallanbrito/CHDevFlow/issues/99", buf_out.getvalue())
 
@@ -231,7 +287,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
              patch("sys.stdout", buf_out), \
              patch("sys.stderr", buf_err):
-            code = cli_main(["mission", "new", "Tarefa Auth Fail CLI", "--path", str(target), "--remote"])
+            code = cli_main(["mission", "new", "Tarefa Auth Fail CLI", "--path", str(target), "--remote", "--executor", "AGY", "--autonomy", "CH-2"])
         self.assertEqual(code, 1)
         self.assertIn("Erro em 'ch mission': GitHub CLI (gh) não está autenticado", buf_err.getvalue())
         self.assertNotIn("Issue remota criada", buf_out.getvalue())
@@ -272,7 +328,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
              patch("sys.stdout", buf_out), \
              patch("sys.stderr", buf_err):
-            code = cli_main(["mission", "new", "Tarefa Create Fail CLI", "--path", str(target), "--remote"])
+            code = cli_main(["mission", "new", "Tarefa Create Fail CLI", "--path", str(target), "--remote", "--executor", "AGY", "--autonomy", "CH-2"])
         self.assertEqual(code, 1, "CLI deve falhar com exit code 1 quando gh issue create falhar")
         self.assertIn("Erro em 'ch mission': Falha ao criar Issue remota no GitHub", buf_err.getvalue())
         self.assertNotIn("Issue remota criada", buf_out.getvalue())
@@ -309,7 +365,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
              patch("sys.stdout", buf_out), \
              patch("sys.stderr", buf_err):
-            code = cli_main(["mission", "new", "Tarefa Leak CLI", "--path", str(target), "--remote"])
+            code = cli_main(["mission", "new", "Tarefa Leak CLI", "--path", str(target), "--remote", "--executor", "AGY", "--autonomy", "CH-2"])
         self.assertEqual(code, 1)
         self.assertNotIn(leaked_token, buf_err.getvalue())
         self.assertIn("[REDACTED_TOKEN]", buf_err.getvalue())
@@ -330,7 +386,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         # Via CLI
         buf_err = io.StringIO()
         with patch("sys.stderr", buf_err):
-            code = cli_main(["mission", "new", "Tarefa Sem Git CLI", "--path", str(target), "--remote"])
+            code = cli_main(["mission", "new", "Tarefa Sem Git CLI", "--path", str(target), "--remote", "--executor", "AGY", "--autonomy", "CH-2"])
         self.assertEqual(code, 1)
         self.assertIn("Não é possível criar Issue remota fora de um repositório Git", buf_err.getvalue())
 
@@ -354,7 +410,7 @@ class TestCli05MissionRucSubmit(unittest.TestCase):
         buf_err = io.StringIO()
         with patch("chdevflow.core.mission.subprocess.run", side_effect=fake_subprocess_run), \
              patch("sys.stderr", buf_err):
-            code = cli_main(["mission", "new", "Tarefa Gh Not Found CLI", "--path", str(target), "--remote"])
+            code = cli_main(["mission", "new", "Tarefa Gh Not Found CLI", "--path", str(target), "--remote", "--executor", "AGY", "--autonomy", "CH-2"])
         self.assertEqual(code, 1)
         self.assertIn("GitHub CLI (gh) não foi encontrado no PATH", buf_err.getvalue())
 
