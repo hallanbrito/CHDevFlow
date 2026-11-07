@@ -19,6 +19,7 @@ from ch_control_center.routes.graph import router as graph_router
 from ch_control_center.routes.missions import router as missions_router
 from ch_control_center.routes.projects import router as projects_router
 from ch_control_center.routes.student import router as student_router
+from ch_control_center.routes.sync import router as sync_router
 from ch_control_center.security import validar_host_cabecalho
 
 
@@ -62,6 +63,9 @@ def create_app() -> FastAPI:
             "form-action 'self'; "
             "base-uri 'self';"
         )
+        # No painel local, evitar JS/CSS de versões antigas após atualização da branch.
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-store, max-age=0"
         response.headers["X-Governanca-Modo"] = "SOMENTE_LEITURA"
         return response
 
@@ -76,6 +80,7 @@ def create_app() -> FastAPI:
     app.include_router(student_router)
     app.include_router(demo_router)
     app.include_router(projects_router)
+    app.include_router(sync_router)
 
     # Healthcheck para sondas locais e testes automatizados
     @app.get("/health", response_class=JSONResponse)

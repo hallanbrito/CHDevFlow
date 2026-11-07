@@ -5,6 +5,12 @@ modo ao vivo e demonstração offline (RF-06/CC-01) e processa dependências via
 """
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
+import hashlib
+import json
+import threading
+import time
 from typing import Any
 
 from ch_sentinela.config import REPOSITORIO_CANONICO
@@ -18,6 +24,27 @@ from ch_control_center.config import (
 )
 from ch_control_center.graph.dag_engine import DAGEngine, ETAPAS_FECHAMENTO_VISUAL, ResultadoGrafoDAG
 
+TTL_CACHE_PADRAO_SEGUNDOS: float = 60.0
+
+
+@dataclass
+class EstadoSincronizacao:
+    """Estado do ciclo de sincronização de dados do Control Center (F2/F4)."""
+
+    source: str
+    status: str = "PENDING"  # "PENDING" | "SYNCING" | "OK" | "STALE" | "ERROR"
+    last_success_at: str | None = None
+    last_attempt_at: str | None = None
+    total_received: int = 0
+    total_recognized: int = 0
+    error_code: str | None = None
+    diagnostic: str | None = None
+    snapshot_id: str | None = None
+
+    def para_dicionario(self) -> dict[str, Any]:
+        """Serializa o estado para dicionário seguro para API."""
+        return asdict(self)
+
 
 class MissionService:
     """Orquestrador de leitura e consulta de missões do Control Center."""
@@ -26,12 +53,24 @@ class MissionService:
         self,
         facade: SentinelFacade | None = None,
         dag_engine: DAGEngine | None = None,
+        ttl_cache_segundos: float = TTL_CACHE_PADRAO_SEGUNDOS,
     ) -> None:
         caminho_demo = DIRETORIO_FIXTURES / "demo_project_snapshot.json"
         self.facade = facade or SentinelFacade(caminho_fixture_demo=caminho_demo)
         self.dag_engine = dag_engine or DAGEngine()
         self._modo_operacao = obter_modo_operacao()
         self.contador_leituras_snapshot: int = 0
+        self.ttl_cache_segundos = ttl_cache_segundos
+
+        # Cache em memória e controle de concorrência (F2)
+        self._lock_snapshot = threading.Lock()
+        self._cache_visao: dict[str, Any] | None = None
+        self._cache_timestamp: float = 0.0
+        self._cache_origem: str | None = None
+        self._estado_sincronizacao = EstadoSincronizacao(
+            source=self._modo_operacao,
+            status="PENDING",
+        )
 
     def obter_modo_operacao(self) -> str:
         """Retorna o modo de operação ativo (DEMO_OFFLINE ou LIVE_GITHUB)."""
@@ -41,7 +80,21 @@ class MissionService:
         """Alterna explicitamente entre modo ao vivo e demonstração offline."""
         modo = novo_modo.upper().strip()
         if modo in (MODO_DEMO_OFFLINE, MODO_LIVE_GITHUB):
-            self._modo_operacao = modo
+            with self._lock_snapshot:
+                if self._modo_operacao != modo:
+                    self._modo_operacao = modo
+                    self._cache_visao = None
+                    self._cache_timestamp = 0.0
+                    self._cache_origem = None
+                    self._estado_sincronizacao.source = modo
+                    self._estado_sincronizacao.status = "PENDING"
+                    self._estado_sincronizacao.last_success_at = None
+                    self._estado_sincronizacao.last_attempt_at = None
+                    self._estado_sincronizacao.total_received = 0
+                    self._estado_sincronizacao.total_recognized = 0
+                    self._estado_sincronizacao.snapshot_id = None
+                    self._estado_sincronizacao.error_code = None
+                    self._estado_sincronizacao.diagnostic = None
         return self._modo_operacao
 
     def obter_snapshot_ativo(self) -> tuple[dict[str, Any], str]:
@@ -222,6 +275,12 @@ class MissionService:
             missao = dict(t)
             missao["status_grafo"] = no.status_grafo if no else "PENDENTE"
             missao["motivo_bloqueio"] = no.motivo_bloqueio if no else None
+            # Sincroniza pendencias_dados e causas_diagnosticas derivadas do DAG (F1)
+            if no:
+                missao["pendencias_dados"] = list(no.pendencias_dados)
+                missao["causas_diagnosticas"] = list(no.causas_diagnosticas)
+            else:
+                missao["causas_diagnosticas"] = []
             missoes_enriquecidas.append(missao)
 
         stats = {
@@ -235,7 +294,8 @@ class MissionService:
             "modo_operacao": modo,
             "total_recebidos": len(snapshot.get("items", [])),
             "total_ignorados": len(snapshot.get("items", [])) - len(tarefas),
-            "total_dados_insuficientes": sum(bool(t["pendencias_dados"]) for t in tarefas),
+            "total_dados_insuficientes": grafo.total_dados_insuficientes,
+            "contagem_por_causa": grafo.contagem_por_causa,
         }
 
         return {
@@ -247,13 +307,112 @@ class MissionService:
             "missoes": missoes_enriquecidas,
         }
 
-    def obter_contexto_dashboard(self) -> dict[str, Any]:
-        """Retorna o contexto completo do dashboard garantindo exatamente 1 leitura de snapshot (AUD-05)."""
-        return self.construir_visao_operacional_completa()
+    def obter_visao_operacional(self, forcar_atualizacao: bool = False) -> dict[str, Any]:
+        """Obtém a visão operacional ativa usando cache em memória compartilhado (F2).
 
-    def obter_grafo_dag(self) -> ResultadoGrafoDAG:
+        Garante coalescência de requisições concorrentes e impede leituras repetitivas
+        ao GitHub por tela/cartão, respeitando o TTL configurado.
+        """
+        # Detecta leitura nova concluída enquanto um refresh forçado aguarda o lock.
+        # Evita duas consultas gh consecutivas no mesmo instante (ex.: duas abas).
+        geracao_observada = self._cache_timestamp
+
+        # 1. Leitura rápida do cache sem lock se válido e fresco
+        if not forcar_atualizacao:
+            with self._lock_snapshot:
+                if (
+                    self._cache_visao is not None
+                    and self._cache_origem == self._modo_operacao
+                    and (time.monotonic() - self._cache_timestamp) < self.ttl_cache_segundos
+                ):
+                    return self._cache_visao
+
+        # 2. Seção crítica de atualização: apenas uma thread consulta a fonte
+        with self._lock_snapshot:
+            if (forcar_atualizacao and self._cache_visao is not None
+                and self._cache_origem == self._modo_operacao
+                and self._cache_timestamp != geracao_observada):
+                return self._cache_visao
+            # Double-check: outra thread pode ter acabado de atualizar enquanto aguardávamos o lock
+            if not forcar_atualizacao:
+                if (
+                    self._cache_visao is not None
+                    and self._cache_origem == self._modo_operacao
+                    and (time.monotonic() - self._cache_timestamp) < self.ttl_cache_segundos
+                ):
+                    return self._cache_visao
+
+            agora_iso = datetime.now(timezone.utc).isoformat()
+            self._estado_sincronizacao.status = "SYNCING"
+            self._estado_sincronizacao.last_attempt_at = agora_iso
+
+            try:
+                snapshot, modo = self.obter_snapshot_ativo()
+                visao = self.construir_visao_operacional_completa(snapshot=snapshot, origem=modo)
+                self._cache_visao = visao
+                self._cache_timestamp = time.monotonic()
+                self._cache_origem = modo
+
+                # Uma leitura de Project pode ter dependências UNKNOWN/INVALID.
+                # Publicar resultado parcial sem alegar verificação integral.
+                incompletas = sum(
+                    1 for t in visao["tarefas"]
+                    if t["dependency_state"] in ("UNKNOWN", "INVALID")
+                ) if modo == MODO_LIVE_GITHUB else 0
+                self._estado_sincronizacao.source = modo
+                self._estado_sincronizacao.status = "PARTIAL" if incompletas else "OK"
+                if not incompletas:
+                    self._estado_sincronizacao.last_success_at = datetime.now(timezone.utc).isoformat()
+                self._estado_sincronizacao.total_received = len(snapshot.get("items", []))
+                self._estado_sincronizacao.total_recognized = len(visao["tarefas"])
+                self._estado_sincronizacao.error_code = "DEPENDENCIES_PARTIAL" if incompletas else None
+                self._estado_sincronizacao.diagnostic = (
+                    f"{incompletas} missão(ões) com consulta de dependências inconclusiva(s)."
+                    if incompletas else None
+                )
+
+                raw_bytes = json.dumps(snapshot, sort_keys=True).encode("utf-8")
+                self._estado_sincronizacao.snapshot_id = hashlib.sha256(raw_bytes).hexdigest()[:16]
+
+                return visao
+            except Exception as exc:
+                erro_sanitizado = self.facade.sanitizar(str(exc))
+                codigo_erro = type(exc).__name__
+                self._estado_sincronizacao.error_code = codigo_erro
+                self._estado_sincronizacao.diagnostic = erro_sanitizado
+
+                # Se já havia snapshot prévio em memória, preserva-o com status STALE (F2)
+                if self._cache_visao is not None:
+                    self._estado_sincronizacao.status = "STALE"
+                    # Backoff curto: evitar repetir leitura lenta em cada tela após falha.
+                    # O snapshot antigo continua explicitamente STALE, nunca autorizado.
+                    self._cache_timestamp = time.monotonic()
+                    return self._cache_visao
+
+                # Se não há snapshot prévio (falha na inicialização), marca ERROR e propaga
+                self._estado_sincronizacao.status = "ERROR"
+                raise
+
+    def obter_estado_sincronizacao(self) -> EstadoSincronizacao:
+        """Retorna o estado atual da sincronização de dados (F4)."""
+        return self._estado_sincronizacao
+
+    def sincronizar_agora(self) -> dict[str, Any]:
+        """Força atualização imediata da sincronização e retorna resumo estruturado (F4)."""
+        visao = self.obter_visao_operacional(forcar_atualizacao=True)
+        return {
+            "status": self._estado_sincronizacao.status,
+            "estado": self._estado_sincronizacao.para_dicionario(),
+            "stats": visao["stats"],
+        }
+
+    def obter_contexto_dashboard(self, forcar_atualizacao: bool = False) -> dict[str, Any]:
+        """Retorna o contexto completo do dashboard garantindo exatamente 1 leitura de snapshot (AUD-05)."""
+        return self.obter_visao_operacional(forcar_atualizacao=forcar_atualizacao)
+
+    def obter_grafo_dag(self, forcar_atualizacao: bool = False) -> ResultadoGrafoDAG:
         """Gera e retorna o Grafo DAG de Dependências estruturado."""
-        visao = self.construir_visao_operacional_completa()
+        visao = self.obter_visao_operacional(forcar_atualizacao=forcar_atualizacao)
         return visao["grafo"]
 
     def listar_missoes(
@@ -261,9 +420,10 @@ class MissionService:
         filtro_status: str | None = None,
         filtro_esteira: str | None = None,
         termo_busca: str | None = None,
+        forcar_atualizacao: bool = False,
     ) -> list[dict[str, Any]]:
         """Retorna a lista de missões enriquecidas com a classificação do grafo DAG."""
-        visao = self.construir_visao_operacional_completa()
+        visao = self.obter_visao_operacional(forcar_atualizacao=forcar_atualizacao)
         todas = visao["missoes"]
         resultado: list[dict[str, Any]] = []
 
@@ -275,8 +435,16 @@ class MissionService:
             if filtro_esteira and filtro_esteira != "TODAS" and m["esteira"].upper() != filtro_esteira.upper():
                 continue
             if termo_busca:
-                busca = termo_busca.lower()
-                if busca not in m["title"].lower() and busca not in m["id"].lower():
+                busca = termo_busca.strip().casefold()
+                numero_issue = m.get("number")
+                referencias = [
+                    str(m.get("title") or ""),
+                    str(m.get("id") or ""),
+                    str(m.get("issue_ref") or ""),
+                    f"#{numero_issue}" if numero_issue else "",
+                    str(numero_issue) if numero_issue else "",
+                ]
+                if busca and not any(busca in referencia.casefold() for referencia in referencias):
                     continue
 
             resultado.append(m)
@@ -308,6 +476,6 @@ class MissionService:
 
         return None
 
-    def obter_resumo_estatisticas(self) -> dict[str, Any]:
+    def obter_resumo_estatisticas(self, forcar_atualizacao: bool = False) -> dict[str, Any]:
         """Calcula métricas e contadores para os cartões de resumo do Dashboard."""
-        return self.construir_visao_operacional_completa()["stats"]
+        return self.obter_visao_operacional(forcar_atualizacao=forcar_atualizacao)["stats"]
