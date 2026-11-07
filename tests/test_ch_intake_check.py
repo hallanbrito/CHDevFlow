@@ -118,6 +118,18 @@ class TestChIntake(unittest.TestCase):
             )
             self.assertEqual(3, done.returncode)
 
+    def test_ch_cli_intake_check_uses_same_contract(self):
+        fixture = ROOT / "tests" / "fixtures" / "ch_intake" / "issue62_incomplete.json"
+        done = subprocess.run(
+            [sys.executable, "-m", "chdevflow", "intake", "check",
+             "--event-json", str(fixture), "--enforce", "--json"],
+            cwd=ROOT, capture_output=True, text=True, check=False, timeout=20,
+        )
+        self.assertEqual(2, done.returncode, done.stderr)
+        payload = json.loads(done.stdout)
+        self.assertEqual("BLOCKED", payload["content_status"])
+        self.assertFalse(payload["execution_allowed"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,7 +11,9 @@
 
 ## F1 — contrato do validador
 
-`python scripts/ch_intake_check.py --event-json /caminho/event.json --enforce --json`
+`ch intake check --event-json /caminho/event.json --enforce --json`
+
+Alternativa direta para o workflow: `python scripts/ch_intake_check.py --event-json /caminho/event.json --enforce --json`.
 
 - Entrada: arquivo JSON de evento GitHub contendo `issue`, **sem rede**.
 - `CONTENT_VALID`: somente metadados explícitos completos e consistentes (objetivo, Executor/Esteira, Autonomia **proposta**, escopo/aceite, baseline Git e plano de evidências). **Não** autoriza executar nem comprova cadastro Project.
