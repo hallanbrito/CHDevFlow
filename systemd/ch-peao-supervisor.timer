@@ -1,0 +1,12 @@
+[Unit]
+Description=CHDevFlow - Timer Horário da Supervisão da Esteira Peão (60 minutos)
+Documentation=https://github.com/hallanbrito/CHDevFlow/issues/69
+
+[Timer]
+# Intervalo de 60 minutos conforme especificação CH-AUTO-02
+OnCalendar=*:00:00
+Persistent=true
+Unit=ch-peao-supervisor.service
+
+[Install]
+WantedBy=timers.target
