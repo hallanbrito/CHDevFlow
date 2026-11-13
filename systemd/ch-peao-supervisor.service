@@ -1,0 +1,24 @@
+[Unit]
+Description=CHDevFlow - Supervisão Horária da Esteira Peão / AGY (CH-AUTO-02)
+Documentation=https://github.com/hallanbrito/CHDevFlow/issues/69
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# CONFIGURAÇÃO DE SEGURANÇA: DESATIVADA POR PADRÃO
+# A ativação operacional requer autorização expressa em novo gate do PO.
+Environment=CH_SUPERVISOR_ENABLED=false
+Environment=CH_SUPERVISOR_DRY_RUN=true
+Environment=PYTHONPATH=%h/CHDevFlow/src:%h/CHDevFlow/apps/bootstrap/sentinela/src:%h/CHDevFlow/apps/control-center/src
+WorkingDirectory=%h/CHDevFlow
+
+# Execução estritamente em ciclo único (--once) e simulação inerte (--dry-run)
+ExecStart=%h/CHDevFlow/.venv/bin/python -m chdevflow.cli supervise --once --dry-run --output-report %h/CHDevFlow/relatorios/supervisao_peao_ultimo.md
+
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target

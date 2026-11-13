@@ -1,0 +1,16 @@
+{
+  "$schema": "chdevflow.supervisor-config/1.0",
+  "enabled": false,
+  "dry_run": true,
+  "interval_minutes": 60,
+  "lane": "AGY",
+  "project_owner": "hallanbrito",
+  "project_number": 2,
+  "canonical_repository": "hallanbrito/CHDevFlow",
+  "max_parallel": 1,
+  "timeout_seconds": 900,
+  "max_retries_after_diagnosis": 1,
+  "extra_cost_allowed_brl": 0.0,
+  "status_operacional": "IMPLEMENTADO_NAO_ATIVADO",
+  "nota_seguranca": "A ativação automática requer decisão explícita e verificável do PO."
+}
