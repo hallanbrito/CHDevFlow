@@ -798,6 +798,7 @@ def run_supervise_cli(args: Any) -> int:
 
     config = carregar_configuracao_supervisor(getattr(args, "config", None))
 
+    snapshot_override = None
     items_raw = None
     if getattr(args, "fixture", None):
         caminho_fix = Path(args.fixture)
@@ -805,7 +806,16 @@ def run_supervise_cli(args: Any) -> int:
             print(f"[ERRO CRÍTICO] Arquivo de fixture '{args.fixture}' não encontrado.", file=sys.stderr)
             return 1
         with open(caminho_fix, "r", encoding="utf-8") as f:
-            items_raw = json.load(f)
+            fix_data = json.load(f)
+        if isinstance(fix_data, dict) and "items" in fix_data and not getattr(args, "fixture_fields", None):
+            # Se a fixture já fornece a lista de itens do snapshot
+            snapshot_override = {
+                "snapshot_sha256": fix_data.get("snapshot_sha256", "FIXTURE_CLI_SNAPSHOT"),
+                "source": "FIXTURE_OFFLINE",
+                "items": fix_data["items"],
+            }
+        else:
+            items_raw = fix_data
 
     fields_raw = None
     if getattr(args, "fixture_fields", None):
@@ -818,6 +828,7 @@ def run_supervise_cli(args: Any) -> int:
 
     supervisor = HourlySupervisor(config=config)
     report = supervisor.executar_ciclo(
+        snapshot_override=snapshot_override,
         items_override=items_raw,
         fields_override=fields_raw,
     )
@@ -834,5 +845,6 @@ def run_supervise_cli(args: Any) -> int:
     else:
         print(report.format_markdown())
 
-    return 0 if report.raw_status in {"IMPLEMENTADO_NAO_ATIVADO", "CYCLE_OVERLAP_PREVENTED"} else 1
+    return 0 if report.raw_status in {"IMPLEMENTADO_NAO_ATIVADO", "CYCLE_OVERLAP_PREVENTED", "BLOQUEADO_DADOS"} else 1
+
 

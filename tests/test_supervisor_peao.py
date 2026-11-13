@@ -347,10 +347,14 @@ class TestSupervisorPeao(unittest.TestCase):
 
     def test_15_cli_supervise_dry_run_with_fixtures(self) -> None:
         """Valida execução do comando CLI 'ch supervise --once --dry-run'."""
-        fixture_path = self.temp_dir / "fixture_items.json"
+        fixture_path = self.temp_dir / "fixture_snapshot.json"
         card = criar_cartao_base(numero=99, etapa="PRONTA", decisao_po="PENDENTE")
         fixture_path.write_text(
-            json.dumps({"items": [card], "totalCount": 1}, ensure_ascii=False),
+            json.dumps({
+                "snapshot_sha256": "sha_cli_test_99",
+                "source": "FIXTURE_CLI",
+                "items": [card],
+            }, ensure_ascii=False),
             encoding="utf-8",
         )
         out_report = self.temp_dir / "relatorio_cli.md"
