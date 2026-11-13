@@ -1,0 +1,22 @@
+# ==============================================================================
+# CHDevFlow — Temporizador Horário Multi-Repositório (DESATIVADO)
+# ==============================================================================
+# ESTADO: DESATIVADO POR PADRÃO (FASE CH-AUTO-MULTI-01)
+# 
+# ATENÇÃO: NÃO ATIVAR (systemctl enable --now chdevflow-supervisor-multi.timer).
+# A ativação depende de nova deliberação explícita do PO.
+# ==============================================================================
+
+[Unit]
+Description=CHDevFlow Hourly Multi-Repo Supervision Timer (DEACTIVATED)
+Documentation=https://github.com/hallanbrito/CHDevFlow/blob/main/docs/CH/RUC-CH-AUTO-MULTI-01.md
+
+[Timer]
+OnCalendar=*-*-* *:00:00
+Persistent=false
+RandomizedDelaySec=60
+Unit=chdevflow-supervisor-multi.service
+
+[Install]
+# DESATIVADO: Não habilitar
+# WantedBy=timers.target

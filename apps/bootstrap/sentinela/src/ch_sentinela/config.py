@@ -12,7 +12,14 @@ from pathlib import Path
 REPOSITORIO_CANONICO: str = "hallanbrito/CHDevFlow"
 REPOSITORIOS_PERMITIDOS: tuple[str, ...] = (
     "hallanbrito/CHDevFlow",
+    "hallanbrito/maestro-router",
+    "hallanbrito/PulseOps",
+    "hallanbrito/DriveHub-API",
+    "hallanbrito/DriveHub-Web",
+    "hallanbrito/VagaFlow",
     "hallanbrito/HallanCraft",
+    "hallanbrito/MindFlip",
+    "hallanbrito/perfil_profissional",
 )
 
 # Identificadores do GitHub Project #2

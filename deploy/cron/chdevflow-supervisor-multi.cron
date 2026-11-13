@@ -1,0 +1,12 @@
+# ==============================================================================
+# CHDevFlow — Cron Horário Multi-Repositório (DESATIVADO / COMENTADO)
+# ==============================================================================
+# ESTADO: DESATIVADO POR PADRÃO
+#
+# Para uso futuro no ambiente Linux CachyOS ou similar, caso não utilize systemd.
+# Não descomentar nem adicionar à crontab do host sem autorização expressa do PO.
+#
+# Intervalo: A cada 60 minutos (no minuto 0)
+#
+# 0 * * * * cd /home/hallan/CHDevFlow && PYTHONPATH=src:apps/bootstrap/sentinela/src /usr/bin/python3 -m chdevflow.core.multi_repo_supervisor --once --dry-run >> /home/hallan/CHDevFlow/.ch_sentinela/cron_supervisor_multi.log 2>&1
+# ==============================================================================

@@ -1,0 +1,20 @@
+{
+  "builtin": "schedule",
+  "args": [
+    "CRON_TZ=America/Sao_Paulo 0 * * * *",
+    "agentapi",
+    "new-conversation",
+    "--",
+    "Verificar fila de governança multi-repositório no GitHub Project #2 em modo estritamente inerte (dry-run). Validar esteira AGY, decisão PO, prioridade e gerar relatório de auditoria sem executar mutações, merge ou deploy."
+  ],
+  "restart_policy": "always",
+  "display_name": "CHDevFlow Multi-Repo Hourly Supervisor (Desativado)",
+  "description": "Ciclo horário de supervisão multi-repositório com governança centralizada no CHDevFlow. DESATIVADO por padrão aguardando autorização operacional do PO.",
+  "agent_permissions": {
+    "access_grants": [
+      "command(gh project item-list)",
+      "command(gh issue view)",
+      "command(gh pr view)"
+    ]
+  }
+}
