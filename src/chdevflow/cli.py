@@ -12,6 +12,7 @@ from chdevflow.core.doctor import render_doctor_human, run_doctor
 from chdevflow.core.evidence import render_evidence_human, run_verification
 from chdevflow.core.init import run_init
 from chdevflow.core.mission import create_mission
+from chdevflow.core.manual_lab_pipeline import inspect_lab_dossier, render_inspection
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -343,6 +344,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Caminho opcional para fixture JSON de snapshot.",
     )
 
+    # CH-PIPE-01: inspeção offline de dossiês POC-03, jamais executa agentes.
+    parser_pipeline = subparsers.add_parser(
+        "pipeline", help="Inspeciona evidências locais AGY → Codex (read-only)."
+    )
+    pipeline_subs = parser_pipeline.add_subparsers(
+        dest="pipeline_action", metavar="<ação>"
+    )
+    pipeline_inspect = pipeline_subs.add_parser(
+        "inspect", help="Valida dossiê POC-03 sem acessar GitHub ou acionar agentes."
+    )
+    pipeline_inspect.add_argument("--run-dir", type=Path, required=True)
+    pipeline_inspect.add_argument("--json", action="store_true")
+
     # Subcomando: tree
     parser_tree = subparsers.add_parser(
         "tree",
@@ -550,6 +564,17 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as exc:
             print(f"Erro em 'ch watch': {exc}", file=sys.stderr)
             return 1
+
+    if args.command == "pipeline":
+        if getattr(args, "pipeline_action", None) != "inspect":
+            print("Uso: ch pipeline inspect --run-dir <PASTA>", file=sys.stderr)
+            return 1
+        result = inspect_lab_dossier(args.run_dir)
+        if args.json:
+            print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        else:
+            print(render_inspection(result))
+        return 0 if result.state == "LAB_CONSISTENTE_AGUARDANDO_CH1" else 1
 
     if args.command == "tree":
         try:
