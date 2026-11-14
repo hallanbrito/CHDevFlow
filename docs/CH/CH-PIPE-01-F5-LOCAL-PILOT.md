@@ -74,3 +74,9 @@ Get-Content "$HOME\Downloads\CH-Dossie-20261114-180653\resposta_agy.md" -Tail 35
 **Oculte tokens e dados privados antes de compartilhar.** Código de saída zero do AGY não prova que o arquivo de implementação foi gravado. Se src/estoque.py estiver ausente, investigue o output real da CLI antes de alterar suas opções.
 
 O piloto agora informa ausentes=[...] e extras=[...] e corrige estados de falha, sem afrouxar as regras de escopo. Testes dessa melhoria utilizam apenas fixtures; não houve novo piloto real.
+
+## Correção do dispatcher AGY headless (14/11/2026)
+
+O AGY em `--print` pode devolver exit code 0 com resposta textual e nenhum arquivo gravado, inclusive quando a CLI nega silenciosamente uma ação que exigiria confirmação. O dispatcher agora pede **um único bloco Python** na resposta do AGY e, quando o arquivo `src/estoque.py` ainda não existe e nenhum arquivo foi alterado, aplica o código **ele próprio**, após análise AST e verificação rígida da allowlist. Arquivos extras, alterações em testes e respostas sem código continuam BLOQUEADOS.
+
+No dossiê da nova implementação, `AGY_TEXT_ADAPTER: PASS` significa que **o CHDevFlow escreveu o arquivo a partir do texto do AGY**, não que o AGY usou sua ferramenta de escrita. Os testes com fixtures verificam esse caminho completo até o Codex fake. **Nenhuma execução real de AGY/Codex foi feita nesta correção no GitHub Actions**; autenticações existentes no Windows não estão disponíveis ao runner GitHub. A execução anterior continua como falha até que haja evidência real de sucesso, e não exige a repetição de comandos do usuário para aceitar este patch.
