@@ -137,13 +137,15 @@ def assess_po_comment(
 
 def fetch_live_po_comment(
     mission: Mission, comment_id: int, *,
-    runner: Callable[..., Any] = subprocess.run,
+    runner: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     """Consulta Github via `gh api` read-only, sem seguir URLs arbitrárias."""
     if (mission.repository != REPO or type(mission.issue) is not int
             or mission.issue < 1 or type(comment_id) is not int or comment_id < 1):
         raise ValueError("Repositório/Issue/comentário inválido")
     api_path = f"repos/{REPO}/issues/comments/{comment_id}"
+    if runner is None:
+        runner = subprocess.run
     result = runner(
         ["gh", "api", "-H", "Accept: application/vnd.github+json", api_path],
         capture_output=True, text=True, timeout=12, check=False,
@@ -157,7 +159,7 @@ def fetch_live_po_comment(
 
 
 def check_gate_live(mission: Mission, plan: PipelinePlan, comment_id: int,
-                    *, runner: Callable[..., Any] = subprocess.run,
+                    *, runner: Callable[..., Any] | None = None,
                     now: datetime | None = None) -> PilotGateAssessment:
     """Preflight read-only. Erro de acesso ou de formato => BLOQUEADO."""
     try:
