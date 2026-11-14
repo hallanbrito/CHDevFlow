@@ -53,3 +53,24 @@ python -m unittest discover -s tests -p "test_ch_pipe_01_f5_lab_pilot.py" -v
 ~~~
 
 Esses testes usam mocks de subprocessos: nunca fazem chamadas reais de modelos.
+
+## Diagnóstico sem gastar novas chamadas de IA — falhas 18:06:31 e 18:06:53
+
+Se o piloto retornar LAB_BLOQUEADO em 'Arquivos esperados ausentes ou extras criados', **não rode novamente o AGY**. Na F5 corrigida, use os diretórios JÁ CRIADOS:
+
+~~~powershell
+ch pipeline lab-diagnose --workspace "$HOME\Downloads\CH-Lab-20261114-180631" --evidence-dir "$HOME\Downloads\CH-Dossie-20261114-180631" --json
+ch pipeline lab-diagnose --workspace "$HOME\Downloads\CH-Lab-20261114-180653" --evidence-dir "$HOME\Downloads\CH-Dossie-20261114-180653" --json
+~~~
+
+O comando só lista nomes de arquivos esperados/presentes/ausentes/extras, além da presença e tamanho do log AGY. **Não inicia subprocessos nem lê o conteúdo da resposta de IA.**
+
+Consulte localmente o log real de AGY, somente se necessário:
+
+~~~powershell
+Get-Content "$HOME\Downloads\CH-Dossie-20261114-180653\resposta_agy.md" -Tail 35
+~~~
+
+**Oculte tokens e dados privados antes de compartilhar.** Código de saída zero do AGY não prova que o arquivo de implementação foi gravado. Se src/estoque.py estiver ausente, investigue o output real da CLI antes de alterar suas opções.
+
+O piloto agora informa ausentes=[...] e extras=[...] e corrige estados de falha, sem afrouxar as regras de escopo. Testes dessa melhoria utilizam apenas fixtures; não houve novo piloto real.
