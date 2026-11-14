@@ -592,14 +592,27 @@ def main(argv: list[str] | None = None) -> int:
                 mission = load_manifest(args.mission)
                 root = Path(mission.worktree)
                 observed = None
+                observed_branch = None
+                worktree_clean = None
                 if root.is_dir() and not root.is_symlink():
-                    check = subprocess.run(
-                        ["git", "rev-parse", "--verify", "HEAD"], cwd=root,
-                        text=True, capture_output=True, timeout=8, check=False
-                    )
-                    if check.returncode == 0:
-                        observed = check.stdout.strip()
-                plan = plan_manual_mission(mission, observed_sha=observed)
+                    observations = []
+                    for command in (
+                        ["git", "rev-parse", "--verify", "HEAD"],
+                        ["git", "branch", "--show-current"],
+                        ["git", "status", "--porcelain"],
+                    ):
+                        observations.append(subprocess.run(
+                            command, cwd=root, text=True, capture_output=True,
+                            timeout=8, check=False
+                        ))
+                    if all(x.returncode == 0 for x in observations):
+                        observed = observations[0].stdout.strip()
+                        observed_branch = observations[1].stdout.strip()
+                        worktree_clean = not bool(observations[2].stdout.strip())
+                plan = plan_manual_mission(
+                    mission, observed_sha=observed,
+                    observed_branch=observed_branch, worktree_clean=worktree_clean
+                )
                 if args.json:
                     print(json.dumps(plan.to_dict(), indent=2, ensure_ascii=False))
                 else:
