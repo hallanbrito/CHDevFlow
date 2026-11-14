@@ -826,6 +826,67 @@ def run_supervise_cli(args: Any) -> int:
         with open(caminho_fields, "r", encoding="utf-8") as f:
             fields_raw = json.load(f)
 
+    if getattr(args, "multi_repo", False):
+        from chdevflow.core.multi_repo_supervisor import SupervisorMultiRepo
+
+        forcar_live = getattr(args, "live", False)
+        snapshot = None
+        if not forcar_live:
+            if snapshot_override is not None:
+                snapshot = snapshot_override
+            elif items_raw is not None:
+                snapshot = {"items": items_raw if isinstance(items_raw, list) else items_raw.get("items", [])}
+
+        leitor = None
+        if snapshot is None or forcar_live:
+            try:
+                from ch_sentinela.github_reader import LeitorGitHub
+                leitor = LeitorGitHub()
+            except Exception:
+                leitor = None
+
+        multi_sup = SupervisorMultiRepo(
+            intervalo_minutos=60,
+            modo_operacao="DRY_RUN",
+            leitor_gh=leitor,
+        )
+        relatorio = multi_sup.executar_ciclo(snapshot_projeto=snapshot, forcar_live=forcar_live)
+        ruc_md = relatorio.gerar_markdown_ruc()
+
+        if getattr(args, "output_report", None):
+            out_p = Path(args.output_report)
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            out_p.write_text(ruc_md, encoding="utf-8")
+
+        if getattr(args, "json", False):
+            print(
+                json.dumps(
+                    {
+                        "run_id": relatorio.run_id,
+                        "inicio_utc": relatorio.inicio_utc,
+                        "termino_utc": relatorio.termino_utc,
+                        "modo_operacao": relatorio.modo_operacao,
+                        "origem_dados": relatorio.origem_dados,
+                        "total_repositorios_cadastrados": relatorio.total_repositorios_cadastrados,
+                        "total_repositorios_consultados": relatorio.total_repositorios_consultados,
+                        "total_repositorios_verificados": relatorio.total_repositorios_verificados_efetivos,
+                        "total_itens_analisados": relatorio.total_itens_analisados,
+                        "total_elegiveis_agy": relatorio.total_elegiveis_agy,
+                        "total_bloqueados": relatorio.total_bloqueados,
+                        "total_outra_esteira": relatorio.total_outra_esteira,
+                        "reserva_efetuada": relatorio.reserva_efetuada.para_dicionario()
+                        if relatorio.reserva_efetuada
+                        else None,
+                        "custo_adicional_brl": relatorio.custo_adicional_brl,
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+        else:
+            print(ruc_md)
+        return 0
+
     supervisor = HourlySupervisor(config=config)
     report = supervisor.executar_ciclo(
         snapshot_override=snapshot_override,

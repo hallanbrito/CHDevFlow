@@ -409,6 +409,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Exibe formato resumido se não houver alterações.",
     )
+    parser_supervise.add_argument(
+        "--multi-repo",
+        action="store_true",
+        default=False,
+        help="Executa o supervisor multi-repositório com os 9 repositórios homologados (CH-AUTO-MULTI-01).",
+    )
+    parser_supervise.add_argument(
+        "--live",
+        action="store_true",
+        default=False,
+        help="Força consulta LIVE autenticada ao GitHub Project #2.",
+    )
 
     return parser
 

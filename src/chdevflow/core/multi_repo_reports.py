@@ -35,6 +35,32 @@ class RelatorioCicloSupervisao:
     itens_fila: tuple[ItemFila, ...]
     reserva_efetuada: RegistroReserva | None
     custo_adicional_brl: float = 0.0
+    origem_dados: str = "FIXTURE_OFFLINE"  # "LIVE_GITHUB", "FIXTURE_OFFLINE", "LIVE_GITHUB_FALHA", "BLOQUEIO_CONCORRENCIA"
+    repositorios_cadastrados: tuple[str, ...] = ()
+    repositorios_consultados: tuple[str, ...] = ()
+    repositorios_verificados: tuple[str, ...] = ()
+
+    @property
+    def total_repositorios_cadastrados(self) -> int:
+        return len(self.repositorios_cadastrados)
+
+    @property
+    def total_repositorios_consultados(self) -> int:
+        return len(self.repositorios_consultados)
+
+    @property
+    def total_repositorios_verificados_efetivos(self) -> int:
+        return len(self.repositorios_verificados)
+
+    def _descricao_origem_dados(self) -> str:
+        if self.origem_dados == "LIVE_GITHUB":
+            return "LIVE_GITHUB (Consulta autenticada e verificada via GitHub CLI)"
+        elif self.origem_dados == "LIVE_GITHUB_FALHA":
+            return "LIVE_GITHUB_FALHA (Consulta ao GitHub Project #2 falhou; fail-closed ativado)"
+        elif self.origem_dados == "BLOQUEIO_CONCORRENCIA":
+            return "BLOQUEIO_CONCORRENCIA (Sobreposição de ciclo prevenida por lock atômico)"
+        else:
+            return "FIXTURE_OFFLINE (Simulação de teste offline; NÃO constitui evidência LIVE)"
 
     def gerar_markdown_ruc(self) -> str:
         """Gera o relatório formatado segundo o padrão RUC/1.0."""
@@ -53,6 +79,7 @@ class RelatorioCicloSupervisao:
             f"| Product Owner | {PO_IDENTIDADE_PADRAO} |",
             "| Autonomia vigente | CH-2 (implementação supervisionada, sem ativação operacional) |",
             f"| Modo de operação | {self.modo_operacao} |",
+            f"| Origem dos dados | {self._descricao_origem_dados()} |",
             f"| Execução autônoma | {'HABILITADA' if self.execucao_autonoma_habilitada else 'DESATIVADA_POR_PADRAO (Seguro)'} |",
             f"| Data/hora UTC | {self.inicio_utc} |",
             f"| run_id | `{self.run_id}` |",
@@ -61,17 +88,26 @@ class RelatorioCicloSupervisao:
             "",
             "---",
             "",
-            "## 1. Inventário de Repositórios Autorizados",
+            "## 1. Inventário e Discriminação de Repositórios",
             "",
-            "| Slug | Repositório Canônico | Papel | Visibilidade | Status |",
-            "|---|---|---|---|---|",
+            f"- **Repositórios Cadastrados (Homologados pelo PO):** {len(self.repositorios_cadastrados)} repositórios",
+            f"- **Repositórios Consultados no Ciclo:** {len(self.repositorios_consultados)} repositórios",
+            f"- **Repositórios Efetivamente Verificados:** {len(self.repositorios_verificados)} repositórios",
+            "",
+            "| Slug | Repositório Canônico | Papel | Visibilidade | Status Catálogo | Consultado no Ciclo | Efetivamente Verificado |",
+            "|---|---|---|---|---|---|---|",
         ]
+
+        repos_consultados_set = set(self.repositorios_consultados)
+        repos_verificados_set = set(self.repositorios_verificados)
 
         for repo in listar_repositorios_permitidos():
             papel = "Central de Governança" if repo.is_canonical_governance else "Satélite Operacional"
             visib = "Privado" if repo.is_private else "Público"
+            consultado = "SIM" if (repo.full_name in repos_consultados_set or repo.slug in repos_consultados_set) else "NÃO"
+            verificado = "SIM" if (repo.full_name in repos_verificados_set or repo.slug in repos_verificados_set) else "NÃO"
             linhas.append(
-                f"| `{repo.slug}` | [{repo.full_name}]({repo.url}) | {papel} | {visib} | `{repo.status}` |"
+                f"| `{repo.slug}` | [{repo.full_name}]({repo.url}) | {papel} | {visib} | `{repo.status}` | `{consultado}` | `{verificado}` |"
             )
 
         linhas.extend([
@@ -85,17 +121,18 @@ class RelatorioCicloSupervisao:
             "",
             "### Detalhamento dos Pareceres de Elegibilidade",
             "",
-            "| Repositório | Issue | Esteira | Etapa | Decisão PO | Prioridade | Risco | Status Verificação | Motivo |",
-            "|---|---|---|---|---|---|---|---|---|",
+            "| Repositório | Issue | Esteira | Etapa | Decisão PO | Autorização PO | Prioridade | Risco | Status Verificação | Motivo |",
+            "|---|---|---|---|---|---|---|---|---|---|",
         ])
 
         for p in self.pareceres[:20]:  # Lista até 20 para síntese limpa
             repo_curto = p.repositorio.split("/")[-1] if p.repositorio else "N/A"
             num_str = f"#{p.issue_number}" if p.issue_number else "N/A"
-            motivo_curto = p.motivo[:80] + ("..." if len(p.motivo) > 80 else "")
+            motivo_curto = p.motivo[:70] + ("..." if len(p.motivo) > 70 else "")
+            auth_str = f"{p.autorizado_por} (OK)" if p.autorizacao_valida else ("SEM_CONTRATO" if p.decisao_po == "APROVADO" else "N/A")
             linhas.append(
                 f"| `{repo_curto}` | {num_str} | `{p.esteira or 'N/A'}` | `{p.etapa_ch or 'N/A'}` | "
-                f"`{p.decisao_po or 'N/A'}` | `{p.prioridade_ch or 'N/A'}` | `{p.risco_ch or 'N/A'}` | "
+                f"`{p.decisao_po or 'N/A'}` | `{auth_str}` | `{p.prioridade_ch or 'N/A'}` | `{p.risco_ch or 'N/A'}` | "
                 f"`{p.status}` | {motivo_curto} |"
             )
 

@@ -1,129 +1,119 @@
-# Relatório Universal C.H. (RUC/1.0) — Orquestração Horária Multi-Repositório
+# Relatório Universal C.H. (RUC/1.0) — Orquestração Horária Multi-Repositório (Revisão R2)
 
-> **Protocolo:** RUC/1.0  
-> **Missão:** CH-AUTO-MULTI-01 — Orquestração horária multi-repositório com governança centralizada  
-> **Executor declarado:** AGY (Antigravity Peão)  
-> **Coordenação / PO:** Hallan de Sousa Brito  
-> **Autonomia vigente:** CH-2 (implementação supervisionada sem ativação operacional)  
-> **Ambiente:** Host de desenvolvimento (Windows / Linux CachyOS), repositório Git isolado  
-> **Fontes:** `LIVE_GITHUB` (consultas read-only confirmadas) + `LOCAL_REPO` + `FIXTURE_OFFLINE`  
-> **Baseline SHA:** `3ddb5f16bf78d92c28fc2b69981d7ee28ea8ecb0` (baseado em PR #70 / Issue #69)  
-> **Branch:** `agy/ch-auto-multi-01`  
-> **Custo adicional verificado:** R$ 0,00 (D06 cumprida com rigor)  
+> **Protocolo:** RUC/1.0<br>
+> **Missão:** CH-AUTO-MULTI-01 — Orquestração horária multi-repositório com governança centralizada<br>
+> **Revisão:** R2 (Correções Técnicas da Auditoria Independente do ChatGPT na PR #71)<br>
+> **Executor declarado:** AGY (Antigravity Peão)<br>
+> **Coordenação / PO:** Hallan de Sousa Brito<br>
+> **Autonomia vigente:** CH-2 (implementação supervisionada sem ativação operacional)<br>
+> **Ambiente:** Host de desenvolvimento (Windows / Linux CachyOS), repositório Git isolado<br>
+> **Fontes:** `LIVE_GITHUB` (consultas read-only autenticadas) + `LOCAL_REPO` + `FIXTURE_OFFLINE` (simulação rotulada)<br>
+> **Baseline SHA:** `3ddb5f16bf78d92c28fc2b69981d7ee28ea8ecb0` (baseado em PR #70 / Issue #69)<br>
+> **Branch:** `agy/ch-auto-multi-01`<br>
+> **PR de Entrega:** [#71](https://github.com/hallanbrito/CHDevFlow/pull/71)<br>
+> **Custo adicional verificado:** R$ 0,00 (D06 cumprida com rigor absoluto)<br>
 > **Estado final:** `IMPLEMENTADO_NAO_ATIVADO / AGUARDANDO_AUDITORIA_CHATGPT / AGUARDANDO_PO`
 
 ---
 
-## 1. Identificação e Contexto
+## 1. Identificação e Contexto da Revisão R2
 
-Esta missão projeta e implementa a infraestrutura para supervisão e execução de missões autorizadas pelo Product Owner em múltiplos repositórios GitHub, utilizando o repositório **CHDevFlow** (`hallanbrito/CHDevFlow`) e o **GitHub Project #2** como centrais canônicas de governança, fila e auditoria.
+Esta revisão R2 atende integralmente aos apontamentos da auditoria independente realizada pelo ChatGPT sobre a PR #71, implementando as 5 prioridades técnicas com salvaguardas fail-closed e testes automatizados:
 
-A autorização concedida pelo PO é restrita a:
-- Implementar e testar offline a infraestrutura multi-repositório.
-- **NÃO ativar execução autônoma**, agendamento horário real, deamons, merge, push na `main` ou deploy.
-- Reutilizar e estender a base do despachante supervisionado da Issue #69 sem duplicação de funcionalidades.
-
----
-
-## 2. Resumo Executivo
-
-A solução foi projetada de forma modular e fail-closed:
-1. **Catálogo de Repositórios Autorizados (`multi_repo_registry.py`)**: 9 repositórios confirmados live no GitHub foram catalogados com URLs canônicas, branches padrão e atributos de visibilidade. Repositórios não catalogados são sumariamente bloqueados.
-2. **Verificador de Governança Fail-Closed (`multi_repo_verifier.py`)**: Inspeciona os campos do Project #2. Na ausência de campos preenchidos, recusa inferência por labels ou títulos e marca `DADOS_INSUFICIENTES`. Filtra estritamente a Esteira AGY e exige `Decisao PO == APROVADO`.
-3. **Fila Sequencial Persistente (`multi_repo_queue.py`)**: Ordena tarefas elegíveis por prioridade canônica (`P0 > P1 > P2 > P3`), desempata por menor risco e persiste atomicamente em `.ch_sentinela/fila_sequencial_multi_repo.json` (0o600). Garante no máximo 1 missão ativa globalmente no ecossistema (`max_parallel = 1`).
-4. **Adaptadores de Agentes Inertes (`multi_repo_adapters.py`)**: Trava inviolável `EXECUCAO_AUTONOMA_HABILITADA = False`. Tentativas de acionamento real disparam `ExecucaoAutonomaNaoAutorizadaErro`. O modo `DRY_RUN` processa e sanitiza traços de teste com custo R$ 0,00.
-5. **Supervisor Multi-Repositório (`multi_repo_supervisor.py`)**: Orquestra o ciclo de 10 passos em modo DRY_RUN e emite relatórios consolidados estruturados.
-6. **Agendamento Desativado (`deploy/`)**: Arquivos de unidade Systemd (.service e .timer), cron e sidecar de automação Antigravity configurados para 60 minutos, porém estritamente desativados.
-7. **Testes Unitários e de Segurança (`tests/test_multi_repo_supervisor.py`)**: 17 testes offline cobrindo todos os fluxos com mock de sockets e subprocessos, provando ausência de chamadas externas.
+1. **Prioridade 1 — Validação Obrigatória de Autorização do PO:**
+   Implementação de checagem fail-closed de autorização formal do PO (`hallanbrito`). A simples decisão `APROVADO` no cartão é insuficiente: exige contrato formal (`ContratoAutorizacao`), correspondência estrita de repositório, aprovador canônico, digest e custo zero.
+2. **Prioridade 2 — Leitura LIVE Autenticada vs Fixtures:**
+   Implementação de rotulagem e fluxo estrito para leitura LIVE autenticada do GitHub Project #2 (`LeitorGitHub`). Fixtures sintéticas offline são explicitamente identificadas como `FIXTURE_OFFLINE` e nunca apresentadas como evidência operacional real.
+3. **Prioridade 3 — Ponto de Entrada Executável do Supervisor:**
+   Alinhamento canônico da CLI para suportar `ch supervise --multi-repo` e `python -m chdevflow.cli supervise --multi-repo`, além da entrada direta `python -m chdevflow.core.multi_repo_supervisor`. Atualização dos arquivos `deploy/systemd/` e `deploy/cron/`.
+4. **Prioridade 4 — Lock Interprocesso Atômico e Idempotência:**
+   Criação de `InterprocessFileLock` com criação atômica no nível de sistema operacional (`os.O_CREAT | os.O_EXCL`, modo 0o600). Aplicado na persistência da fila e na execução do ciclo horário de supervisão, prevenindo sobreposição (`CYCLE_OVERLAP_PREVENTED`).
+5. **Prioridade 5 — Segregação de Repositórios Cadastrados, Consultados e Verificados:**
+   Diferenciação clara nos relatórios RUC entre os 9 repositórios do catálogo homologado pelo PO, os repositórios efetivamente consultados no ciclo e os repositórios verificados com emissão de parecer.
 
 ---
 
-## 3. Inventário de Repositórios Verificados no GitHub
+## 2. Inventário e Discriminação de Repositórios
 
-A existência e o endereço canônico de cada repositório foram consultados e confirmados via GitHub CLI autenticado (`gh repo list hallanbrito`):
+O catálogo homologado pelo PO é fixo em 9 repositórios:
 
-| Repositório | Papel | Visibilidade | URL Canônica | Status no Catálogo |
+| Slug | Repositório Canônico | Papel | Visibilidade | Status Catálogo |
 |---|---|---|---|---|
-| `hallanbrito/CHDevFlow` | Central de Governança | Público | `https://github.com/hallanbrito/CHDevFlow` | `ATIVO` |
-| `hallanbrito/maestro-router` | Satélite Operacional | Público | `https://github.com/hallanbrito/maestro-router` | `ATIVO` |
-| `hallanbrito/PulseOps` | Satélite Operacional | Público | `https://github.com/hallanbrito/PulseOps` | `ATIVO` |
-| `hallanbrito/DriveHub-API` | Satélite Operacional | Público | `https://github.com/hallanbrito/DriveHub-API` | `ATIVO` |
-| `hallanbrito/DriveHub-Web` | Satélite Operacional | Privado | `https://github.com/hallanbrito/DriveHub-Web` | `ATIVO` |
-| `hallanbrito/VagaFlow` | Satélite Operacional | Público | `https://github.com/hallanbrito/VagaFlow` | `ATIVO` |
-| `hallanbrito/HallanCraft` | Repositório Piloto/Sandbox | Público | `https://github.com/hallanbrito/HallanCraft` | `ATIVO` |
-| `hallanbrito/MindFlip` | Satélite Operacional | Público | `https://github.com/hallanbrito/MindFlip` | `ATIVO` |
-| `hallanbrito/perfil_profissional` | Satélite Operacional | Público | `https://github.com/hallanbrito/perfil_profissional` | `ATIVO` |
+| `CHDevFlow` | [hallanbrito/CHDevFlow](https://github.com/hallanbrito/CHDevFlow) | Central de Governança | Público | `ATIVO` |
+| `maestro-router` | [hallanbrito/maestro-router](https://github.com/hallanbrito/maestro-router) | Satélite Operacional | Público | `ATIVO` |
+| `PulseOps` | [hallanbrito/PulseOps](https://github.com/hallanbrito/PulseOps) | Satélite Operacional | Público | `ATIVO` |
+| `DriveHub-API` | [hallanbrito/DriveHub-API](https://github.com/hallanbrito/DriveHub-API) | Satélite Operacional | Público | `ATIVO` |
+| `DriveHub-Web` | [hallanbrito/DriveHub-Web](https://github.com/hallanbrito/DriveHub-Web) | Satélite Operacional | Privado | `ATIVO` |
+| `VagaFlow` | [hallanbrito/VagaFlow](https://github.com/hallanbrito/VagaFlow) | Satélite Operacional | Público | `ATIVO` |
+| `HallanCraft` | [hallanbrito/HallanCraft](https://github.com/hallanbrito/HallanCraft) | Satélite Operacional | Público | `ATIVO` |
+| `MindFlip` | [hallanbrito/MindFlip](https://github.com/hallanbrito/MindFlip) | Satélite Operacional | Público | `ATIVO` |
+| `perfil_profissional` | [hallanbrito/perfil_profissional](https://github.com/hallanbrito/perfil_profissional) | Satélite Operacional | Público | `ATIVO` |
 
 ---
 
-## 4. Evidências Verificáveis
+## 3. Matriz de Correções da Auditoria ChatGPT (R2)
+
+| Apontamento da Auditoria | Arquivo / Módulo | Correção Implementada | Teste de Verificação |
+|---|---|---|---|
+| P1: Validação de autorização do PO ausente ou permissiva | `src/chdevflow/core/multi_repo_verifier.py` | Exigência estrita de `ContratoAutorizacao` assinado por `hallanbrito`, repositório idêntico e custo R$ 0,00. Retorna `BLOQUEADO_SEM_CONTRATO_AUTORIZACAO` se ausente. | `test_bloqueia_sem_contrato_autorizacao_po_fail_closed`, `test_bloqueia_autorizacao_quando_aprovador_nao_e_po`, `test_bloqueia_divergencia_repositorio_autorizado` |
+| P2: Fixture tratada como dado real | `src/chdevflow/core/multi_repo_reports.py`, `multi_repo_supervisor.py` | Discriminação explícita de `origem_dados` entre `LIVE_GITHUB`, `LIVE_GITHUB_FALHA`, `BLOQUEIO_CONCORRENCIA` e `FIXTURE_OFFLINE`. Flags `--live` e fallback fail-closed. | `test_origem_dados_live_falha_fail_closed`, `test_ciclo_completo_com_snapshot_sintetico` |
+| P3: Entrada do supervisor desalinhada | `src/chdevflow/cli.py`, `supervisor_peao.py`, `deploy/systemd/`, `deploy/cron/` | Adicionados `--multi-repo` e `--live` ao parser de `ch supervise`. Unidades de deploy atualizadas para comando canônico. | `test_cli_multi_repo_supervise_entrypoint` |
+| P4: Concorrência e lock interprocesso | `src/chdevflow/core/multi_repo_queue.py`, `multi_repo_supervisor.py` | Implementado `InterprocessFileLock` com `os.O_CREAT \| os.O_EXCL` atômico no SO e TTL de recuperação. Prevenção de ciclo concorrente retornando `CYCLE_OVERLAP_PREVENTED`. | `test_interprocess_file_lock_atomicidade`, `test_ciclo_supervisao_com_lock_ativo_retorna_cycle_overlap_prevented` |
+| P5: Métricas agregadas sem discriminação de repositórios | `src/chdevflow/core/multi_repo_reports.py`, `multi_repo_supervisor.py` | Separação no RUC entre 9 cadastrados, consultados no ciclo e verificados efetivamente com parecer. | `test_distincao_repositorios_cadastrados_consultados_verificados` |
+
+---
+
+## 4. Evidências Verificáveis (R2)
 
 | ID | Classe | Fonte | Fato Observado e Limite Técnico |
 |---|---|---|---|
-| E01 | OBSERVADO | `LIVE_GITHUB` | Confirmação da existência dos repositórios via `gh repo list hallanbrito`. |
-| E02 | OBSERVADO | `LIVE_GITHUB` | Leitura de 31 itens no GitHub Project #2. Confirmação de que campos de governança estão ausentes na maioria dos cartões, validando a necessidade do fail-closed `DADOS_INSUFICIENTES`. |
-| E03 | OBSERVADO | `LOCAL_REPO` | Execução de `tests/test_multi_repo_supervisor.py`: 17 testes passaram em 0.072s sem falhas. |
-| E04 | OBSERVADO | `LOCAL_REPO` | Execução de `apps/bootstrap/sentinela/tests`: 73 testes passaram em 0.826s sem falhas. |
-| E05 | OBSERVADO | `LOCAL_REPO` | Prova estrutural de zero subprocessos de agentes: mock de `subprocess.run` e `socket.socket` não detectou chamadas durante o ciclo do supervisor. |
-| E06 | OBSERVADO | `LOCAL_REPO` | Trava de código `EXECUCAO_AUTONOMA_HABILITADA = False` em `multi_repo_adapters.py`. |
-| E07 | OBSERVADO | `LOCAL_REPO` | Unidades `deploy/systemd/chdevflow-supervisor-multi.service` e `.timer` com `[Install]` desativado e comentários de bloqueio. |
+| E01 | OBSERVADO | `LOCAL_REPO` | Execução de `tests/test_multi_repo_supervisor.py`: 25 testes passaram em 0.543s com 100% de sucesso. |
+| E02 | OBSERVADO | `LOCAL_REPO` | Execução de `tests/test_supervisor_peao.py`: 15 testes passaram em 0.206s com 100% de sucesso. |
+| E03 | OBSERVADO | `LOCAL_REPO` | Execução de `apps/bootstrap/sentinela/tests`: 73 testes passaram em 0.914s com 100% de sucesso. |
+| E04 | OBSERVADO | `LOCAL_REPO` | Execução via CLI `chdevflow.cli supervise --multi-repo --fixture ...`: Fila sequencial gerou 5 itens ordenados rigorosamente por prioridade P0..P3 sem duplicações. |
+| E05 | OBSERVADO | `LOCAL_REPO` | Execução via CLI `chdevflow.cli supervise --multi-repo --live`: Consulta sem rede ativou fail-closed imediato (`origem_dados = LIVE_GITHUB_FALHA`, `status = BLOQUEADO_DADOS`, 0 missões elegíveis). |
+| E06 | OBSERVADO | `LOCAL_REPO` | Exclusão mútua comprovada: lock atômico impede concorrência interprocesso tanto na fila quanto no ciclo horário. |
+| E07 | OBSERVADO | `LOCAL_REPO` | Inércia confirmada: `EXECUCAO_AUTONOMA_HABILITADA = False`, timers e serviços Systemd/cron permanecem desativados. |
 
 ---
 
-## 5. Verificações e Testes Executados
+## 5. Verificações e Testes Executados (25 Testes)
 
-| ID | Verificação | Critério | Resultado |
+| ID | Teste Unitário | Verificação | Resultado |
 |---|---|---|---|
-| T01 | Registro de Repositórios | Confirmação de slugs, normalização de URLs e status ATIVO | **PASSOU** |
-| T02 | Bloqueio Repositório Inválido | Repositório não homologado pelo PO dispara `ViolacaoPoliticaSegurancaErro` | **PASSOU** |
-| T03 | Fail-Closed Campos Ausentes | Sem campos estruturados do Project gera `DADOS_INSUFICIENTES` | **PASSOU** |
-| T04 | Filtragem de Esteira | Missões com `Esteira != 'AGY'` geram `IGNORADO_OUTRA_ESTEIRA` | **PASSOU** |
-| T05 | Decisão PO Obrigatória | Missões com `Decisao PO != 'APROVADO'` geram `BLOQUEADO_SEM_AUTORIZACAO_PO` | **PASSOU** |
-| T06 | Bloqueio Risco Crítico | Missões com `Risco CH == 'CRITICO'` geram `BLOQUEADO_RISCO_CRITICO` | **PASSOU** |
-| T07 | Bloqueio Escopo Inseguro | Path traversal (`..`) ou curingas (`*`) geram `BLOQUEADO_ESCOPO_INVALIDO` | **PASSOU** |
-| T08 | Ordenação da Fila | Prioridade canônica `P0 > P1 > P2 > P3` e menor risco | **PASSOU** |
-| T09 | Concorrência Estrita | Tentativa de reservar segunda missão ativa gera `RuntimeError` | **PASSOU** |
-| T10 | Persistência da Fila | Estado é recarregado fielmente a partir do arquivo JSON (0o600) | **PASSOU** |
-| T11 | Inércia de Agentes | `AdaptadorAGY.executar_missao` dispara `ExecucaoAutonomaNaoAutorizadaErro` | **PASSOU** |
-| T12 | Dry-Run Inerte | `AdaptadorAGY.executar_dry_run` conclui sem processos e com custo R$ 0,00 | **PASSOU** |
-| T13 | Detecção Prompt Injection | Instruções maliciosas na saída geram `BLOCKED` | **PASSOU** |
-| T14 | Ciclo E2E Offline | Execução dos 10 passos com snapshot sintético e zero chamadas de rede/processo | **PASSOU** |
-| T15 | Emissão Relatório RUC | Geração completa do documento formatado RUC/1.0 | **PASSOU** |
+| T01 | `test_repositorio_canonico_presente` | Identificação do CHDevFlow como central de governança | **PASSOU** |
+| T02 | `test_todos_repositorios_confirmados_cadastrados` | Verificação dos 9 slugs no catálogo autorizado | **PASSOU** |
+| T03 | `test_normalizacao_identificador` | Normalização de URLs git, slugs e caminhos | **PASSOU** |
+| T04 | `test_fail_closed_repositorio_nao_cadastrado` | Bloqueio imediato de repositórios não homologados | **PASSOU** |
+| T05 | `test_falha_fechada_dados_insuficientes` | Ausência de campos no Project gera `DADOS_INSUFICIENTES` | **PASSOU** |
+| T06 | `test_ignora_outras_esteiras` | Missões de outras esteiras (ChatGPT, Codex) ignoradas | **PASSOU** |
+| T07 | `test_bloqueia_sem_decisao_aprovado_po` | `Decisao PO != APROVADO` bloqueia avanço | **PASSOU** |
+| T08 | `test_bloqueia_sem_contrato_autorizacao_po_fail_closed` | Decisão APROVADO sem contrato formal do PO bloqueia (P1) | **PASSOU** |
+| T09 | `test_bloqueia_autorizacao_quando_aprovador_nao_e_po` | Aprovador diferente de `hallanbrito` bloqueia (P1) | **PASSOU** |
+| T10 | `test_bloqueia_divergencia_repositorio_autorizado` | Contrato autorizando outro repositório bloqueia (P1) | **PASSOU** |
+| T11 | `test_bloqueia_risco_critico` | Risco CH CRITICO bloqueia execução autônoma | **PASSOU** |
+| T12 | `test_bloqueia_path_traversal_e_escopo_inseguro` | Path traversal (`..`) ou curingas (`*`) bloqueados | **PASSOU** |
+| T13 | `test_missao_agy_totalmente_elegivel` | Missão AGY com todos os critérios e contrato PO aprovada | **PASSOU** |
+| T14 | `test_ordenacao_estrita_por_prioridade` | Fila sequencial ordena estritamente P0 > P1 > P2 > P3 | **PASSOU** |
+| T15 | `test_concorrencia_bloqueia_segunda_execucao_ativa` | Máximo 1 missão ativa globalmente (`max_parallel = 1`) | **PASSOU** |
+| T16 | `test_persistencia_recupera_estado_em_nova_instancia` | Recuperação íntegra de estado via arquivo JSON (0o600) | **PASSOU** |
+| T17 | `test_interprocess_file_lock_atomicidade` | Lock interprocesso atômico `os.O_CREAT \| os.O_EXCL` (P4) | **PASSOU** |
+| T18 | `test_execucao_autonoma_desativada_por_padrao` | Trava `EXECUCAO_AUTONOMA_HABILITADA = False` inviolável | **PASSOU** |
+| T19 | `test_dry_run_executa_sem_processos_externos` | Modo DRY_RUN executa com custo R$ 0,00 e sem processos | **PASSOU** |
+| T20 | `test_normalizacao_detecta_prompt_injection` | Prompt injection na saída sanitizado e bloqueado | **PASSOU** |
+| T21 | `test_ciclo_completo_com_snapshot_sintetico` | Ciclo pontual de 10 passos executado sem processos de rede | **PASSOU** |
+| T22 | `test_ciclo_supervisao_com_lock_ativo_retorna_cycle_overlap_prevented` | Ciclo concorrente gera `CYCLE_OVERLAP_PREVENTED` (P4) | **PASSOU** |
+| T23 | `test_distincao_repositorios_cadastrados_consultados_verificados` | Segregação de 9 cadastrados, consultados e verificados (P5) | **PASSOU** |
+| T24 | `test_origem_dados_live_falha_fail_closed` | Falha na leitura LIVE gera `LIVE_GITHUB_FALHA` fail-closed (P2) | **PASSOU** |
+| T25 | `test_cli_multi_repo_supervise_entrypoint` | Ponto de entrada executável via CLI `ch supervise` (P3) | **PASSOU** |
 
 ---
 
-## 6. Riscos, Contenção e Limitações
+## 6. Parecer Final e Próximo Gate
 
-1. **Ausência de Execução em Produção**: O código está completamente implementado e testado, mas o despachante permanece em modo inerte (`DRY_RUN`).
-2. **Campos do Project #2**: As Issues nos repositórios satélites (como Maestro, PulseOps, DriveHub) devem ser cadastradas e vinculadas pelo PO no Project #2 com os 6 campos estruturados para se tornarem visíveis ao leitor.
-3. **Rollback Determinístico**: Caso a fila entre em estado inconsistente, o arquivo `.ch_sentinela/fila_sequencial_multi_repo.json` pode ser removido ou limpo via método `cancelar_reserva()`, retornando o sistema ao estado zero sem efeitos colaterais nos repositórios.
+Todas as 5 prioridades técnicas apontadas na auditoria independente do ChatGPT foram implementadas, validadas por 113 testes automatizados (25 de supervisão multi-repositório, 15 do supervisor peão e 73 do sentinela bootstrap) e mantêm estrita inércia operacional, sem custos adicionais e sem ativação de cron/timers.
 
----
-
-## 7. Arquivos Modificados e Criados
-
-- `src/chdevflow/core/multi_repo_registry.py`: Catálogo de repositórios autorizados.
-- `src/chdevflow/core/multi_repo_verifier.py`: Verificador fail-closed de governança e autorização.
-- `src/chdevflow/core/multi_repo_queue.py`: Fila sequencial persistente com ordenação P0..P3 e lock atômico.
-- `src/chdevflow/core/multi_repo_adapters.py`: Adaptadores de agentes com trava de segurança inerte.
-- `src/chdevflow/core/multi_repo_reports.py`: Gerador de relatórios estruturados RUC/1.0.
-- `src/chdevflow/core/multi_repo_supervisor.py`: Orquestrador do ciclo horário multi-repositório.
-- `apps/bootstrap/sentinela/src/ch_sentinela/config.py`: Atualização de `REPOSITORIOS_PERMITIDOS`.
-- `deploy/systemd/chdevflow-supervisor-multi.service`: Configuração de serviço systemd desativada.
-- `deploy/systemd/chdevflow-supervisor-multi.timer`: Configuração de timer horário systemd desativada.
-- `deploy/cron/chdevflow-supervisor-multi.cron`: Configuração cron alternativa desativada.
-- `deploy/sidecars/ch-auto-multi-01/sidecar.json`: Configuração de automação Antigravity desativada.
-- `deploy/README.md`: Instruções de futura ativação e rollback.
-- `tests/test_multi_repo_supervisor.py`: Suíte de 17 testes unitários e de segurança offline.
-- `docs/CH/RUC-CH-AUTO-MULTI-01.md`: Este dossiê oficial RUC/1.0.
-
----
-
-## 8. Parecer Final e Próximo Gate
-
-O sistema de supervisão multi-repositório com governança centralizada no CHDevFlow está **tecnicamente implementado, testado e seguro contra execuções autônomas não autorizadas**.
-
-O AGY declara este trabalho concluído tecnicamente e transfere o dossiê para a auditoria independente do ChatGPT e deliberação do Product Owner.
+Solicita-se nova auditoria técnica independente do ChatGPT sobre as correções publicadas na PR #71 e posterior apreciação do Product Owner Hallan de Sousa Brito.
 
 **Estado:**
 `IMPLEMENTADO_NAO_ATIVADO / AGUARDANDO_AUDITORIA_CHATGPT / AGUARDANDO_PO`

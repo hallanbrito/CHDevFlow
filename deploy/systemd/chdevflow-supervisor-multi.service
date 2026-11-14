@@ -27,7 +27,7 @@ Environment="CH_SENTINELA_DATA_DIR=/home/hallan/CHDevFlow/.ch_sentinela"
 Environment="CH_DISPATCHER_MODE=DRY_RUN"
 Environment="CH_EXTRA_COST_LIMIT_BRL=0.00"
 
-ExecStart=/usr/bin/python3 -m chdevflow.core.multi_repo_supervisor --once --dry-run
+ExecStart=/usr/bin/python3 -m chdevflow.cli supervise --multi-repo --once --dry-run --output-report /home/hallan/CHDevFlow/.ch_sentinela/relatorios/RUC-CH-AUTO-MULTI-01-CICLO-ATUAL.md
 
 TimeoutStartSec=900
 StandardOutput=journal

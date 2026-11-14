@@ -8,5 +8,5 @@
 #
 # Intervalo: A cada 60 minutos (no minuto 0)
 #
-# 0 * * * * cd /home/hallan/CHDevFlow && PYTHONPATH=src:apps/bootstrap/sentinela/src /usr/bin/python3 -m chdevflow.core.multi_repo_supervisor --once --dry-run >> /home/hallan/CHDevFlow/.ch_sentinela/cron_supervisor_multi.log 2>&1
+# 0 * * * * cd /home/hallan/CHDevFlow && PYTHONPATH=src:apps/bootstrap/sentinela/src /usr/bin/python3 -m chdevflow.cli supervise --multi-repo --once --dry-run >> /home/hallan/CHDevFlow/.ch_sentinela/cron_supervisor_multi.log 2>&1
 # ==============================================================================

@@ -38,6 +38,82 @@ _PESO_PRIORIDADE: dict[str, int] = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 _PESO_RISCO: dict[str, int] = {"BAIXO": 0, "MEDIO": 1, "ALTO": 2, "CRITICO": 3}
 
 
+class SupervisorLockError(RuntimeError):
+    """Exceção levantada quando outro processo detém o lock exclusivo."""
+    pass
+
+
+class InterprocessFileLock:
+    """Controle estrito de exclusão mútua interprocesso baseado em criação atômica no SO (O_CREAT | O_EXCL)."""
+
+    def __init__(
+        self,
+        lock_path: Path,
+        max_age_seconds: int = 900,
+        timeout_seconds: float | None = None,
+    ) -> None:
+        self.lock_path = Path(lock_path)
+        self.max_age_seconds = max_age_seconds
+        self.timeout_seconds = timeout_seconds
+        self._acquired = False
+
+    def __enter__(self) -> InterprocessFileLock:
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.release()
+
+    def acquire(self) -> bool:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.lock_path.exists():
+            try:
+                conteudo = json.loads(self.lock_path.read_text(encoding="utf-8"))
+                ts_inicio = datetime.fromisoformat(conteudo.get("timestamp_utc", ""))
+                idade = (datetime.now(timezone.utc) - ts_inicio).total_seconds()
+                if idade > self.max_age_seconds:
+                    try:
+                        self.lock_path.unlink()
+                    except OSError:
+                        pass
+                else:
+                    raise SupervisorLockError(
+                        f"Lock interprocesso ativo (PID {conteudo.get('pid')}, "
+                        f"iniciado há {int(idade)}s). Operação concorrente bloqueada."
+                    )
+            except (json.JSONDecodeError, ValueError, KeyError):
+                raise SupervisorLockError(
+                    f"Arquivo de lock existente '{self.lock_path}' impede operação concorrente."
+                )
+
+        try:
+            fd = os.open(
+                str(self.lock_path),
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            payload = {
+                "pid": os.getpid(),
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            }
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            self._acquired = True
+            return True
+        except FileExistsError as exc:
+            raise SupervisorLockError(
+                f"Lock concorrente detectado: arquivo '{self.lock_path}' já existe."
+            ) from exc
+
+    def release(self) -> None:
+        if self._acquired and self.lock_path.exists():
+            try:
+                self.lock_path.unlink()
+            except OSError:
+                pass
+            self._acquired = False
+
+
 @dataclass(frozen=True)
 class ItemFila:
     """Entrada ordenada e imutável de uma missão na fila sequencial."""
@@ -102,6 +178,8 @@ class FilaSequencialMultiRepo:
             self.caminho_arquivo = Path(caminho_arquivo)
         else:
             self.caminho_arquivo = obter_diretorio_dados() / NOME_ARQUIVO_FILA_PADRAO
+        self.caminho_lock = self.caminho_arquivo.with_suffix(".lock")
+        self._file_lock = InterprocessFileLock(self.caminho_lock)
 
         self._itens_fila: list[ItemFila] = []
         self._reservas: dict[str, RegistroReserva] = {}
@@ -182,9 +260,12 @@ class FilaSequencialMultiRepo:
             Lista ordenada dos itens atualmente na fila.
         """
         titulos = titulos or {}
-        with self._lock:
-            chaves_atuais = {item.chave for item in self._itens_fila}
-            novos_itens = list(self._itens_fila)
+        with self._lock, self._file_lock:
+            self._carregar_estado()
+            # Mapeamento único por (repositório, número da issue)
+            itens_por_alvo: dict[tuple[str, int], ItemFila] = {
+                (item.repositorio, item.issue_number): item for item in self._itens_fila
+            }
 
             for p in pareceres:
                 if not p.elegivel:
@@ -195,13 +276,15 @@ class FilaSequencialMultiRepo:
                 digest = p.baseline_sha or ""
                 chave = f"{repo}:{num}:{digest}"
 
-                # Não reinsere se já estiver na fila
-                if chave in chaves_atuais:
-                    continue
-
-                # Não reinsere se já tiver reserva concluída com sucesso
-                reserva_existente = self._reservas.get(chave)
+                # Não reinsere se já tiver reserva ativa ou concluída com sucesso
+                reserva_existente = (
+                    self._reservas.get(chave)
+                    or self._reservas.get(f"{chave}:1")
+                    or self._reservas.get(f"{chave}:2")
+                    or self._reservas.get(f"{repo}:{num}::1")
+                )
                 if reserva_existente and reserva_existente.estado in ("COMPLETED", "CLAIMED", "RUNNING"):
+                    itens_por_alvo.pop((repo, num), None)
                     continue
 
                 titulo = titulos.get(chave, f"Missão #{num} em {repo}")
@@ -220,10 +303,10 @@ class FilaSequencialMultiRepo:
                     enfileirado_em_utc=datetime.now(timezone.utc).isoformat(),
                     mission_digest=digest,
                 )
-                novos_itens.append(item)
-                chaves_atuais.add(chave)
+                itens_por_alvo[(repo, num)] = item
 
             # Ordenação canônica por rank (Prioridade P0..P3 -> Risco BAIXO..ALTO -> Timestamp)
+            novos_itens = list(itens_por_alvo.values())
             novos_itens.sort(key=lambda x: x.rank)
             self._itens_fila = novos_itens
             self._salvar_estado()
@@ -231,12 +314,14 @@ class FilaSequencialMultiRepo:
 
     def obter_fila(self) -> tuple[ItemFila, ...]:
         """Retorna a visão imutável atual da fila ordenada."""
-        with self._lock:
+        with self._lock, self._file_lock:
+            self._carregar_estado()
             return tuple(self._itens_fila)
 
     def obter_reserva_ativa(self) -> RegistroReserva | None:
         """Retorna a reserva ativa no momento, ou None se livre."""
-        with self._lock:
+        with self._lock, self._file_lock:
+            self._carregar_estado()
             if self._reserva_ativa and self._reserva_ativa in self._reservas:
                 return self._reservas[self._reserva_ativa]
             return None
@@ -247,7 +332,7 @@ class FilaSequencialMultiRepo:
         """Reserva atomicamente a próxima missão elegível da fila global.
 
         Garante exclusão mútua global: se já houver uma missão ativa em qualquer
-        repositório do catálogo, recusa nova reserva levantando ConcorrenciaBloqueadaErro.
+        repositório do catálogo, recusa nova reserva levantando RuntimeError.
 
         Args:
             run_id: Identificador único e rastreável do ciclo/execução.
@@ -263,7 +348,8 @@ class FilaSequencialMultiRepo:
         if attempt not in (1, 2):
             raise ValueError(f"Tentativa {attempt} inválida (permitido 1 ou 2).")
 
-        with self._lock:
+        with self._lock, self._file_lock:
+            self._carregar_estado()
             # 1. Regra de concorrência irrevogável: exatamente 1 missão ativa globalmente
             if self._reserva_ativa is not None:
                 ativa = self._reservas.get(self._reserva_ativa)
@@ -340,7 +426,8 @@ class FilaSequencialMultiRepo:
         Returns:
             RegistroReserva atualizado.
         """
-        with self._lock:
+        with self._lock, self._file_lock:
+            self._carregar_estado()
             if chave not in self._reservas:
                 raise ValueError(f"Reserva '{chave}' desconhecida.")
 
