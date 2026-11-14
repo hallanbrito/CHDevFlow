@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 from threading import Lock
-from typing import Any, Callable
+from typing import Any
 
 SCHEMA = "chdevflow.pipeline.manual/v1"
 MAX_TIMEOUT = 900
@@ -160,9 +160,9 @@ def plan_manual_mission(mission: Mission, *, observed_sha: str | None = None) ->
     reason = ""
     if mission.schema != SCHEMA:
         reason = "Schema desconhecido"
-    elif not re.fullmatch(r"[A-Za-z0-9_.-]{3,80}", mission.mission_id):
+    elif not isinstance(mission.mission_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{3,80}", mission.mission_id):
         reason = "ID de missão inválido"
-    elif not re.fullmatch(r"[\w.-]+/[\w.-]+", mission.repository):
+    elif not isinstance(mission.repository, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", mission.repository):
         reason = "Repositório inválido"
     elif type(mission.issue) is not int or mission.issue < 1:
         reason = "Issue inválida"
@@ -209,9 +209,9 @@ class SimulatedPipeline:
         self._busy = False
         self._done: dict[str, dict[str, Any]] = {}
 
-    def run_fixture(self, mission: Mission, workers: dict[str, Callable[[], str]],
+    def run_fixture(self, mission: Mission, workers: dict[str, str],
                     *, tests_ok: bool) -> dict[str, Any]:
-        """workers devem ser fakes; nunca invoca CLI e nunca retorna autorização."""
+        """Consome respostas PRÉ-GRAVADAS; não aceita callbacks nem executores."""
         digest = mission.digest
         with self._lock:
             if digest in self._done:
@@ -223,14 +223,14 @@ class SimulatedPipeline:
         try:
             if set(workers) != {"agy", "codex"}:
                 raise ValueError("Fakes de AGY e Codex obrigatórios")
-            agy = workers["agy"]()
+            agy = workers["agy"]
             stages["agy"] = "PASS" if isinstance(agy, str) and agy.strip() else "BLOCKED"
             if stages["agy"] != "PASS":
                 raise ValueError("AGY sem entrega")
             stages["testes"] = "PASS" if tests_ok is True else "BLOCKED"
             if stages["testes"] != "PASS":
                 raise ValueError("Testes falharam")
-            codex = workers["codex"]()
+            codex = workers["codex"]
             stages["codex"] = "PASS" if isinstance(codex, str) and codex.startswith("APROVAR_LAB") else "BLOCKED"
             if stages["codex"] != "PASS":
                 raise ValueError("Codex vetou")
