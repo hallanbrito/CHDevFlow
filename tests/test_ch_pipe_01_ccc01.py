@@ -146,6 +146,10 @@ class CCC01Tests(unittest.TestCase):
         self.assertEqual(report.returns_used, 2)
         self.assertEqual(len(report.attempts), 3)
         self.assertFalse((self.evidence / "attempt-03" / "feedback_para_agy.md").exists())
+        import json
+        escalation = json.loads((self.evidence / "escalonamento_po.json").read_text())
+        self.assertEqual(escalation["status"], "AGUARDANDO_PO")
+        self.assertEqual(escalation["publication_status"], "PENDENTE_DE_AUTORIZACAO")
         self.assertIn("AGUARDANDO_PO", (self.evidence / "RELATORIO_COMPLETO_CH1.md").read_text())
 
     def test_teste_python_falha_nao_chama_codex_nova_rodada(self):
