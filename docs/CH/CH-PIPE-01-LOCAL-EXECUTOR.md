@@ -49,3 +49,18 @@ ch pipeline local-once --i-accept-local-risk
 Para decidir onde guardar as pastas e mudar o timeout: `ch pipeline local-once --root CAMINHO --timeout 480 --i-accept-local-risk`.
 
 O comando usa o pipeline F5 existente, sem nova autenticação e sem transferir a execução para o Work. Cada disparo opt-in executa uma única missão e retorna código 0 apenas com parecer `LAB_APROVADO_AGUARDANDO_CH1`. Incerteza de credencial do AGY é registrada como bloqueio com dossiê.
+
+## Ciclo CCC-01 de correcao controlada (experimental)
+
+Com AGY e Codex autenticados no **mesmo usuario** do Windows ou Linux:
+
+```powershell
+ch pipeline local-doctor
+ch pipeline local-cycle --timeout 480 --i-accept-local-risk
+```
+
+O `local-cycle` é a nova entrada com **até 3 chamadas do AGY e 2 devoluções**, enquanto `local-once` e `lab-pilot` preservam a semântica anterior de apenas uma tentativa. O ciclo utiliza aceites independentes mais rigorosos (10 testes, incluindo objeto que simula string por `__eq__`). Se os testes falharem, não chama Codex naquela tentativa; devolve relatório ao AGY quando houver tentativas restantes. Após veto explícito do Codex, devolve o parecer ao AGY. Aprovou, encerrou sem rodadas extras.
+
+O `--timeout` é **compartilhado pelo ciclo inteiro**, não multiplicado por tentativa. Cada execução cria pastas novas e dossiê `RELATORIO_COMPLETO_CH1.md`, estado `execucao.json` e subpastas `attempt-01` a `attempt-03`. Se houver três reprovações, grava também `escalonamento_po.json` para supervisão **local**. Não há cartão automático no GitHub Project #2 sem autorização de escrita.
+
+A CI utiliza agentes simulados; **sem prova de integração real até executar a CLI autenticada no host**. Não há medição de custo/tokens nem isolamento completo do sistema. Sessões existentes são herdadas do terminal, sem copiar tokens. Após crash, o mesmo diretório não é reiniciado automaticamente, evitando duplicação de chamadas.
