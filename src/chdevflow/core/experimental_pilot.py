@@ -172,6 +172,55 @@ def _files(workspace: Path) -> dict[str, bytes]:
     return found
 
 
+
+def diagnose_existing_lab(*, workspace: Path, evidence: Path) -> dict:
+    """Inspeciona as pastas do piloto antigo SEM executar modelos/processos.
+
+    Retorna apenas metadados/nomes relativos; nunca lê ou imprime o texto
+    da resposta AGY, que pode conter dados que precisam de revisão local.
+    """
+    workspace = workspace.expanduser().absolute()
+    evidence = evidence.expanduser().absolute()
+    if not workspace.is_dir() or workspace.is_symlink():
+        raise ValueError("Workspace do piloto não encontrada ou simbólica")
+    if not evidence.is_dir() or evidence.is_symlink():
+        raise ValueError("Pasta de evidências não encontrada ou simbólica")
+    files: list[str] = []
+    dirs: list[str] = []
+    symlinks: list[str] = []
+    for base, directories, names in os.walk(workspace, followlinks=False):
+        for name in directories + names:
+            path = Path(base) / name
+            relative = path.relative_to(workspace).as_posix()
+            if path.is_symlink():
+                symlinks.append(relative)
+            elif path.is_dir():
+                dirs.append(relative)
+            else:
+                files.append(relative)
+    present = set(files)
+    expected = ALLOWED
+    # Os nomes são locais, mas não devolver estrutura ilimitada de um diretório
+    # potencialmente contaminado por uma ferramenta externa.
+    return {
+        "status": "DIAGNOSTICO_SOMENTE_LEITURA",
+        "workspace": str(workspace),
+        "evidence_dir": str(evidence),
+        "expected_files": sorted(expected),
+        "present_files": sorted(files)[:50],
+        "missing_files": sorted(expected - present),
+        "extra_files": sorted(present - expected)[:50],
+        "extra_directories": sorted(set(dirs) - {"src", "tests"})[:50],
+        "symlinks": sorted(symlinks)[:50],
+        "agy_log_exists": (evidence / "resposta_agy.md").is_file(),
+        "agy_log_bytes": (
+            (evidence / "resposta_agy.md").stat().st_size
+            if (evidence / "resposta_agy.md").is_file() else None
+        ),
+        "files_truncated": len(files) > 50,
+    }
+
+
 def _report(folder: Path, data: LabResult) -> None:
     (folder / "execucao.json").write_text(
         json.dumps(data.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -229,8 +278,16 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         if agy_result.code or agy_result.timed_out:
             raise ValueError("AGY falhou ou excedeu timeout")
         generated = _files(workspace)
-        if set(generated) != set(original) | {SOURCE}:
-            raise ValueError("Arquivos esperados ausentes ou extras criados")
+        expected = set(original) | {SOURCE}
+        missing = sorted(expected - set(generated))
+        extra_files = sorted(set(generated) - expected)
+        if missing or extra_files:
+            data.stages["AGY"] = "BLOQUEADO"
+            data.stages["ESCOPO"] = "BLOQUEADO"
+            raise ValueError(
+                f"Arquivos inconsistentes: ausentes={missing[:15]}; "
+                f"extras={extra_files[:15]}"
+            )
         if any(generated[key] != original[key] for key in original):
             raise ValueError("AGY alterou mission ou teste independente")
         content = generated[SOURCE].decode("utf-8")
@@ -275,6 +332,11 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         data.stages["CODEX"] = "PASS"
         data.status = "LAB_APROVADO_AGUARDANDO_CH1"
     except (ValueError, OSError, UnicodeError, SyntaxError, subprocess.SubprocessError) as exc:
+        # Uma chamada que terminou mas deixou arquivos insuficientes não deve
+        # ficar com status EM_EXECUCAO no relatório final.
+        for stage, value in tuple(data.stages.items()):
+            if value == "EM_EXECUCAO":
+                data.stages[stage] = "BLOQUEADO"
         data.findings.append(_clean(str(exc)))
         data.status = "LAB_BLOQUEADO"
     finally:
