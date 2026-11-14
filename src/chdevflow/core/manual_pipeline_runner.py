@@ -11,7 +11,6 @@ import hashlib
 import json
 from pathlib import Path
 import re
-import subprocess
 from threading import Lock
 from typing import Any
 
@@ -23,7 +22,6 @@ _SECRET = re.compile(
     r"|sk-[A-Za-z0-9_-]{18,}|(?:(?:api[_-]?key|token|password)\s*[:=]\s*)[^\s]+)"
 )
 _AGENTS = ("agy", "codex")
-_RUNTIME_GATE_NOT_ISSUED = object()  # #69: nenhum construtor público em F2
 
 
 @dataclass(frozen=True)
@@ -106,39 +104,16 @@ class ProcessAdapter:
 
     def _invoke_inactive(self, agent: str, prompt: str, cwd: Path,
                          timeout_seconds: int, *, execution_gate: object | None = None) -> ProcessResult:
-        """Implementação interna NÃO conectada a nenhum comando público.
+        """F3: execução permanentemente inibida, inclusive acesso direto.
 
-        Só pode ser ativada por futura revisão de gates GitHub+custo em #69.
-        Não representa uma sandbox de segurança nem permite execução hoje.
+        Python não tem modificadores private/segredos seguros. O antigo sentinela
+        interno podia ser importado por outro módulo, contornando a intenção de
+        bloquear. Não existe mais código de subprocessos reais nesta classe.
         """
-        # Sem provedor de gate externo em F2, este método deve permanecer
-        # inacessível ao produto: invocar diretamente sem gate não executa.
-        if execution_gate is not _RUNTIME_GATE_NOT_ISSUED:
-            raise PermissionError("BLOQUEADO_ATIVACAO: gate GH/custo não implementado")
-        if agent not in _AGENTS or not cwd.is_dir() or cwd.is_symlink():
-            raise ValueError("Agente ou worktree inválida")
-        if type(timeout_seconds) is not int or not 0 < timeout_seconds <= MAX_TIMEOUT:
-            raise ValueError("Timeout inválido")
-        # Detalhes de execução só são alcançáveis por código que explicitamente
-        # chamar este método interno. Nenhum CLI ou teste invoca este método.
-        import time
-        began = time.monotonic()
-        try:
-            proc = subprocess.run(
-                self.command(agent), cwd=cwd, input=prompt, text=True,
-                encoding="utf-8", errors="replace", capture_output=True,
-                timeout=timeout_seconds, check=False,
-            )
-            out = self.sanitize(proc.stdout or "")
-            err = self.sanitize(proc.stderr or "")
-            denied = bool(re.search(r"(?i)permission denied|access denied|not authorized", out+"\n"+err))
-            status = "SUCESSO" if proc.returncode == 0 and not denied and not err.strip() and out.strip() else "BLOQUEADO"
-            return ProcessResult(agent, status, proc.returncode, out, err,
-                                 time.monotonic()-began)
-        except subprocess.TimeoutExpired:
-            return ProcessResult(agent, "TIMEOUT", -1, "", "Timeout interrompeu processo", time.monotonic()-began)
-        except (OSError, UnicodeError):
-            return ProcessResult(agent, "BLOQUEADO", -1, "", "Falha ao iniciar CLI", time.monotonic()-began)
+        raise PermissionError(
+            "BLOQUEADO_ATIVACAO: F3 somente valida gate; execução real requer "
+            "nova autorização por missão, custo, isolamento e executor revisado"
+        )
 
 
 def _safe_relative(path: str, root: Path) -> bool:
