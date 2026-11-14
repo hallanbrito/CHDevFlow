@@ -130,6 +130,22 @@ class ManualLabPipelineTests(unittest.TestCase):
         (self.recheck / "auditoria_codex.md").unlink()
         self.assertEqual(inspect_lab_dossier(self.recheck).state, "BLOQUEADO")
 
+    def test_windows_crlf_consistente(self):
+        # Path.write_text no Windows pode converter LF -> CRLF.
+        for name in (
+            "resposta_agy.md", "auditoria_codex.md", "alteracoes.patch",
+            "logs_testes.txt", "RELATORIO_COMPLETO_CH1.md",
+        ):
+            p = self.recheck / name
+            p.write_bytes(p.read_bytes().replace(b"\\n", b"\\r\\n"))
+        result = inspect_lab_dossier(self.recheck)
+        self.assertEqual(result.state, "LAB_CONSISTENTE_AGUARDANDO_CH1", result.findings)
+
+    def test_metadados_malformados_bloqueados_sem_traceback(self):
+        self.recheck_data["etapas"]["codex"] = None
+        self.write_fixture()
+        self.assertEqual(inspect_lab_dossier(self.recheck).state, "BLOQUEADO")
+
     def test_simulacao_nao_passa(self):
         self.recheck_data["simulate"] = True
         self.write_fixture()
