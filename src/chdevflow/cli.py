@@ -13,6 +13,7 @@ from chdevflow.core.evidence import render_evidence_human, run_verification
 from chdevflow.core.init import run_init
 from chdevflow.core.mission import create_mission
 from chdevflow.core.manual_lab_pipeline import inspect_lab_dossier, render_inspection
+from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -356,6 +357,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pipeline_inspect.add_argument("--run-dir", type=Path, required=True)
     pipeline_inspect.add_argument("--json", action="store_true")
+    pipeline_plan = pipeline_subs.add_parser(
+        "plan", help="Planeja missão, sem autorização nem chamada de agente."
+    )
+    pipeline_plan.add_argument("--mission", type=Path, required=True)
+    pipeline_plan.add_argument("--json", action="store_true")
+    pipeline_run = pipeline_subs.add_parser(
+        "run", help="Inerte nesta fatia: execução real exige gate #69."
+    )
+    pipeline_run.add_argument("--mission", type=Path, required=True)
 
     # Subcomando: tree
     parser_tree = subparsers.add_parser(
@@ -566,15 +576,41 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     if args.command == "pipeline":
-        if getattr(args, "pipeline_action", None) != "inspect":
-            print("Uso: ch pipeline inspect --run-dir <PASTA>", file=sys.stderr)
-            return 1
-        result = inspect_lab_dossier(args.run_dir)
-        if args.json:
-            print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
-        else:
-            print(render_inspection(result))
-        return 0 if result.state == "LAB_CONSISTENTE_AGUARDANDO_CH1" else 1
+        if getattr(args, "pipeline_action", None) == "inspect":
+            result = inspect_lab_dossier(args.run_dir)
+            if args.json:
+                print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+            else:
+                print(render_inspection(result))
+            return 0 if result.state == "LAB_CONSISTENTE_AGUARDANDO_CH1" else 1
+        if args.pipeline_action == "run":
+            print("BLOQUEADO_ATIVACAO: nenhum agente real pode ser iniciado; "
+                  "exige gate específico PO/custo #69.", file=sys.stderr)
+            return 2
+        if args.pipeline_action == "plan":
+            try:
+                mission = load_manifest(args.mission)
+                root = Path(mission.worktree)
+                observed = None
+                if root.is_dir() and not root.is_symlink():
+                    check = subprocess.run(
+                        ["git", "rev-parse", "--verify", "HEAD"], cwd=root,
+                        text=True, capture_output=True, timeout=8, check=False
+                    )
+                    if check.returncode == 0:
+                        observed = check.stdout.strip()
+                plan = plan_manual_mission(mission, observed_sha=observed)
+                if args.json:
+                    print(json.dumps(plan.to_dict(), indent=2, ensure_ascii=False))
+                else:
+                    print(f"{plan.state}: {plan.reason}\\nDigest: {plan.mission_digest}")
+                return 0 if plan.state == "PLANEJADO_AGUARDANDO_GATE" else 1
+            except (ValueError, OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
+                print(f"BLOQUEADO: pré-validação falhou ({type(exc).__name__})",
+                      file=sys.stderr)
+                return 1
+        print("Uso: ch pipeline inspect|plan|run", file=sys.stderr)
+        return 1
 
     if args.command == "tree":
         try:
