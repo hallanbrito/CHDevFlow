@@ -1,7 +1,7 @@
 # CH-PIPE-01 — Ciclo de Correção Controlada (CCC-01)
 
 **Status da decisão:** APROVADA PELO PO em 14/11/2026 (America/Fortaleza).  
-**Status de implementação:** PENDENTE — documento de política/contrato; não constitui executor homologado.  
+**Status de implementação:** CONTROLADOR EXPERIMENTAL EM DRAFT PR #83 — testes e execução ponta a ponta reais ainda sujeitos a validação; não homologado para produção.  
 **Origem:** Issue #78; implementação alvo: Draft PR #83 e fatias subsequentes.  
 **Papéis:** AGY implementador; Python/CHDevFlow orquestrador; Codex auditor independente; CH-1 supervisão; PO autoridade de decisão/escalonamento.
 
@@ -85,3 +85,16 @@ O PO pode decidir: corrigir requisitos, delegar nova missão com autorização n
 ## 8. Fronteiras de autorização
 
 Esta decisão aprova a **política e sua implementação em branch/PR para revisão**. Não autoriza merge, deploy, execução autônoma/cron, gastos de API, incremento de cotas, bypass de limites ou acesso de escrita ao GitHub Project #2. O piloto real continua opt-in no computador do operador. A aplicação futura a missões gerais dependerá de homologação do controlador.
+
+## 9. Implementação experimental disponível em Draft PR #83
+
+- Módulos: `controlled_cycle.py` (orquestrador), `experimental_pilot.py` (cada tentativa F5) e `local_executor.py` (CLI local).
+- Entrada: `ch pipeline local-cycle --i-accept-local-risk` (Windows e Linux, com AGY/Codex autenticados no **mesmo usuário** da sessão).
+- Primeira tentativa recebe a missão restrita de estoque e aceite independente adversarial `type(tipo) is str`. Havendo reprovação técnica dos testes ou veto **explícito** do Codex, gera `feedback_para_agy.md` com logs, parecer e SHA do código anterior e devolve ao AGY.
+- Total absoluto: **3 AGY**, no máximo 3 Codex, **2 devoluções**. Aprovação antecipada encerra imediatamente. Timeouts, erro de CLI/credencial, saída sem veredito e alteração de escopo bloqueiam **sem retry automático**.
+- O tempo `--timeout 480` é **global para as três tentativas**, não uma alocação por tentativa. Sem medição independente de tokens/cotas/custos.
+- Pasta raiz padrão: `~/CHDevFlow-Labs`; cria dois diretórios novos por execução, e subpastas `attempt-01`, `attempt-02`, `attempt-03` para histórico. Dossiê raiz `RELATORIO_COMPLETO_CH1.md`, estado atômico em `execucao.json` (escrito antes das chamadas).
+- **Retomada segura:** o controlador deliberadamente **não retoma automaticamente** uma execução já iniciada; caminhos existentes são recusados. Isso evita repetir chamadas de IA após crash, mas a recuperação manual supervisionada do mesmo `execution_id` ainda não está implementada.
+- **Escalonamento:** `AGUARDANDO_PO` é persistido no dossiê local. **Não há escrita automática no Project #2**; a publicação do escalonamento na esteira remota também depende da autorização de integração e não deve ser anunciada como implementada.
+- Testes de unidade offline: `python -m unittest tests.test_ch_pipe_01_ccc01 -v` ou `python -m unittest discover -s tests -p 'test_ch_pipe_01_ccc01.py' -v`.
+- A implementação nesta PR é ainda **restrita ao piloto de estoque**: aplicar a qualquer missão GitHub requer uma fase posterior de generalização e segurança. Não ativa o `ch pipeline run` de produção.
