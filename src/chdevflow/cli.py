@@ -17,6 +17,7 @@ from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mis
 from chdevflow.core.pilot_gate import check_gate_live
 from chdevflow.core.pilot_readiness import inspect_readiness, plan_fake_sandbox
 from chdevflow.core.experimental_pilot import run_local_pilot, diagnose_existing_lab
+from chdevflow.core.local_executor import main as local_executor_main
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -383,6 +384,16 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_sandbox.add_argument("--runtime", choices=["docker", "podman"], required=True)
     pipeline_sandbox.add_argument("--image", required=True)
     pipeline_sandbox.add_argument("--json", action="store_true")
+    pipeline_doctor = pipeline_subs.add_parser(
+        "local-doctor", help="Verifica CLIs AGY/Codex na sessao local sem chamar modelos."
+    )
+    pipeline_once = pipeline_subs.add_parser(
+        "local-once", help="Executa AGY → testes → Codex em workspace novo do host."
+    )
+    pipeline_once.add_argument("--root", type=Path)
+    pipeline_once.add_argument("--timeout", type=int, default=480)
+    pipeline_once.add_argument("--i-accept-local-risk", action="store_true")
+
     pipeline_lab = pipeline_subs.add_parser(
         "lab-pilot", help="Piloto descartável manual AGY→testes→Codex; exige aceite explícito."
     )
@@ -646,6 +657,16 @@ def main(argv: list[str] | None = None) -> int:
             except (ValueError, OSError) as exc:
                 print(f"LAB_DIAGNOSE_BLOQUEADO: {type(exc).__name__}: {exc}", file=sys.stderr)
                 return 1
+        if args.pipeline_action == "local-doctor":
+            return local_executor_main(["doctor"])
+        if args.pipeline_action == "local-once":
+            forwarded = ["run", "--timeout", str(args.timeout)]
+            if args.root is not None:
+                forwarded.extend(["--root", str(args.root)])
+            if args.i_accept_local_risk:
+                forwarded.append("--i-accept-local-risk")
+            return local_executor_main(forwarded)
+
         if args.pipeline_action == "lab-pilot":
             try:
                 outcome = run_local_pilot(
@@ -719,7 +740,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"BLOQUEADO: pré-validação falhou ({type(exc).__name__})",
                       file=sys.stderr)
                 return 1
-        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|lab-diagnose|lab-pilot|run", file=sys.stderr)
+        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|lab-diagnose|lab-pilot|local-doctor|local-once|run", file=sys.stderr)
         return 1
 
     if args.command == "tree":
