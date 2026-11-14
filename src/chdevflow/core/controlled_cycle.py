@@ -15,7 +15,7 @@ import time
 from uuid import uuid4
 
 from chdevflow.core.experimental_pilot import (
-    ACCEPTANCE_CCC, SOURCE, LabResult, _clean, _files, _validate_estoque_ast,
+    ACCEPTANCE_CCC, MISSION, SOURCE, LabResult, _clean, _files, _validate_estoque_ast,
     run_local_pilot,
 )
 
@@ -97,6 +97,8 @@ def _feedback_from_attempt(*, attempt: int, workspace: Path,
     if (workspace / "tests" / "test_acceptance.py").read_text(
         encoding="utf-8") != ACCEPTANCE_CCC:
         raise ValueError("Retorno inseguro: aceite independente alterado")
+    if (workspace / "mission.txt").read_text(encoding="utf-8") != MISSION:
+        raise ValueError("Retorno inseguro: missao original alterada")
     testlog = evidence / "logs_testes.txt"
     codexlog = evidence / "auditoria_codex.md"
     if result.failure_kind == "CODEX_REPROVOU" and not codexlog.is_file():
