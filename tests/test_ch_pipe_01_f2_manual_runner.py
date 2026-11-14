@@ -43,16 +43,26 @@ class ManualF2Tests(TestCase):
     def mission(self):
         return Mission.from_dict(self.data)
 
+    def plan(self, *, sha=SHA, branch="feature/f2", clean=True):
+        return plan_manual_mission(self.mission(), observed_sha=sha,
+                                   observed_branch=branch, worktree_clean=clean)
+
     def test_plano_real_e_bloqueio_de_execucao(self):
-        plan = plan_manual_mission(self.mission(), observed_sha=SHA)
+        plan = self.plan()
         self.assertEqual(plan.state, "PLANEJADO_AGUARDANDO_GATE")
         self.assertFalse(plan.may_execute_agents)
         self.assertEqual(len(plan.mission_digest), 64)
         self.assertIn("Codex".upper(), plan.stages)
 
     def test_diferenca_de_baseline_bloqueia(self):
-        self.assertEqual(plan_manual_mission(self.mission(), observed_sha="b"*40).state, "BLOQUEADO")
-        self.assertEqual(plan_manual_mission(self.mission()).state, "BLOQUEADO")
+        self.assertEqual(self.plan(sha="b"*40).state, "BLOQUEADO")
+        self.assertEqual(self.plan(sha=None).state, "BLOQUEADO")
+
+    def test_branch_main_ou_dirty_bloqueados(self):
+        self.assertEqual(self.plan(branch="main").state, "BLOQUEADO")
+        self.assertEqual(self.plan(branch="master").state, "BLOQUEADO")
+        self.assertEqual(self.plan(branch=None).state, "BLOQUEADO")
+        self.assertEqual(self.plan(clean=False).state, "BLOQUEADO")
 
     def test_timeout_custo_e_esquema_fechados(self):
         self.data["timeout_seconds"] = 901
@@ -131,12 +141,19 @@ class ManualF2Tests(TestCase):
         manifest = self.root / "mission.json"
         manifest.write_text(json.dumps(self.data), encoding="utf-8")
         with patch("subprocess.run") as mock:
-            mock.return_value.returncode = 0
-            mock.return_value.stdout = SHA
+            def git_result(command, **kwargs):
+                from subprocess import CompletedProcess
+                outputs = {
+                    "rev-parse": SHA,
+                    "branch": "feature/f2",
+                    "status": "",
+                }
+                return CompletedProcess(command, 0, stdout=outputs[command[1]], stderr="")
+            mock.side_effect = git_result
             code = cli_main(["pipeline", "plan", "--mission", str(manifest), "--json"])
             self.assertEqual(code, 0)
-            self.assertEqual(mock.call_count, 1)
-            self.assertEqual(mock.call_args.args[0][:2], ["git", "rev-parse"])
+            self.assertEqual(mock.call_count, 3)
+            self.assertEqual(mock.call_args_list[0].args[0][:2], ["git", "rev-parse"])
 
     def test_dados_fixture_nao_podem_ser_callable(self):
         engine = SimulatedPipeline()
