@@ -17,7 +17,7 @@ for path in (ROOT / "src", ROOT / "apps/bootstrap/sentinela/src"):
 
 from chdevflow.cli import main as cli_main
 from chdevflow.core.experimental_pilot import (
-    ProcessResult, _agent_environment, _files, run_local_pilot, diagnose_existing_lab,
+    ProcessResult, _agent_environment, _clean, _files, run_local_pilot, diagnose_existing_lab,
 )
 
 def agy_envelope(response, *, status="SUCCESS"):
@@ -337,6 +337,13 @@ class ExperimentalPilotTests(unittest.TestCase):
         report = self.run_fake()
         self.assertEqual(report.stages["CODEX"], "BLOQUEADO")
         self.assertEqual(report.codex_verdict, "INDETERMINADO")
+
+    def test_log_remove_url_de_autenticacao_e_chaves(self):
+        url = "https://accounts.google.com/o/oauth2/auth?state=session&code_challenge=local"
+        clean = _clean("Authentication required: " + url + "\napi_key=secret")
+        self.assertNotIn("code_challenge", clean)
+        self.assertNotIn("secret", clean)
+        self.assertIn("Authentication required", clean)
 
     def test_env_elimina_chaves_de_api_sem_expor_valores(self):
         with patch.dict("os.environ", {

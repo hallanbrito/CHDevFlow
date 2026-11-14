@@ -63,6 +63,7 @@ _SECRET = re.compile(
     r"(?i)(?:github_pat_[a-z0-9_]{14,}|gh[opsur]_[a-z0-9_]{16,}"
     r"|sk-[a-z0-9_-]{18,}|(?:token|api[_-]?key|password)\s*[:=]\s*\S+)"
 )
+_OAUTH_URL = re.compile(r"https?://[^\s\"<>]+/(?:oauth2?/|authorize[?])[^\s\"<>]+", re.I)
 _DROP = ("OPENAI_API_KEY", "CODEX_API_KEY", "GOOGLE_API_KEY",
          "GEMINI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "ANTHROPIC_API_KEY")
 
@@ -93,7 +94,7 @@ class LabResult:
 
 
 def _clean(text: str) -> str:
-    return _SECRET.sub("[REDACTED]", text)[:50000]
+    return _SECRET.sub("[REDACTED]", _OAUTH_URL.sub("[OAUTH_URL_REDACTED]", text))[:50000]
 
 
 def _agent_environment() -> dict[str, str]:
