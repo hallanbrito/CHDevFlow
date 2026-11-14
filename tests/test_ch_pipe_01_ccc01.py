@@ -70,7 +70,8 @@ class CCC01Tests(unittest.TestCase):
         (workspace / "mission.txt").write_text(MISSION, encoding="utf-8")
         (workspace / "tests" / "test_acceptance.py").write_text(ACCEPTANCE_CCC, encoding="utf-8")
         source = SAFE if state == "PASS" else VULNERABLE
-        (workspace / SOURCE).write_text(source, encoding="utf-8")
+        with (workspace / SOURCE).open("w", encoding="utf-8", newline="\n") as out:
+            out.write(source)
         import hashlib
         sha = hashlib.sha256(source.encode("utf-8")).hexdigest()
         (evidence / "logs_testes.txt").write_text("Ran 10 tests\n\nOK", encoding="utf-8")
@@ -81,13 +82,15 @@ class CCC01Tests(unittest.TestCase):
             code_sha256=sha, codex_verdict="APROVAR_LAB",
             workspace=str(workspace), evidence_dir=str(evidence),
         )
-        if state == "VETO":
+        if state in ("VETO", "TAMPER_MISSION"):
             (evidence / "auditoria_codex.md").write_text(
                 "VEREDITO: BLOQUEADO\nFalta type(tipo) is str.", encoding="utf-8")
             result.status = "LAB_BLOQUEADO"
             result.failure_kind = "CODEX_REPROVOU"
             result.codex_verdict = "BLOQUEADO"
             result.stages["CODEX"] = "BLOQUEADO"
+            if state == "TAMPER_MISSION":
+                (workspace / "mission.txt").write_text("missao adulterada", encoding="utf-8")
         elif state == "TEST_FAIL":
             (evidence / "logs_testes.txt").write_text(
                 "FAILED (failures=1) test_tipo_nao_string_eq_enganoso", encoding="utf-8")
@@ -158,6 +161,13 @@ class CCC01Tests(unittest.TestCase):
         self.assertEqual(report.status, "BLOQUEADO_INFRA")
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(report.returns_used, 0)
+
+    def test_missao_adulterada_interrompe_antes_da_devolucao(self):
+        report = self.run_fake(["TAMPER_MISSION", "PASS"])
+        self.assertEqual(report.status, "BLOQUEADO_INFRA")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(report.returns_used, 0)
+        self.assertTrue(any("missao original alterada" in x for x in report.findings))
 
     def test_parecer_codex_indeterminado_nao_gera_retry(self):
         report = self.run_fake(["UNKNOWN_CODEX"])
