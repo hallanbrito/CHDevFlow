@@ -16,6 +16,7 @@ from chdevflow.core.manual_lab_pipeline import inspect_lab_dossier, render_inspe
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
 from chdevflow.core.pilot_gate import check_gate_live
 from chdevflow.core.pilot_readiness import inspect_readiness, plan_fake_sandbox
+from chdevflow.core.experimental_pilot import run_local_pilot
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -382,6 +383,13 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_sandbox.add_argument("--runtime", choices=["docker", "podman"], required=True)
     pipeline_sandbox.add_argument("--image", required=True)
     pipeline_sandbox.add_argument("--json", action="store_true")
+    pipeline_lab = pipeline_subs.add_parser(
+        "lab-pilot", help="Piloto descartável manual AGY→testes→Codex; exige aceite explícito."
+    )
+    pipeline_lab.add_argument("--workspace", type=Path, required=True)
+    pipeline_lab.add_argument("--evidence-dir", type=Path, required=True)
+    pipeline_lab.add_argument("--timeout", type=int, default=480)
+    pipeline_lab.add_argument("--i-accept-local-risk", action="store_true")
     pipeline_run = pipeline_subs.add_parser(
         "run", help="Inerte nesta fatia: execução real exige gate #69."
     )
@@ -616,6 +624,17 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(list(blueprint.command), ensure_ascii=False))
             # Blueprint não é atestado nem execução: nunca retornar 'apto'.
             return 2 if blueprint.status == "PLANO_FAKE_APENAS" else 1
+        if args.pipeline_action == "lab-pilot":
+            try:
+                outcome = run_local_pilot(
+                    workspace=args.workspace, evidence=args.evidence_dir,
+                    timeout=args.timeout, accepted=args.i_accept_local_risk,
+                )
+                print(json.dumps(outcome.to_dict(), indent=2, ensure_ascii=False))
+                return 0 if outcome.status == "LAB_APROVADO_AGUARDANDO_CH1" else 1
+            except (ValueError, PermissionError, OSError) as exc:
+                print(f"LAB_BLOQUEADO: {type(exc).__name__}: {exc}", file=sys.stderr)
+                return 2
         if args.pipeline_action == "run":
             print("BLOQUEADO_ATIVACAO: nenhum agente real pode ser iniciado; "
                   "exige gate específico PO/custo #69.", file=sys.stderr)
@@ -678,7 +697,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"BLOQUEADO: pré-validação falhou ({type(exc).__name__})",
                       file=sys.stderr)
                 return 1
-        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|run", file=sys.stderr)
+        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|lab-pilot|run", file=sys.stderr)
         return 1
 
     if args.command == "tree":
