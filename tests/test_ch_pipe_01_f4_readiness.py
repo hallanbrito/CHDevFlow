@@ -171,6 +171,17 @@ class F4ReadinessTests(unittest.TestCase):
         (self.lab / ".git" / "config").write_text("token", encoding="utf-8")
         self.assertEqual(self.sandbox().status, "BLOQUEADO_ISOLAMENTO")
 
+    def test_diretorio_extra_vazio_bloqueia(self):
+        (self.lab / ".git").mkdir()
+        self.assertEqual(self.sandbox().status, "BLOQUEADO_ISOLAMENTO")
+
+    def test_caminho_com_virgula_nao_vira_opcao_de_mount(self):
+        altered = self.root / "lab,readonly=false"
+        self.lab.rename(altered)
+        self.assertEqual(
+            self.sandbox(lab_dir=altered).status, "BLOQUEADO_ISOLAMENTO"
+        )
+
     def test_lab_com_arquivo_inesperado_bloqueia(self):
         (self.lab / "tests" / "test_real_agent.py").write_text("pass", encoding="utf-8")
         self.assertEqual(self.sandbox().status, "BLOQUEADO_ISOLAMENTO")
