@@ -215,6 +215,25 @@ class OperationalGateTests(unittest.TestCase):
         self.assertIn(status, (1, 2))
         self.assertEqual(mock.call_count, 4)
 
+    def test_adapter_interno_nao_tem_bypass(self):
+        from chdevflow.core.manual_pipeline_runner import ProcessAdapter
+        with patch("subprocess.run", side_effect=AssertionError("AGY/CODEX PROIBIDO")):
+            with self.assertRaises(PermissionError):
+                ProcessAdapter()._invoke_inactive(
+                    "agy", "missao", self.root, 60, execution_gate=object()
+                )
+        from chdevflow.core import manual_pipeline_runner as module
+        self.assertFalse(hasattr(module, "_RUNTIME_GATE_NOT_ISSUED"))
+
+    def test_rejeita_replay_apos_conclusao(self):
+        state = self.root / "state"
+        state.mkdir()
+        store = PilotClaimStore(state)
+        claimed = store.reserve(self.mission.digest, "pilot-run-001")
+        store.finish(claimed, "COMPLETED")
+        with self.assertRaises(ReservationBlocked):
+            store.reserve(self.mission.digest, "pilot-run-002")
+
     def test_cli_run_permanece_bloqueado(self):
         with patch("subprocess.run", side_effect=AssertionError("Nunca executar")):
             exit_code = ch_main(["pipeline", "run", "--mission", "ignored.json"])
