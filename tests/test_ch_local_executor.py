@@ -107,6 +107,31 @@ class LocalExecutorTests(unittest.TestCase):
                 ])
         self.assertEqual(status, 1)
 
+    def test_ch_pipeline_local_doctor_encaminha_ao_executor(self):
+        from chdevflow.cli import main as ch_main
+        with patch("chdevflow.cli.local_executor_main", return_value=0) as called:
+            self.assertEqual(ch_main(["pipeline", "local-doctor"]), 0)
+        called.assert_called_once_with(["doctor"])
+
+    def test_ch_pipeline_local_once_exige_opt_in_no_executor(self):
+        from chdevflow.cli import main as ch_main
+        with patch("chdevflow.cli.local_executor_main", return_value=2) as called:
+            code = ch_main(["pipeline", "local-once", "--timeout", "300"])
+        self.assertEqual(code, 2)
+        called.assert_called_once_with(["run", "--timeout", "300"])
+
+    def test_ch_pipeline_local_once_repassa_flag_e_root(self):
+        from chdevflow.cli import main as ch_main
+        with tempfile.TemporaryDirectory() as root:
+            with patch("chdevflow.cli.local_executor_main", return_value=0) as called:
+                code = ch_main(["pipeline", "local-once", "--root", root,
+                                "--timeout", "180", "--i-accept-local-risk"])
+            self.assertEqual(code, 0)
+            called.assert_called_once_with([
+                "run", "--timeout", "180", "--root", root,
+                "--i-accept-local-risk",
+            ])
+
 
 if __name__ == "__main__":
     unittest.main()
