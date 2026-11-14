@@ -9,23 +9,21 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import subprocess
-import sys
 from threading import Lock
 from typing import Any
 
 SCHEMA = "chdevflow.pipeline.manual/v1"
 MAX_TIMEOUT = 900
 _SHA = re.compile(r"^[0-9a-fA-F]{40}$")
-_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _SECRET = re.compile(
     r"(?i)(?:gh[opsur]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,}"
     r"|sk-[A-Za-z0-9_-]{18,}|(?:(?:api[_-]?key|token|password)\s*[:=]\s*)[^\s]+)"
 )
 _AGENTS = ("agy", "codex")
+_RUNTIME_GATE_NOT_ISSUED = object()  # #69: nenhum construtor público em F2
 
 
 @dataclass(frozen=True)
@@ -107,12 +105,16 @@ class ProcessAdapter:
         return _SECRET.sub("[REDACTED]", value)[:100_000]
 
     def _invoke_inactive(self, agent: str, prompt: str, cwd: Path,
-                         timeout_seconds: int) -> ProcessResult:
+                         timeout_seconds: int, *, execution_gate: object | None = None) -> ProcessResult:
         """Implementação interna NÃO conectada a nenhum comando público.
 
         Só pode ser ativada por futura revisão de gates GitHub+custo em #69.
         Não representa uma sandbox de segurança nem permite execução hoje.
         """
+        # Sem provedor de gate externo em F2, este método deve permanecer
+        # inacessível ao produto: invocar diretamente sem gate não executa.
+        if execution_gate is not _RUNTIME_GATE_NOT_ISSUED:
+            raise PermissionError("BLOQUEADO_ATIVACAO: gate GH/custo não implementado")
         if agent not in _AGENTS or not cwd.is_dir() or cwd.is_symlink():
             raise ValueError("Agente ou worktree inválida")
         if type(timeout_seconds) is not int or not 0 < timeout_seconds <= MAX_TIMEOUT:
