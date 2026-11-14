@@ -53,6 +53,13 @@ class ExperimentalPilotTests(unittest.TestCase):
         self.assertTrue(cwd.is_dir())
         self.assertLessEqual(timeout, 900)
         if command[0] == "agy.exe":
+            if self.agy_behavior == "TEXT":
+                return ProcessResult(0, "```python\n" + SOURCE + "```\n", "")
+            if self.agy_behavior == "TEXT_INVALID":
+                return ProcessResult(0, "```python\nimport os\n" + SOURCE + "```\n", "")
+            if self.agy_behavior == "TEXT_EXTRA":
+                (cwd / "arquivo_extra.log").write_text("extra", encoding="utf-8")
+                return ProcessResult(0, "```python\n" + SOURCE + "```\n", "")
             if self.agy_behavior == "NO_OUTPUT":
                 return ProcessResult(0, "AGY respondeu sem gravar src/estoque.py", "")
             if self.agy_behavior == "TIMEOUT":
@@ -184,6 +191,29 @@ class ExperimentalPilotTests(unittest.TestCase):
         )
         self.assertFalse(report["agy_log_exists"])
         self.assertIsNone(report["agy_log_bytes"])
+
+    def test_agy_headless_texto_aplicado_pelo_dispatcher_com_codex(self):
+        self.agy_behavior = "TEXT"
+        report = self.run_fake()
+        self.assertEqual(report.status, "LAB_APROVADO_AGUARDANDO_CH1", report.findings)
+        self.assertEqual(self.calls, ["agy.exe", sys.executable, "codex.cmd"])
+        self.assertEqual(report.stages["AGY_TEXT_ADAPTER"], "PASS")
+        self.assertEqual((self.workspace / "src" / "estoque.py").read_text(), SOURCE)
+        self.assertEqual(report.codex_verdict, "APROVAR_LAB")
+
+    def test_agy_texto_com_import_nao_e_escrito_nem_executado(self):
+        self.agy_behavior = "TEXT_INVALID"
+        report = self.run_fake()
+        self.assertEqual(report.status, "LAB_BLOQUEADO")
+        self.assertEqual(self.calls, ["agy.exe"])
+        self.assertFalse((self.workspace / "src" / "estoque.py").exists())
+
+    def test_agy_texto_com_extra_nao_faz_bypass_de_escopo(self):
+        self.agy_behavior = "TEXT_EXTRA"
+        report = self.run_fake()
+        self.assertEqual(report.status, "LAB_BLOQUEADO")
+        self.assertEqual(self.calls, ["agy.exe"])
+        self.assertFalse((self.workspace / "src" / "estoque.py").exists())
 
     def test_escopo_extra_bloqueia(self):
         self.agy_behavior = "EXTRA"
