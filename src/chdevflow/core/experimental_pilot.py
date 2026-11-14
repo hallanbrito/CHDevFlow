@@ -25,6 +25,15 @@ retorna saldo >= quantidade; inválidos => ValueError.
 Sem bibliotecas externas; não altere tests, mission.txt nem outros arquivos.
 Sem rede, GitHub, install, deploy, agendamento ou segredos.
 """
+AGY_OUTPUT_PROMPT = MISSION + """
+IMPORTANTE PARA MODO HEADLESS: não dependa de escrever arquivos no disco.
+Responda apenas com UM único bloco Markdown contendo código Python para
+as duas funções. Sem explicações antes ou depois; não use ferramentas,
+terminal, rede, imports, arquivos externos nem dependências.
+Use formato Markdown com abertura de bloco python e fechamento de bloco.
+O dispatcher gravará apenas src/estoque.py depois de validar seu código.
+"""
+
 ACCEPTANCE = '''import importlib.util
 import unittest
 from pathlib import Path
@@ -221,6 +230,66 @@ def diagnose_existing_lab(*, workspace: Path, evidence: Path) -> dict:
     }
 
 
+def _validate_estoque_ast(source: str) -> None:
+    """Validação estrutural mínima; NÃO comprova sandbox de SO."""
+    tree = ast.parse(source)
+    if len(tree.body) != 2 or not all(isinstance(node, ast.FunctionDef) for node in tree.body):
+        raise ValueError("Módulo deve conter exatamente duas funções")
+    if {node.name for node in tree.body} != {"movimentar", "pode_separar"}:
+        raise ValueError("Funções do contrato ausentes ou inesperadas")
+    dangerous = {"exec", "eval", "__import__", "open", "compile", "input",
+                 "globals", "locals", "getattr", "setattr", "delattr", "breakpoint"}
+    blocked = (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
+               ast.ClassDef, ast.AsyncFunctionDef, ast.Lambda, ast.With,
+               ast.AsyncWith, ast.Try)
+    for node in ast.walk(tree):
+        if isinstance(node, blocked):
+            raise ValueError("Construção Python proibida no laboratório")
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name) and node.func.id in dangerous:
+                raise ValueError("Chamada proibida")
+            if isinstance(node.func, ast.Attribute):
+                raise ValueError("Chamada dinâmica a atributo proibida")
+        if isinstance(node, ast.Attribute):
+            raise ValueError("Acesso a atributo proibido")
+
+
+def _extract_agy_source(response: str) -> str:
+    """Aceita somente um bloco Python ou código puro, nunca prosa misturada."""
+    if not isinstance(response, str) or len(response) > 30000:
+        raise ValueError("Resposta AGY ausente ou excessiva")
+    pattern = r"(?s)```(?:python|py)?[ \t]*\r?\n(.*?)\r?\n```"
+    blocks = re.findall(pattern, response, flags=re.I)
+    if len(blocks) == 1:
+        code = blocks[0].strip() + "\n"
+    elif not blocks and response.lstrip().startswith(("def movimentar(", "def pode_separar(")):
+        code = response.strip() + "\n"
+    else:
+        raise ValueError("AGY não devolveu um bloco Python único")
+    if len(code.encode("utf-8")) > 16000:
+        raise ValueError("Resposta Python excede 16 KiB")
+    _validate_estoque_ast(code)
+    return code
+
+
+def _recover_source_from_response(workspace: Path, response: str,
+                                  original: dict[str, bytes]) -> bool:
+    """Aplica resposta textual SOMENTE se original está inalterado e src ausente."""
+    generated = _files(workspace)
+    if SOURCE in generated:
+        return False
+    if set(generated) != set(original) or any(
+        generated[name] != original[name] for name in original
+    ):
+        return False
+    code = _extract_agy_source(response)
+    target = workspace / SOURCE
+    if target.is_symlink() or target.exists():
+        raise ValueError("Destino do código não está vazio")
+    target.write_text(code, encoding="utf-8")
+    return True
+
+
 def _report(folder: Path, data: LabResult) -> None:
     (folder / "execucao.json").write_text(
         json.dumps(data.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
@@ -271,12 +340,18 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         data.stages["AGY"] = "EM_EXECUCAO"
         data.agent_calls.append("agy")
         agy_result = _run_command(
-            [*agy, "--sandbox", "--mode", "accept-edits", "--print", MISSION],
+            [*agy, "--sandbox", "--mode", "accept-edits", "--print", AGY_OUTPUT_PROMPT],
             cwd=workspace, stdin=None, timeout=max(1, min(remaining(), int(timeout * .65))))
         (evidence / "resposta_agy.md").write_text(
             agy_result.stdout + "\n" + agy_result.stderr, encoding="utf-8")
         if agy_result.code or agy_result.timed_out:
             raise ValueError("AGY falhou ou excedeu timeout")
+        recovered_from_text = _recover_source_from_response(
+            workspace, agy_result.stdout, original
+        )
+        if recovered_from_text:
+            data.stages["AGY_TEXT_ADAPTER"] = "PASS"
+            data.findings.append("CHDevFlow aplicou o código da resposta AGY em src/estoque.py")
         generated = _files(workspace)
         expected = set(original) | {SOURCE}
         missing = sorted(expected - set(generated))
@@ -291,9 +366,7 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         if any(generated[key] != original[key] for key in original):
             raise ValueError("AGY alterou mission ou teste independente")
         content = generated[SOURCE].decode("utf-8")
-        ast.parse(content)
-        if "def movimentar(" not in content or "def pode_separar(" not in content:
-            raise ValueError("Funções obrigatórias ausentes")
+        _validate_estoque_ast(content)
         data.code_sha256 = hashlib.sha256(generated[SOURCE]).hexdigest()
         data.stages["AGY"] = "PASS"
         data.stages["ESCOPO"] = "PASS"
