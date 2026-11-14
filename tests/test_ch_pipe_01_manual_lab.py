@@ -137,7 +137,7 @@ class ManualLabPipelineTests(unittest.TestCase):
             "logs_testes.txt", "RELATORIO_COMPLETO_CH1.md",
         ):
             p = self.recheck / name
-            p.write_bytes(p.read_bytes().replace(b"\\n", b"\\r\\n"))
+            p.write_bytes(p.read_bytes().replace(b"\n", b"\r\n"))
         result = inspect_lab_dossier(self.recheck)
         self.assertEqual(result.state, "LAB_CONSISTENTE_AGUARDANDO_CH1", result.findings)
 
