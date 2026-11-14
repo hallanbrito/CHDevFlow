@@ -605,7 +605,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result.state == "LAB_CONSISTENTE_AGUARDANDO_CH1" else 1
         if args.pipeline_action == "sandbox-plan":
             blueprint = plan_fake_sandbox(
-                args.lab_dir, runtime=args.runtime, image=args.image
+                args.lab_dir.expanduser().absolute(),
+                runtime=args.runtime, image=args.image
             )
             if args.json:
                 print(json.dumps(blueprint.to_dict(), indent=2, ensure_ascii=False))
