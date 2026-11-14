@@ -126,7 +126,10 @@ def _validate_fake_lab(root: Path) -> str | None:
                     return "Arquivo fora da allowlist de fixtures"
                 if item.stat().st_size > 16_384:
                     return "Fixture excede limite de 16KiB"
-            elif not item.is_dir():
+            elif item.is_dir():
+                if item.relative_to(root).as_posix() != "tests":
+                    return "Diretório extra proibido no laboratório"
+            else:
                 return "Objeto especial no laboratório"
         if not {".chdevflow-fake-lab.json", "tests/test_fake_agent.py"} <= file_names:
             return "Marcador ou teste fake ausente"
@@ -160,6 +163,10 @@ def plan_fake_sandbox(
     lookup = shutil.which if which is None else which
     if lookup(runtime) is None:
         return blocked("CLI do runtime não localizada; daemon não verificado")
+    source_path = str(lab_dir.resolve())
+    # Docker --mount interpreta vírgulas como separadores de opções.
+    if any(c in source_path for c in (",", "\r", "\n", "\x00")):
+        return blocked("Caminho do bind mount contém metacaracteres inseguros")
     args = (
         runtime, "run", "--rm", "--pull=never",
         "--network=none", "--read-only",
@@ -168,7 +175,7 @@ def plan_fake_sandbox(
         "--user=65534:65534",
         "--tmpfs=/tmp:rw,nosuid,nodev,size=32m",
         "--env=PYTHONDONTWRITEBYTECODE=1",
-        "--mount", f"type=bind,src={lab_dir.resolve()},dst=/workspace,readonly",
+        "--mount", f"type=bind,src={source_path},dst=/workspace,readonly",
         "--workdir=/workspace",
         "--entrypoint=python",
         image, *FAKE_TEST[1:],
