@@ -14,6 +14,7 @@ from chdevflow.core.init import run_init
 from chdevflow.core.mission import create_mission
 from chdevflow.core.manual_lab_pipeline import inspect_lab_dossier, render_inspection
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
+from chdevflow.core.pilot_gate import check_gate_live
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -362,6 +363,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pipeline_plan.add_argument("--mission", type=Path, required=True)
     pipeline_plan.add_argument("--json", action="store_true")
+    pipeline_gate = pipeline_subs.add_parser(
+        "gate-check", help="Confere decisão PO ao vivo no GitHub (sem executar agentes)."
+    )
+    pipeline_gate.add_argument("--mission", type=Path, required=True)
+    pipeline_gate.add_argument("--approval-comment", type=int, required=True)
+    pipeline_gate.add_argument("--json", action="store_true")
     pipeline_run = pipeline_subs.add_parser(
         "run", help="Inerte nesta fatia: execução real exige gate #69."
     )
@@ -587,7 +594,7 @@ def main(argv: list[str] | None = None) -> int:
             print("BLOQUEADO_ATIVACAO: nenhum agente real pode ser iniciado; "
                   "exige gate específico PO/custo #69.", file=sys.stderr)
             return 2
-        if args.pipeline_action == "plan":
+        if args.pipeline_action in ("plan", "gate-check"):
             try:
                 mission = load_manifest(args.mission)
                 root = Path(mission.worktree)
@@ -613,6 +620,18 @@ def main(argv: list[str] | None = None) -> int:
                     mission, observed_sha=observed,
                     observed_branch=observed_branch, worktree_clean=worktree_clean
                 )
+                if args.pipeline_action == "gate-check":
+                    if plan.state != "PLANEJADO_AGUARDANDO_GATE":
+                        print(json.dumps(plan.to_dict(), indent=2, ensure_ascii=False)
+                              if args.json else f"{plan.state}: {plan.reason}")
+                        return 1
+                    assessment = check_gate_live(mission, plan, args.approval_comment)
+                    if args.json:
+                        print(json.dumps(assessment.to_dict(), indent=2, ensure_ascii=False))
+                    else:
+                        print(f"{assessment.status}: {assessment.reason}")
+                    # Gate incompleto sempre retorna não-zero; NÃO autoriza RUN.
+                    return 2 if assessment.po_evidence_verified else 1
                 if args.json:
                     print(json.dumps(plan.to_dict(), indent=2, ensure_ascii=False))
                 else:
@@ -622,7 +641,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"BLOQUEADO: pré-validação falhou ({type(exc).__name__})",
                       file=sys.stderr)
                 return 1
-        print("Uso: ch pipeline inspect|plan|run", file=sys.stderr)
+        print("Uso: ch pipeline inspect|plan|gate-check|run", file=sys.stderr)
         return 1
 
     if args.command == "tree":
