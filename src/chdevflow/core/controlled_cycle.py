@@ -205,6 +205,20 @@ def run_controlled_pilot(*, workspace: Path, evidence: Path,
             result.status = "AGUARDANDO_PO"
             result.findings.append(
                 "Terceira tentativa reprovada. Sem quarta chamada AGY; revisar dossie.")
+            # Escalonamento local duravel. NAO publica no Project #2 sem autorizacao.
+            pending = {
+                "execution_id": result.execution_id,
+                "mission": "CH-PIPE-01-F5-ESTOQUE",
+                "status": "AGUARDANDO_PO",
+                "publication_status": "PENDENTE_DE_AUTORIZACAO",
+                "attempts": MAX_AGY_ATTEMPTS,
+                "returns": result.returns_used,
+                "last_codex_verdict": outcome.codex_verdict,
+                "dossier": "RELATORIO_COMPLETO_CH1.md",
+                "issue": "https://github.com/hallanbrito/CHDevFlow/issues/78",
+            }
+            with (evidence / "escalonamento_po.json").open("x", encoding="utf-8") as out:
+                json.dump(pending, out, indent=2, ensure_ascii=False)
             break
         try:
             previous_source, feedback = _feedback_from_attempt(
