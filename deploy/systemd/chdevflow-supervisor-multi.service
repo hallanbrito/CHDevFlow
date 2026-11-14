@@ -1,0 +1,44 @@
+# ==============================================================================
+# CHDevFlow — Orquestração Horária Multi-Repositório (DESATIVADO)
+# ==============================================================================
+# ESTADO: DESATIVADO POR PADRÃO (FASE CH-AUTO-MULTI-01)
+# 
+# ATENÇÃO: NÃO ATIVAR OU INICIAR ESTE SERVIÇO.
+# Conforme autorização vigente do PO (Hallan de Sousa Brito), este serviço é apenas
+# uma infraestrutura declarativa implementada para testes offline. A ativação real
+# dependerá de nova autorização explícita do PO após auditoria do ChatGPT.
+# ==============================================================================
+
+[Unit]
+Description=CHDevFlow Multi-Repository Supervised Hourly Dispatcher (DEACTIVATED)
+Documentation=https://github.com/hallanbrito/CHDevFlow/blob/main/docs/CH/RUC-CH-AUTO-MULTI-01.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hallan
+Group=hallan
+
+WorkingDirectory=/home/hallan/CHDevFlow
+
+Environment="PYTHONPATH=src:apps/bootstrap/sentinela/src"
+Environment="CH_SENTINELA_DATA_DIR=/home/hallan/CHDevFlow/.ch_sentinela"
+Environment="CH_DISPATCHER_MODE=DRY_RUN"
+Environment="CH_EXTRA_COST_LIMIT_BRL=0.00"
+
+ExecStart=/usr/bin/python3 -m chdevflow.cli supervise --multi-repo --once --dry-run --output-report /home/hallan/CHDevFlow/.ch_sentinela/relatorios/RUC-CH-AUTO-MULTI-01-CICLO-ATUAL.md
+
+TimeoutStartSec=900
+StandardOutput=journal
+StandardError=journal
+
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/hallan/CHDevFlow/.ch_sentinela
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+# DESATIVADO: Não habilitar
+# WantedBy=multi-user.target

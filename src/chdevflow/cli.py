@@ -19,6 +19,7 @@ from chdevflow.core.status import get_project_status, render_status_human
 from chdevflow.core.submit import validate_and_submit
 from chdevflow.core.tree import generate as generate_tree
 from chdevflow.core.watch import run_watch
+from chdevflow.core.supervisor_peao import run_supervise_cli
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -355,6 +356,72 @@ def build_parser() -> argparse.ArgumentParser:
         help="Caminho da raiz do projeto (padrão: diretório atual).",
     )
 
+    # Subcomando: supervise (CH-AUTO-02)
+    parser_supervise = subparsers.add_parser(
+        "supervise",
+        help="Executa a supervisão horária da Esteira Peão do Project #2 (CH-AUTO-02).",
+    )
+    parser_supervise.add_argument(
+        "--once",
+        action="store_true",
+        default=True,
+        help="Execução pontual única de ciclo (padrão seguro D05).",
+    )
+    parser_supervise.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Modo simulação / dry-run sem execução de processos reais (padrão seguro).",
+    )
+    parser_supervise.add_argument(
+        "--fixture",
+        type=Path,
+        default=None,
+        help="Caminho opcional para fixture JSON de itens do Project (testes offline).",
+    )
+    parser_supervise.add_argument(
+        "--fixture-fields",
+        type=Path,
+        default=None,
+        help="Caminho opcional para fixture JSON de campos do Project (testes offline).",
+    )
+    parser_supervise.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Caminho opcional para arquivo de configuração JSON.",
+    )
+    parser_supervise.add_argument(
+        "--output-report",
+        type=Path,
+        default=None,
+        help="Caminho para gravação do relatório de ciclo gerado.",
+    )
+    parser_supervise.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Exporta o resultado do ciclo em formato JSON estruturado.",
+    )
+    parser_supervise.add_argument(
+        "--summary",
+        action="store_true",
+        default=False,
+        help="Exibe formato resumido se não houver alterações.",
+    )
+    parser_supervise.add_argument(
+        "--multi-repo",
+        action="store_true",
+        default=False,
+        help="Executa o supervisor multi-repositório com os 9 repositórios homologados (CH-AUTO-MULTI-01).",
+    )
+    parser_supervise.add_argument(
+        "--live",
+        action="store_true",
+        default=False,
+        help="Força consulta LIVE autenticada ao GitHub Project #2.",
+    )
+
     return parser
 
 
@@ -558,6 +625,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except Exception as exc:
             print(f"Erro em 'ch tree': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "supervise":
+        try:
+            return run_supervise_cli(args)
+        except Exception as exc:
+            print(f"Erro em 'ch supervise': {exc}", file=sys.stderr)
             return 1
 
     print(f"Comando desconhecido: {args.command}", file=sys.stderr)
