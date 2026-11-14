@@ -120,11 +120,11 @@ def inspect_lab_dossier(directory: Path) -> EvidenceInspection:
         if not isinstance(steps, dict):
             raise ValueError("Etapas ausentes")
         for key in REQUIRED_STAGES:
-            ok = steps.get(key, {}).get("status") == "PASS"
+            ok = isinstance(steps.get(key), dict) and steps[key].get("status") == "PASS"
             checks[key] = "PASS" if ok else "BLOQUEADO"
             if not ok:
                 findings.append(f"Etapa {key} não passou")
-        codex = steps.get("codex", {})
+        codex = steps.get("codex") if isinstance(steps.get("codex"), dict) else {}
         codex_ok = (
             codex.get("status") == "SUCESSO" and codex.get("ok") is True
             and codex.get("exit_code") == 0
@@ -136,7 +136,7 @@ def inspect_lab_dossier(directory: Path) -> EvidenceInspection:
         if not codex_ok:
             findings.append("Codex não aprovou ou não há parecer comprovável")
         for key in ("testes_agy", "aceite_independente"):
-            meta = steps.get(key, {})
+            meta = steps.get(key) if isinstance(steps.get(key), dict) else {}
             verified = meta.get("ok") is True and meta.get("exit_code") == 0
             verified &= _assert_test_block(content["logs_testes.txt"], key)
             checks[f"log_{key}"] = "PASS" if verified else "BLOQUEADO"
@@ -155,7 +155,7 @@ def inspect_lab_dossier(directory: Path) -> EvidenceInspection:
                 content["RELATORIO_COMPLETO_CH1.md"],
             )
             verified = bool(
-                claimed and _digest(content[name].removesuffix("\n").replace("\r\n", "\n"))
+                claimed and _digest(content[name].replace("\r\n", "\n").removesuffix("\n"))
                 == claimed.group(1)
             )
             checks[f"hash_{heading}"] = "PASS" if verified else "BLOQUEADO"
@@ -175,19 +175,19 @@ def inspect_lab_dossier(directory: Path) -> EvidenceInspection:
                     and previous.get("etapas", {}).get("agy", {}).get("exit_code") == 0
                     and previous.get("etapas", {}).get("github", {}).get("status") == "SUCESSO"
                 )
-            except (ValueError, OSError, UnicodeError, json.JSONDecodeError):
+            except (ValueError, OSError, UnicodeError, json.JSONDecodeError, AttributeError, TypeError):
                 source_ok = False
             checks["origem_agy"] = "PASS" if source_ok else "BLOQUEADO"
             if not source_ok:
                 findings.append("Execução original AGY não reconciliada")
         else:
-            agy = steps.get("agy", {})
+            agy = steps.get("agy") if isinstance(steps.get("agy"), dict) else {}
             agy_ok = agy.get("status") == "SUCESSO" and agy.get("exit_code") == 0
             checks["origem_agy"] = "PASS" if agy_ok else "BLOQUEADO"
             if not agy_ok:
                 findings.append("Etapa AGY real não comprovada")
     except (OSError, UnicodeError, ValueError, TypeError, KeyError,
-            json.JSONDecodeError) as exc:
+            json.JSONDecodeError, AttributeError) as exc:
         findings.append(f"Artefatos inválidos ({type(exc).__name__})")
     state = "LAB_CONSISTENTE_AGUARDANDO_CH1" if not findings else "BLOQUEADO"
     return EvidenceInspection(run_id, state, checks, tuple(findings), hashes)
