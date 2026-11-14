@@ -115,6 +115,11 @@ class ManualF2Tests(TestCase):
         self.assertEqual(fail["status"], "FIXTURE_BLOQUEADA")
         self.assertNotIn("codex", fail["stages"])
 
+    def test_adapter_real_falha_sem_gate_antes_do_subprocesso(self):
+        with patch("subprocess.run", side_effect=AssertionError("NUNCA")):
+            with self.assertRaises(PermissionError):
+                ProcessAdapter()._invoke_inactive("agy", "teste", self.root, 5)
+
     def test_cli_run_bloqueado_sem_subprocessos(self):
         manifest = self.root / "mission.json"
         manifest.write_text(json.dumps(self.data), encoding="utf-8")
