@@ -16,7 +16,7 @@ from chdevflow.core.manual_lab_pipeline import inspect_lab_dossier, render_inspe
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
 from chdevflow.core.pilot_gate import check_gate_live
 from chdevflow.core.pilot_readiness import inspect_readiness, plan_fake_sandbox
-from chdevflow.core.experimental_pilot import run_local_pilot
+from chdevflow.core.experimental_pilot import run_local_pilot, diagnose_existing_lab
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -390,6 +390,12 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_lab.add_argument("--evidence-dir", type=Path, required=True)
     pipeline_lab.add_argument("--timeout", type=int, default=480)
     pipeline_lab.add_argument("--i-accept-local-risk", action="store_true")
+    pipeline_diagnose = pipeline_subs.add_parser(
+        "lab-diagnose", help="Inspeciona dois laboratórios já existentes sem acionar modelos."
+    )
+    pipeline_diagnose.add_argument("--workspace", type=Path, required=True)
+    pipeline_diagnose.add_argument("--evidence-dir", type=Path, required=True)
+    pipeline_diagnose.add_argument("--json", action="store_true")
     pipeline_run = pipeline_subs.add_parser(
         "run", help="Inerte nesta fatia: execução real exige gate #69."
     )
@@ -624,6 +630,22 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(list(blueprint.command), ensure_ascii=False))
             # Blueprint não é atestado nem execução: nunca retornar 'apto'.
             return 2 if blueprint.status == "PLANO_FAKE_APENAS" else 1
+        if args.pipeline_action == "lab-diagnose":
+            try:
+                diagnosis = diagnose_existing_lab(
+                    workspace=args.workspace, evidence=args.evidence_dir,
+                )
+                if args.json:
+                    print(json.dumps(diagnosis, indent=2, ensure_ascii=False))
+                else:
+                    print(f"Arquivos ausentes: {diagnosis['missing_files']}")
+                    print(f"Arquivos extras: {diagnosis['extra_files']}")
+                    print(f"Pastas extras: {diagnosis['extra_directories']}")
+                    print(f"Log AGY presente: {diagnosis['agy_log_exists']}")
+                return 0
+            except (ValueError, OSError) as exc:
+                print(f"LAB_DIAGNOSE_BLOQUEADO: {type(exc).__name__}: {exc}", file=sys.stderr)
+                return 1
         if args.pipeline_action == "lab-pilot":
             try:
                 outcome = run_local_pilot(
@@ -697,7 +719,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"BLOQUEADO: pré-validação falhou ({type(exc).__name__})",
                       file=sys.stderr)
                 return 1
-        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|lab-pilot|run", file=sys.stderr)
+        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|lab-diagnose|lab-pilot|run", file=sys.stderr)
         return 1
 
     if args.command == "tree":
