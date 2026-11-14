@@ -1,0 +1,4 @@
+{
+  "schema": "chdevflow.fake-lab/v1",
+  "kind": "fake-only"
+}
