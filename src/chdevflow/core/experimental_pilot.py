@@ -1,6 +1,9 @@
 """Piloto CHDevFlow F5. Manual, descartável, com opt-in. NÃO é sandbox de SO."""
 from __future__ import annotations
 from dataclasses import dataclass, field, asdict
+from chdevflow.core.local_executor import (
+    resolve_local_agents, local_agent_environment, run_local_command,
+)
 import ast
 import difflib
 import hashlib
@@ -98,84 +101,20 @@ def _clean(text: str) -> str:
 
 
 def _agent_environment() -> dict[str, str]:
-    result = dict(os.environ)
-    for key in _DROP:
-        result.pop(key, None)
-    result["PYTHONDONTWRITEBYTECODE"] = "1"
-    result["NO_COLOR"] = "1"
-    return result
+    """Compatibilidade com F5: preserva sessão local, sem chaves de API."""
+    return local_agent_environment()
 
 
 def _executables() -> tuple[list[str], list[str]]:
-    agy = shutil.which("agy.exe") or shutil.which("agy")
-    if sys.platform == "win32":
-        codex = shutil.which("codex.exe")
-        wrapper = shutil.which("codex.cmd")
-        if not codex and wrapper:
-            npm_dir = Path(wrapper).parent
-            entry = npm_dir / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
-            bundled_node = npm_dir / "node.exe"
-            node = str(bundled_node) if bundled_node.is_file() else shutil.which("node.exe")
-            if node and entry.is_file():
-                return ([agy] if agy else []), [node, str(entry)]
-            codex = wrapper
-        if not codex:
-            ps = shutil.which("codex.ps1")
-            shell = shutil.which("powershell.exe")
-            if ps and shell:
-                return ([agy] if agy else []), [
-                    shell, "-NoProfile", "-NonInteractive", "-File", ps]
-    else:
-        codex = shutil.which("codex")
-    return ([agy] if agy else []), ([codex] if codex else [])
-
-
-def _kill(process: subprocess.Popen) -> None:
-    if process.poll() is not None:
-        return
-    if sys.platform == "win32":
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=8, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        if process.poll() is None:
-            process.kill()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
-            process.kill()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
+    """Mesmo usuário, PATH e credenciais locais nos dois sistemas."""
+    agents = resolve_local_agents()
+    return list(agents.agy), list(agents.codex)
 
 
 def _run_command(command: list[str], *, cwd: Path,
                  stdin: str | None, timeout: int) -> ProcessResult:
-    """Processo sem shell=True; timeout tenta matar a árvore toda."""
-    process = subprocess.Popen(
-        command, cwd=cwd, text=True, encoding="utf-8", errors="replace",
-        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_agent_environment(),
-        creationflags=(subprocess.CREATE_NEW_PROCESS_GROUP
-                       if sys.platform == "win32" else 0),
-        start_new_session=(sys.platform != "win32"),
-    )
-    try:
-        stdout, stderr = process.communicate(input=stdin, timeout=timeout)
-        return ProcessResult(process.returncode, stdout or "", stderr or "")
-    except subprocess.TimeoutExpired as exc:
-        _kill(process)
-        stdout = (exc.stdout or b"").decode("utf-8", errors="replace")
-        stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
-        return ProcessResult(-1, stdout, stderr + "\nTIMEOUT: processo interrompido", True)
-    except BaseException:
-        _kill(process)
-        raise
+    result = run_local_command(command, cwd=cwd, stdin=stdin, timeout=timeout)
+    return ProcessResult(result.code, result.stdout, result.stderr, result.timed_out)
 
 
 def _is_link(path: Path) -> bool:
@@ -324,6 +263,11 @@ def _agy_response(result: ProcessResult) -> str:
     status = envelope.get("status")
     if result.code or status != "SUCCESS":
         detail = envelope.get("error") or result.stderr.strip() or "sem detalhe"
+        if re.search(r"authenticat|credential|acesso negado|access denied", str(detail), re.I):
+            raise ValueError(
+                "AGY_AUTH_CONTEXTO_LOCAL: credenciais não acessíveis ao processo que iniciou "
+                f"o executor (exit={result.code}, status={status}): {_clean(str(detail))[:400]}"
+            )
         raise ValueError(f"AGY falhou (exit={result.code}, status={status}): {_clean(str(detail))[:1000]}")
     response = envelope.get("response")
     if not isinstance(response, str):
@@ -518,7 +462,7 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         data.agent_calls.append("codex")
         reviewed = _run_command(
             [*codex, "-a", "never", "exec", "--sandbox", "read-only", "--ephemeral",
-             "--ignore-user-config", "--skip-git-repo-check", "--json", "-"],
+             "--skip-git-repo-check", "--json", "-"],
             cwd=workspace, stdin=prompt, timeout=remaining())
         _write_process_log(evidence / "codex_processo.log", reviewed)
         data.codex_verdict = "INDETERMINADO"
