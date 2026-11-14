@@ -19,6 +19,7 @@ from chdevflow.core.status import get_project_status, render_status_human
 from chdevflow.core.submit import validate_and_submit
 from chdevflow.core.tree import generate as generate_tree
 from chdevflow.core.watch import run_watch
+from chdevflow.core.factory import run_factory_cli
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -355,6 +356,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Caminho da raiz do projeto (padrão: diretório atual).",
     )
 
+    # Subcomando: factory (CH-FACTORY-01 / Fatia F1 / Issue #72)
+    parser_factory = subparsers.add_parser(
+        "factory",
+        help="Gestão de turnos, histórico, timeline e passagem de turno da CH-FACTORY (Fatia F1 / Issue #72).",
+    )
+    parser_factory.add_argument(
+        "--config-file",
+        type=Path,
+        default=None,
+        help="Caminho para arquivo de estado JSON customizado da fábrica.",
+    )
+    factory_subs = parser_factory.add_subparsers(
+        title="ações da fábrica",
+        dest="factory_action",
+        metavar="<ação>",
+    )
+
+    # factory history
+    p_hist = factory_subs.add_parser("history", help="Exibe histórico de produção por turno.")
+    p_hist.add_argument("--limit", type=int, default=None, help="Limita o número de turnos exibidos.")
+    p_hist.add_argument("--json", action="store_true", default=False, help="Exporta em formato JSON.")
+
+    # factory timeline
+    p_time = factory_subs.add_parser("timeline", help="Exibe timeline de entregas com filtros multi-critério.")
+    p_time.add_argument("--from-date", type=str, default=None, help="Data inicial (AAAA-MM-DD).")
+    p_time.add_argument("--to-date", type=str, default=None, help="Data final (AAAA-MM-DD).")
+    p_time.add_argument("--project", type=str, default=None, help="Filtro por nome/slug do projeto.")
+    p_time.add_argument("--executor", type=str, default=None, help="Filtro por executor (AGY, ChatGPT, etc.).")
+    p_time.add_argument("--result", type=str, default=None, help="Filtro por resultado (SUCESSO, BLOQUEADO, etc.).")
+    p_time.add_argument("--type", type=str, default=None, choices=["SUPERVISAO", "ENTREGA_SOFTWARE"], help="Filtro por tipo de registro.")
+    p_time.add_argument("--json", action="store_true", default=False, help="Exporta em formato JSON.")
+
+    # factory handover
+    p_hand = factory_subs.add_parser("handover", help="Gera passagem mínima de turno estruturada (F1 Handover).")
+    p_hand.add_argument("--sainte", type=str, default="AGY", help="Executor sainte do turno (padrão: AGY).")
+    p_hand.add_argument("--entrante", type=str, default="ChatGPT", help="Executor entrante do próximo turno.")
+    p_hand.add_argument("--shift-id", type=str, default=None, help="ID específico do turno para referência.")
+    p_hand.add_argument("--output", type=Path, default=None, help="Caminho para gravação do relatório Markdown.")
+    p_hand.add_argument("--json", action="store_true", default=False, help="Exporta em formato JSON.")
+
+    # factory snapshot
+    p_snap = factory_subs.add_parser("snapshot", help="Exporta snapshot do estado da fábrica para o Control Center.")
+
     return parser
 
 
@@ -558,6 +602,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         except Exception as exc:
             print(f"Erro em 'ch tree': {exc}", file=sys.stderr)
+            return 1
+
+    if args.command == "factory":
+        try:
+            return run_factory_cli(args)
+        except Exception as exc:
+            print(f"Erro em 'ch factory': {exc}", file=sys.stderr)
             return 1
 
     print(f"Comando desconhecido: {args.command}", file=sys.stderr)
