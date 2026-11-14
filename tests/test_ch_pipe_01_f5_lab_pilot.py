@@ -20,6 +20,19 @@ from chdevflow.core.experimental_pilot import (
     ProcessResult, _agent_environment, _files, run_local_pilot, diagnose_existing_lab,
 )
 
+def agy_envelope(response, *, status="SUCCESS"):
+    return json.dumps({"status": status, "response": response})
+
+
+def codex_events(*messages, completed=True):
+    events = [
+        {"type": "item.completed", "item": {"type": "agent_message", "text": message}}
+        for message in messages
+    ]
+    events.append({"type": "turn.completed" if completed else "turn.failed"})
+    return "\n".join(json.dumps(event) for event in events)
+
+
 SOURCE = '''def movimentar(saldo, tipo, quantidade):
     if type(saldo) is not int or type(quantidade) is not int or saldo < 0 or quantidade < 0:
         raise ValueError("inválido")
@@ -53,15 +66,26 @@ class ExperimentalPilotTests(unittest.TestCase):
         self.assertTrue(cwd.is_dir())
         self.assertLessEqual(timeout, 900)
         if command[0] == "agy.exe":
+            self.assertEqual(command[command.index("--output-format") + 1], "json")
+            self.assertEqual(command[command.index("--mode") + 1], "plan")
+            if self.agy_behavior == "FAILED_ENVELOPE":
+                return ProcessResult(0, agy_envelope(SOURCE, status="ERROR"), "")
+            if self.agy_behavior == "EMPTY_EXTRA_DIR":
+                (cwd / "extra").mkdir()
+                return ProcessResult(0, agy_envelope(SOURCE), "")
+            if self.agy_behavior == "EVAL_ON_IMPORT":
+                response = SOURCE.replace("pode_separar(saldo, quantidade)",
+                                          "pode_separar(saldo, quantidade=open('probe', 'w'))")
+                return ProcessResult(0, agy_envelope(response), "")
             if self.agy_behavior == "TEXT":
-                return ProcessResult(0, "```python\n" + SOURCE + "```\n", "")
+                return ProcessResult(0, agy_envelope("```python\n" + SOURCE + "```\n"), "")
             if self.agy_behavior == "TEXT_INVALID":
-                return ProcessResult(0, "```python\nimport os\n" + SOURCE + "```\n", "")
+                return ProcessResult(0, agy_envelope("```python\nimport os\n" + SOURCE + "```\n"), "")
             if self.agy_behavior == "TEXT_EXTRA":
                 (cwd / "arquivo_extra.log").write_text("extra", encoding="utf-8")
-                return ProcessResult(0, "```python\n" + SOURCE + "```\n", "")
+                return ProcessResult(0, agy_envelope("```python\n" + SOURCE + "```\n"), "")
             if self.agy_behavior == "NO_OUTPUT":
-                return ProcessResult(0, "AGY respondeu sem gravar src/estoque.py", "")
+                return ProcessResult(0, agy_envelope("AGY respondeu sem gravar src/estoque.py"), "")
             if self.agy_behavior == "TIMEOUT":
                 return ProcessResult(-1, "", "timeout", True)
             if self.agy_behavior == "EXTRA":
@@ -72,7 +96,7 @@ class ExperimentalPilotTests(unittest.TestCase):
                 (cwd / "src" / "estoque.py").write_text("def invalid(:")
             else:
                 (cwd / "src" / "estoque.py").write_text(SOURCE, encoding="utf-8")
-            return ProcessResult(0, "AGY gerou arquivo", "")
+            return ProcessResult(0, agy_envelope("AGY gerou arquivo"), "")
         if command[0] == sys.executable:
             self.assertIn("test_acceptance.py", command)
             if self.test_behavior == "FAIL":
@@ -81,9 +105,14 @@ class ExperimentalPilotTests(unittest.TestCase):
         if command[0] == "codex.cmd":
             self.assertIsNotNone(stdin)
             self.assertIn("read-only", command)
+            self.assertIn("--json", command)
+            messages = ["VEREDITO: APROVAR_LAB"]
+            if self.codex_behavior == "VETO":
+                messages.append("VEREDITO: BLOQUEADO\nSaldo incorreto.")
+            if self.codex_behavior == "NO_VERDICT":
+                messages.append("Auditoria emitida sem veredito.")
             return ProcessResult(
-                0, ("VEREDITO: APROVAR_LAB\n" if self.codex_behavior == "PASS"
-                    else "VEREDITO: BLOQUEADO\n"), "")
+                0, codex_events(*messages, completed=self.codex_behavior != "TURN_FAILED"), "")
         raise AssertionError("Processo inesperado: " + repr(command))
 
     def run_fake(self, **kwargs):
@@ -104,7 +133,7 @@ class ExperimentalPilotTests(unittest.TestCase):
         """Popen REAL (AGY/Codex fakes), nove aceites Python REAIS."""
         agy_script = self.root / "fake_agy_subprocess.py"
         codex_script = self.root / "fake_codex_subprocess.py"
-        response = "```python\n" + SOURCE + "```\n"
+        response = agy_envelope("```python\n" + SOURCE + "```\n")
         agy_script.write_text(
             "import sys\nsys.stdout.write(" + repr(response) + ")\n",
             encoding="utf-8",
@@ -113,7 +142,7 @@ class ExperimentalPilotTests(unittest.TestCase):
             "import sys\n"
             "prompt = sys.stdin.read()\n"
             "assert 'Patch:' in prompt\n"
-            "print('VEREDITO: APROVAR_LAB')\n",
+            "print(" + repr(codex_events("VEREDITO: APROVAR_LAB\nParecer de teste.")) + ")\n",
             encoding="utf-8",
         )
         with patch(
@@ -277,6 +306,37 @@ class ExperimentalPilotTests(unittest.TestCase):
         report = self.run_fake()
         self.assertEqual(report.status, "LAB_BLOQUEADO")
         self.assertEqual(report.codex_verdict, "BLOQUEADO")
+
+    def test_envelope_agy_com_falha_e_exit_zero_bloqueia_testes(self):
+        self.agy_behavior = "FAILED_ENVELOPE"
+        report = self.run_fake()
+        self.assertEqual(report.stages["AGY"], "BLOQUEADO")
+        self.assertEqual(report.stages["TESTES"], "NAO_EXECUTADO")
+        self.assertIn("status=ERROR", report.findings[0])
+
+    def test_diretorio_extra_vazio_bloqueia_escopo(self):
+        self.agy_behavior = "EMPTY_EXTRA_DIR"
+        report = self.run_fake()
+        self.assertEqual(report.stages["ESCOPO"], "BLOQUEADO")
+        self.assertFalse((self.workspace / "src" / "estoque.py").exists())
+
+    def test_valor_padrao_com_chamada_nao_e_executado(self):
+        self.agy_behavior = "EVAL_ON_IMPORT"
+        report = self.run_fake()
+        self.assertEqual(self.calls, ["agy.exe"])
+        self.assertEqual(report.stages["ESCOPO"], "BLOQUEADO")
+
+    def test_parecer_intermediario_nao_aprova(self):
+        self.codex_behavior = "NO_VERDICT"
+        report = self.run_fake()
+        self.assertEqual(report.stages["CODEX"], "BLOQUEADO")
+        self.assertEqual(report.codex_verdict, "INDETERMINADO")
+
+    def test_turno_codex_falho_nao_aprova(self):
+        self.codex_behavior = "TURN_FAILED"
+        report = self.run_fake()
+        self.assertEqual(report.stages["CODEX"], "BLOQUEADO")
+        self.assertEqual(report.codex_verdict, "INDETERMINADO")
 
     def test_env_elimina_chaves_de_api_sem_expor_valores(self):
         with patch.dict("os.environ", {

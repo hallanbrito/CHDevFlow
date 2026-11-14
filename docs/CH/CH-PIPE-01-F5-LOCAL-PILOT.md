@@ -5,11 +5,11 @@
 ## O que faz, de verdade
 
 - Cria uma pasta NOVA com missão fixa de estoque Python, src e testes de aceite independentes.
-- Com opt-in explícito, chama AGY real usando modo accept-edits + a opção --sandbox que a CLI oferece, **sem** --dangerously-skip-permissions.
+- Com opt-in explícito, chama AGY em modo `plan` com `--sandbox` e lê a resposta do envelope JSON do modo headless. O CHDevFlow pode materializar apenas o módulo solicitado.
 - Confere que só src/estoque.py foi produzido; não deixa passar mudanças nos testes de aceite, arquivos extras, symlink, código malformado.
 - Executa os 9 testes de aceite Python escritos pelo CHDevFlow, **no Windows hospedeiro**, não em sandbox do SO.
-- Se os testes passarem, envia ao Codex real em modo read-only o diff e os logs e exige veredito.
-- Salva dossiê em pasta separada da tarefa: execucao.json, resposta_agy.md, logs_testes.txt, alteracoes.patch, auditoria_codex.md, RELATORIO_COMPLETO_CH1.md.
+- Se os testes passarem, envia o diff e os resultados ao Codex em modo somente leitura. O pipeline exige que a primeira linha da última mensagem de um turno concluído contenha o veredito.
+- Salva dossiê em pasta separada da tarefa: execucao.json, resposta_agy.md, logs_testes.txt, alteracoes.patch, codex_processo.log, auditoria_codex.md, RELATORIO_COMPLETO_CH1.md. Em falhas, o dossiê guarda os logs das etapas alcançadas e marca as demais como `NAO_EXECUTADO`.
 - Não envia GitHub PR, não dá push/merge, não toca no Project #2, não agendará nada. O comando oficial ch pipeline run permanece bloqueado.
 
 ## Riscos expressamente aceitos pelo operador para esta tarefa experimental
@@ -18,11 +18,12 @@ A conta ChatGPT está autenticada no Codex; o AGY existe na máquina. **Nenhum p
 
 ## Windows PowerShell
 
-Confirme os testes mock ANTES do piloto real.
+Execute a partir da cópia de trabalho da correção, com o Python e a resolução de módulos apontando para essa cópia.
 
 ~~~powershell
 cd "$HOME\Downloads\CHDevFlow-F2-Teste"
 gh pr checkout 83
+$env:PYTHONPATH = "$PWD\src;$PWD\apps\bootstrap\sentinela\src"
 python -m unittest discover -s tests -p "test_ch_pipe_01_f5_lab_pilot.py" -v
 ~~~
 
@@ -33,7 +34,7 @@ $id = Get-Date -Format "yyyyMMdd-HHmmss"
 $lab = "$HOME\Downloads\CH-Lab-$id"
 $dossie = "$HOME\Downloads\CH-Dossie-$id"
 
-ch pipeline lab-pilot --workspace $lab --evidence-dir $dossie --timeout 480 --i-accept-local-risk
+python -m chdevflow pipeline lab-pilot --workspace $lab --evidence-dir $dossie --timeout 480 --i-accept-local-risk
 
 Get-Content "$dossie\RELATORIO_COMPLETO_CH1.md"
 ~~~
@@ -56,7 +57,7 @@ Esses testes usam mocks de subprocessos: nunca fazem chamadas reais de modelos.
 
 ## Diagnóstico sem gastar novas chamadas de IA — falhas 18:06:31 e 18:06:53
 
-Se o piloto retornar LAB_BLOQUEADO em 'Arquivos esperados ausentes ou extras criados', **não rode novamente o AGY**. Na F5 corrigida, use os diretórios JÁ CRIADOS:
+Para inspecionar a tentativa anterior pelo inventário local, use os diretórios já criados:
 
 ~~~powershell
 ch pipeline lab-diagnose --workspace "$HOME\Downloads\CH-Lab-20261114-180631" --evidence-dir "$HOME\Downloads\CH-Dossie-20261114-180631" --json
@@ -75,8 +76,9 @@ Get-Content "$HOME\Downloads\CH-Dossie-20261114-180653\resposta_agy.md" -Tail 35
 
 O piloto agora informa ausentes=[...] e extras=[...] e corrige estados de falha, sem afrouxar as regras de escopo. Testes dessa melhoria utilizam apenas fixtures; não houve novo piloto real.
 
-## Correção do dispatcher AGY headless (14/11/2026)
+## Diagnóstico por etapa
 
-O AGY em `--print` pode devolver exit code 0 com resposta textual e nenhum arquivo gravado, inclusive quando a CLI nega silenciosamente uma ação que exigiria confirmação. O dispatcher agora pede **um único bloco Python** na resposta do AGY e, quando o arquivo `src/estoque.py` ainda não existe e nenhum arquivo foi alterado, aplica o código **ele próprio**, após análise AST e verificação rígida da allowlist. Arquivos extras, alterações em testes e respostas sem código continuam BLOQUEADOS.
-
-No dossiê da nova implementação, `AGY_TEXT_ADAPTER: PASS` significa que **o CHDevFlow escreveu o arquivo a partir do texto do AGY**, não que o AGY usou sua ferramenta de escrita. Os testes com fixtures verificam esse caminho completo até o Codex fake. **Nenhuma execução real de AGY/Codex foi feita nesta correção no GitHub Actions**; autenticações existentes no Windows não estão disponíveis ao runner GitHub. A execução anterior continua como falha até que haja evidência real de sucesso, e não exige a repetição de comandos do usuário para aceitar este patch.
+- `resposta_agy.md` contém código de saída, indicador de timeout, envelope JSON do AGY e diagnósticos sanitizados. O adaptador exige `status=SUCCESS` e extrai apenas a resposta desse envelope. Ele cria `src/estoque.py` após conferir os arquivos independentes e validar o subconjunto Python da missão.
+- `AGY_TEXT_ADAPTER: PASS` indica que o CHDevFlow escreveu o código devolvido pelo AGY no laboratório.
+- `codex_processo.log` contém os eventos do subprocesso e os diagnósticos. `auditoria_codex.md` contém o parecer final quando houve turno concluído. Mensagens intermediárias e processos interrompidos não aprovam a missão.
+- `authentication failed or timed out` com zero turnos indica que esta execução ficou sem acesso à sessão do Antigravity. O laboratório reutiliza credenciais da sessão local e registra a falha antes de executar Python ou Codex.

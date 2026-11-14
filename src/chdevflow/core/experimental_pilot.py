@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -26,12 +27,11 @@ Sem bibliotecas externas; não altere tests, mission.txt nem outros arquivos.
 Sem rede, GitHub, install, deploy, agendamento ou segredos.
 """
 AGY_OUTPUT_PROMPT = MISSION + """
-IMPORTANTE PARA MODO HEADLESS: não dependa de escrever arquivos no disco.
-Responda apenas com UM único bloco Markdown contendo código Python para
-as duas funções. Sem explicações antes ou depois; não use ferramentas,
-terminal, rede, imports, arquivos externos nem dependências.
-Use formato Markdown com abertura de bloco python e fechamento de bloco.
-O dispatcher gravará apenas src/estoque.py depois de validar seu código.
+Entregue o conteúdo de src/estoque.py somente na resposta. O CHDevFlow
+gravará o arquivo. Não use ferramentas, terminal, rede ou arquivos.
+Retorne um único bloco Markdown Python com exatamente as duas funções.
+Use condicionais e operações simples, sem imports, decorators, valores
+padrão, funções auxiliares ou loops. Use type(x) is int para inteiros.
 """
 
 ACCEPTANCE = '''import importlib.util
@@ -108,7 +108,16 @@ def _agent_environment() -> dict[str, str]:
 def _executables() -> tuple[list[str], list[str]]:
     agy = shutil.which("agy.exe") or shutil.which("agy")
     if sys.platform == "win32":
-        codex = shutil.which("codex.cmd") or shutil.which("codex.exe")
+        codex = shutil.which("codex.exe")
+        wrapper = shutil.which("codex.cmd")
+        if not codex and wrapper:
+            npm_dir = Path(wrapper).parent
+            entry = npm_dir / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+            bundled_node = npm_dir / "node.exe"
+            node = str(bundled_node) if bundled_node.is_file() else shutil.which("node.exe")
+            if node and entry.is_file():
+                return ([agy] if agy else []), [node, str(entry)]
+            codex = wrapper
         if not codex:
             ps = shutil.which("codex.ps1")
             shell = shutil.which("powershell.exe")
@@ -130,6 +139,8 @@ def _kill(process: subprocess.Popen) -> None:
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=8, check=False)
         except (OSError, subprocess.TimeoutExpired):
+            pass
+        if process.poll() is None:
             process.kill()
     else:
         try:
@@ -155,26 +166,51 @@ def _run_command(command: list[str], *, cwd: Path,
     )
     try:
         stdout, stderr = process.communicate(input=stdin, timeout=timeout)
-        return ProcessResult(process.returncode, _clean(stdout or ""), _clean(stderr or ""))
-    except subprocess.TimeoutExpired:
+        return ProcessResult(process.returncode, stdout or "", stderr or "")
+    except subprocess.TimeoutExpired as exc:
         _kill(process)
-        return ProcessResult(-1, "", "TIMEOUT: processo interrompido", True)
+        stdout = (exc.stdout or b"").decode("utf-8", errors="replace")
+        stderr = (exc.stderr or b"").decode("utf-8", errors="replace")
+        return ProcessResult(-1, stdout, stderr + "\nTIMEOUT: processo interrompido", True)
     except BaseException:
         _kill(process)
         raise
 
 
+def _is_link(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT
+    )
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
 def _files(workspace: Path) -> dict[str, bytes]:
+    if _is_link(workspace):
+        raise ValueError("Workspace foi substituído por um link")
     found: dict[str, bytes] = {}
-    for base, dirs, names in os.walk(workspace, followlinks=False):
+    for root, dirs, names in os.walk(workspace, followlinks=False, onerror=_raise_walk_error):
+        base = Path(root)
         for name in dirs + names:
-            if (Path(base) / name).is_symlink():
-                raise ValueError("Symlink criado no laboratório")
+            path = base / name
+            if _is_link(path):
+                raise ValueError("Link ou junction criado no laboratório")
+        for name in dirs:
+            if (base / name).relative_to(workspace).as_posix() not in {"src", "tests"}:
+                raise ValueError(f"Diretório extra: {(base / name).relative_to(workspace)}")
         for name in names:
             path = Path(base) / name
             relative = path.relative_to(workspace).as_posix()
             if relative not in ALLOWED:
                 raise ValueError(f"Arquivo extra: {relative}")
+            if not path.is_file():
+                raise ValueError(f"Artefato não é arquivo regular: {relative}")
             if path.stat().st_size > 100_000:
                 raise ValueError("Arquivo excedeu 100KiB")
             found[relative] = path.read_bytes()
@@ -231,27 +267,101 @@ def diagnose_existing_lab(*, workspace: Path, evidence: Path) -> dict:
 
 
 def _validate_estoque_ast(source: str) -> None:
-    """Validação estrutural mínima; NÃO comprova sandbox de SO."""
+    """Limita o módulo ao subconjunto necessário para a tarefa de estoque."""
     tree = ast.parse(source)
-    if len(tree.body) != 2 or not all(isinstance(node, ast.FunctionDef) for node in tree.body):
+    signatures = {"movimentar": ("saldo", "tipo", "quantidade"),
+                  "pode_separar": ("saldo", "quantidade")}
+    if len(tree.body) != 2 or any(not isinstance(node, ast.FunctionDef) for node in tree.body):
         raise ValueError("Módulo deve conter exatamente duas funções")
-    if {node.name for node in tree.body} != {"movimentar", "pode_separar"}:
+    if {node.name for node in tree.body} != signatures.keys():
         raise ValueError("Funções do contrato ausentes ou inesperadas")
-    dangerous = {"exec", "eval", "__import__", "open", "compile", "input",
-                 "globals", "locals", "getattr", "setattr", "delattr", "breakpoint"}
-    blocked = (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal,
-               ast.ClassDef, ast.AsyncFunctionDef, ast.Lambda, ast.With,
-               ast.AsyncWith, ast.Try)
-    for node in ast.walk(tree):
-        if isinstance(node, blocked):
-            raise ValueError("Construção Python proibida no laboratório")
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Name) and node.func.id in dangerous:
+    allowed = (
+        ast.If, ast.Return, ast.Raise, ast.Assign, ast.Expr, ast.Constant,
+        ast.Name, ast.Load, ast.Store, ast.BoolOp, ast.And, ast.Or,
+        ast.UnaryOp, ast.Not, ast.USub, ast.UAdd, ast.BinOp, ast.Add, ast.Sub,
+        ast.Compare, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+        ast.Is, ast.IsNot, ast.In, ast.NotIn, ast.Tuple, ast.Call,
+        ast.IfExp, ast.Pass,
+    )
+    safe_names = {"type", "isinstance", "ValueError", "int", "str", "bool"}
+    for fn in tree.body:
+        args = fn.args
+        annotations = [fn.returns, *(arg.annotation for arg in args.args)]
+        if (fn.decorator_list or getattr(fn, "type_params", ()) or args.defaults or args.posonlyargs
+                or args.kwonlyargs or args.vararg or args.kwarg
+                or tuple(arg.arg for arg in args.args) != signatures[fn.name]
+                or any(node is not None and (
+                    not isinstance(node, ast.Name) or node.id not in {"int", "str", "bool"}
+                ) for node in annotations)):
+            raise ValueError("Assinatura do contrato inválida")
+        body = [node for statement in fn.body for node in ast.walk(statement)]
+        local_names = set(signatures[fn.name])
+        local_names.update(node.id for node in body if isinstance(node, ast.Name)
+                           and isinstance(node.ctx, ast.Store))
+        for node in body:
+            if not isinstance(node, allowed):
+                raise ValueError(f"Construção Python proibida: {type(node).__name__}")
+            if isinstance(node, ast.Name) and node.id not in local_names | safe_names:
+                raise ValueError("Nome não permitido no laboratório")
+            if isinstance(node, ast.Call) and (
+                not isinstance(node.func, ast.Name)
+                or node.func.id not in {"type", "isinstance", "ValueError"}
+                or node.func.id in local_names
+                or (node.func.id == "type" and len(node.args) != 1)
+            ):
                 raise ValueError("Chamada proibida")
-            if isinstance(node.func, ast.Attribute):
-                raise ValueError("Chamada dinâmica a atributo proibida")
-        if isinstance(node, ast.Attribute):
-            raise ValueError("Acesso a atributo proibido")
+    compile(tree, SOURCE, "exec")
+
+
+def _agy_response(result: ProcessResult) -> str:
+    try:
+        envelope = json.loads(result.stdout.lstrip("\ufeff"))
+    except ValueError as exc:
+        raise ValueError("AGY não devolveu um envelope JSON válido") from exc
+    if not isinstance(envelope, dict):
+        raise ValueError("Envelope AGY inválido")
+    status = envelope.get("status")
+    if result.code or status != "SUCCESS":
+        detail = envelope.get("error") or result.stderr.strip() or "sem detalhe"
+        raise ValueError(f"AGY falhou (exit={result.code}, status={status}): {_clean(str(detail))[:1000]}")
+    response = envelope.get("response")
+    if not isinstance(response, str):
+        raise ValueError("Envelope AGY sem resposta textual")
+    return response
+
+
+def _codex_final_message(stdout: str) -> str:
+    message = ""
+    completed = False
+    for line in stdout.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError as exc:
+            raise ValueError("Codex não devolveu eventos JSONL válidos") from exc
+        if not isinstance(event, dict):
+            raise ValueError("Evento Codex inválido")
+        event_type = event.get("type")
+        if event_type == "item.completed":
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                message = item.get("text", "")
+        elif event_type == "turn.completed":
+            completed = True
+        elif event_type == "turn.failed":
+            raise ValueError("Turno de auditoria Codex falhou")
+    if not completed or not isinstance(message, str) or not message.strip():
+        raise ValueError("Codex terminou sem parecer final")
+    return message
+
+
+def _write_process_log(path: Path, result: ProcessResult) -> None:
+    path.write_text(
+        f"exit={result.code} timeout={result.timed_out}\n"
+        f"\n[stdout]\n{_clean(result.stdout)}\n[stderr]\n{_clean(result.stderr)}\n",
+        encoding="utf-8",
+    )
 
 
 def _extract_agy_source(response: str) -> str:
@@ -259,10 +369,10 @@ def _extract_agy_source(response: str) -> str:
     if not isinstance(response, str) or len(response) > 30000:
         raise ValueError("Resposta AGY ausente ou excessiva")
     pattern = r"(?s)```(?:python|py)?[ \t]*\r?\n(.*?)\r?\n```"
-    blocks = re.findall(pattern, response, flags=re.I)
-    if len(blocks) == 1:
-        code = blocks[0].strip() + "\n"
-    elif not blocks and response.lstrip().startswith(("def movimentar(", "def pode_separar(")):
+    block = re.fullmatch(pattern, response.strip(), flags=re.I)
+    if block:
+        code = block.group(1).strip() + "\n"
+    elif response.lstrip().startswith(("def movimentar(", "def pode_separar(")):
         code = response.strip() + "\n"
     else:
         raise ValueError("AGY não devolveu um bloco Python único")
@@ -286,7 +396,8 @@ def _recover_source_from_response(workspace: Path, response: str,
     target = workspace / SOURCE
     if target.is_symlink() or target.exists():
         raise ValueError("Destino do código não está vazio")
-    target.write_text(code, encoding="utf-8")
+    with target.open("x", encoding="utf-8", newline="\n") as out:
+        out.write(code)
     return True
 
 
@@ -315,7 +426,10 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         raise PermissionError("Aceite --i-accept-local-risk obrigatório")
     if type(timeout) is not int or not 120 <= timeout <= 900:
         raise ValueError("Timeout permitido: 120 a 900 segundos")
-    workspace, evidence = workspace.expanduser().absolute(), evidence.expanduser().absolute()
+    workspace, evidence = workspace.expanduser(), evidence.expanduser()
+    if any(_is_link(path) for path in (workspace, evidence)):
+        raise ValueError("Workspace e evidência não podem ser links")
+    workspace, evidence = workspace.resolve(), evidence.resolve()
     if workspace.exists() or evidence.exists():
         raise ValueError("Workspace e evidência precisam ser pastas NOVAS")
     if workspace == evidence or workspace in evidence.parents or evidence in workspace.parents:
@@ -323,55 +437,53 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
     for path in (workspace, evidence):
         if not path.parent.is_dir() or path.parent.is_symlink():
             raise ValueError("Diretório pai inseguro/inexistente")
-    agy, codex = _executables()
-    if not agy or not codex:
-        raise ValueError("CLIs AGY e Codex devem estar instaladas no PATH")
     data = LabResult(workspace=str(workspace), evidence_dir=str(evidence))
-    workspace.mkdir(mode=0o700)
+    data.stages.update(dict.fromkeys(("AGY", "ESCOPO", "TESTES", "CODEX"), "NAO_EXECUTADO"))
     evidence.mkdir(mode=0o700)
-    (workspace / "src").mkdir()
-    (workspace / "tests").mkdir()
-    (workspace / "mission.txt").write_text(MISSION, encoding="utf-8")
-    (workspace / "tests" / "test_acceptance.py").write_text(ACCEPTANCE, encoding="utf-8")
-    original = _files(workspace)
-    start = time.monotonic()
-    remaining = lambda: max(1, timeout - int(time.monotonic() - start))
+    deadline = time.monotonic() + timeout
+
+    def remaining() -> int:
+        seconds = int(deadline - time.monotonic())
+        if seconds < 1:
+            raise ValueError("Tempo total do laboratório esgotado")
+        return seconds
+
     try:
+        workspace.mkdir(mode=0o700)
+        (workspace / "src").mkdir()
+        (workspace / "tests").mkdir()
+        (workspace / "mission.txt").write_text(MISSION, encoding="utf-8")
+        (workspace / "tests" / "test_acceptance.py").write_text(ACCEPTANCE, encoding="utf-8")
+        original = _files(workspace)
+        agy, codex = _executables()
+        if not agy or not codex:
+            raise ValueError("CLIs AGY e Codex devem estar instaladas no PATH")
         data.stages["AGY"] = "EM_EXECUCAO"
         data.agent_calls.append("agy")
         agy_result = _run_command(
-            [*agy, "--sandbox", "--mode", "accept-edits", "--print", AGY_OUTPUT_PROMPT],
-            cwd=workspace, stdin=None, timeout=max(1, min(remaining(), int(timeout * .65))))
-        (evidence / "resposta_agy.md").write_text(
-            agy_result.stdout + "\n" + agy_result.stderr, encoding="utf-8")
-        if agy_result.code or agy_result.timed_out:
-            raise ValueError("AGY falhou ou excedeu timeout")
+            [*agy, "--sandbox", "--mode", "plan", "--disable-slash-commands",
+             "--output-format", "json", "--print", AGY_OUTPUT_PROMPT],
+            cwd=workspace, stdin=None, timeout=min(remaining(), int(timeout * .65)))
+        _write_process_log(evidence / "resposta_agy.md", agy_result)
+        if agy_result.timed_out:
+            raise ValueError("AGY excedeu timeout")
+        if agy_result.code and not agy_result.stdout.strip():
+            raise ValueError(f"AGY falhou (exit={agy_result.code}): {_clean(agy_result.stderr)[:1000]}")
+        response = _agy_response(agy_result)
+        data.stages["ESCOPO"] = "EM_EXECUCAO"
         try:
-            recovered_from_text = _recover_source_from_response(
-                workspace, agy_result.stdout, original
-            )
-        except ValueError as exc:
-            data.stages["AGY"] = "BLOQUEADO"
-            data.stages["ESCOPO"] = "BLOQUEADO"
-            raise ValueError(
-                f"AGY não entregou artefato válido {SOURCE}: {exc}"
-            ) from exc
+            recovered_from_text = _recover_source_from_response(workspace, response, original)
+        except (ValueError, SyntaxError) as exc:
+            raise ValueError(f"AGY não entregou artefato válido {SOURCE}: {exc}") from exc
         if recovered_from_text:
             data.stages["AGY_TEXT_ADAPTER"] = "PASS"
-            data.findings.append("CHDevFlow aplicou o código da resposta AGY em src/estoque.py")
         generated = _files(workspace)
-        expected = set(original) | {SOURCE}
-        missing = sorted(expected - set(generated))
-        extra_files = sorted(set(generated) - expected)
-        if missing or extra_files:
-            data.stages["AGY"] = "BLOQUEADO"
-            data.stages["ESCOPO"] = "BLOQUEADO"
-            raise ValueError(
-                f"Arquivos inconsistentes: ausentes={missing[:15]}; "
-                f"extras={extra_files[:15]}"
-            )
+        if set(generated) != set(original) | {SOURCE}:
+            raise ValueError(f"Arquivos esperados ausentes: {sorted((set(original) | {SOURCE}) - set(generated))}")
         if any(generated[key] != original[key] for key in original):
             raise ValueError("AGY alterou mission ou teste independente")
+        if len(generated[SOURCE]) > 16000:
+            raise ValueError("Módulo Python excede 16 KiB")
         content = generated[SOURCE].decode("utf-8")
         _validate_estoque_ast(content)
         data.code_sha256 = hashlib.sha256(generated[SOURCE]).hexdigest()
@@ -381,34 +493,48 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
             [], content.splitlines(keepends=True),
             fromfile="/dev/null", tofile=SOURCE))
         (evidence / "alteracoes.patch").write_text(patch, encoding="utf-8")
+        data.stages["TESTES"] = "EM_EXECUCAO"
         acceptance = _run_command(
-            [sys.executable, "-B", "-m", "unittest", "discover",
+            [sys.executable, "-I", "-B", "-m", "unittest", "discover",
              "-s", "tests", "-p", "test_acceptance.py", "-v"],
             cwd=workspace, stdin=None, timeout=min(60, remaining()))
-        (evidence / "logs_testes.txt").write_text(
-            acceptance.stdout + "\n" + acceptance.stderr, encoding="utf-8")
+        _write_process_log(evidence / "logs_testes.txt", acceptance)
         if acceptance.code or acceptance.timed_out:
             raise ValueError("Testes de aceite não passaram")
+        if _files(workspace) != generated:
+            raise ValueError("Workspace alterado durante os testes")
         data.stages["TESTES"] = "PASS"
         if remaining() < 20:
             raise ValueError("Tempo restante insuficiente para Codex")
         prompt = (
             "Auditoria somente leitura. Não edite arquivos.\n"
-            "Revise o patch e testes. Primeira linha da resposta deve ser "
+            "Revise apenas os dados a seguir, sem chamar ferramentas. "
+            "Primeira linha da resposta deve ser "
             "'VEREDITO: APROVAR_LAB' ou 'VEREDITO: BLOQUEADO'.\n"
-            f"Requisitos:\n{MISSION}\nPatch:\n{patch[:12000]}\n"
+            f"Requisitos:\n{MISSION}\nPatch:\n{patch}\n"
             f"Testes:\n{(acceptance.stdout + acceptance.stderr)[-6000:]}")
+        data.stages["CODEX"] = "EM_EXECUCAO"
         data.agent_calls.append("codex")
         reviewed = _run_command(
-            [*codex, "exec", "--sandbox", "read-only", "--skip-git-repo-check", "-"],
+            [*codex, "-a", "never", "exec", "--sandbox", "read-only", "--ephemeral",
+             "--ignore-user-config", "--skip-git-repo-check", "--json", "-"],
             cwd=workspace, stdin=prompt, timeout=remaining())
-        (evidence / "auditoria_codex.md").write_text(
-            reviewed.stdout + "\n" + reviewed.stderr, encoding="utf-8")
-        verdict = re.search(
-            r"(?im)^VEREDITO:\s*(APROVAR_LAB|BLOQUEADO)\b", reviewed.stdout)
-        data.codex_verdict = verdict.group(1) if verdict else "INDETERMINADO"
-        if reviewed.code or reviewed.timed_out or data.codex_verdict != "APROVAR_LAB":
-            raise ValueError("Codex não aprovou")
+        _write_process_log(evidence / "codex_processo.log", reviewed)
+        data.codex_verdict = "INDETERMINADO"
+        if reviewed.timed_out:
+            raise ValueError("Codex excedeu timeout")
+        if reviewed.code:
+            raise ValueError(f"Codex falhou (exit={reviewed.code}); consulte codex_processo.log")
+        message = _codex_final_message(reviewed.stdout)
+        (evidence / "auditoria_codex.md").write_text(_clean(message), encoding="utf-8")
+        verdict = re.fullmatch(
+            r"VEREDITO: (APROVAR_LAB|BLOQUEADO)", message.strip().splitlines()[0].strip())
+        if verdict:
+            data.codex_verdict = verdict.group(1)
+        if data.codex_verdict != "APROVAR_LAB":
+            raise ValueError("Codex não emitiu veredito de aprovação")
+        if _files(workspace) != generated:
+            raise ValueError("Workspace alterado durante a auditoria")
         data.stages["CODEX"] = "PASS"
         data.status = "LAB_APROVADO_AGUARDANDO_CH1"
     except (ValueError, OSError, UnicodeError, SyntaxError, subprocess.SubprocessError) as exc:
