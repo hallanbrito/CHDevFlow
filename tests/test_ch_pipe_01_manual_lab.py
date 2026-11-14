@@ -86,7 +86,7 @@ class ManualLabPipelineTests(unittest.TestCase):
         result = inspect_lab_dossier(self.recheck)
         self.assertEqual(result.state, "LAB_CONSISTENTE_AGUARDANDO_CH1", result.findings)
         self.assertEqual(result.checks["origem_agy"], "PASS")
-        self.assertIn("sem", render_inspection(result).lower())
+        self.assertIn("nenhuma autorização", render_inspection(result).lower())
 
     def test_sem_chamada_subprocessos(self):
         with patch("subprocess.run", side_effect=AssertionError("NUNCA")):
