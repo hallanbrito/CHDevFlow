@@ -17,7 +17,7 @@ for path in (ROOT / "src", ROOT / "apps/bootstrap/sentinela/src"):
 
 from chdevflow.cli import main as cli_main
 from chdevflow.core.experimental_pilot import (
-    ProcessResult, _agent_environment, _files, run_local_pilot,
+    ProcessResult, _agent_environment, _files, run_local_pilot, diagnose_existing_lab,
 )
 
 SOURCE = '''def movimentar(saldo, tipo, quantidade):
@@ -53,6 +53,8 @@ class ExperimentalPilotTests(unittest.TestCase):
         self.assertTrue(cwd.is_dir())
         self.assertLessEqual(timeout, 900)
         if command[0] == "agy.exe":
+            if self.agy_behavior == "NO_OUTPUT":
+                return ProcessResult(0, "AGY respondeu sem gravar src/estoque.py", "")
             if self.agy_behavior == "TIMEOUT":
                 return ProcessResult(-1, "", "timeout", True)
             if self.agy_behavior == "EXTRA":
@@ -142,6 +144,46 @@ class ExperimentalPilotTests(unittest.TestCase):
         self.assertEqual(report.status, "LAB_BLOQUEADO")
         self.assertEqual(self.calls, ["agy.exe"])
         self.assertTrue((self.evidence / "execucao.json").is_file())
+
+    def test_agy_responde_sucesso_sem_criar_codigo_diagnostico_preciso(self):
+        self.agy_behavior = "NO_OUTPUT"
+        result = self.run_fake()
+        self.assertEqual(result.status, "LAB_BLOQUEADO")
+        self.assertEqual(result.stages["AGY"], "BLOQUEADO")
+        self.assertEqual(result.stages["ESCOPO"], "BLOQUEADO")
+        self.assertIn("src/estoque.py", result.findings[0])
+        self.assertEqual(self.calls, ["agy.exe"])
+        self.assertIn("src/estoque.py", diagnose_existing_lab(
+            workspace=self.workspace, evidence=self.evidence
+        )["missing_files"])
+
+    def test_lab_diagnose_ja_existente_nao_roda_agentes(self):
+        self.agy_behavior = "NO_OUTPUT"
+        self.run_fake()
+        before_files = sorted(self.workspace.rglob("*"))
+        with patch("subprocess.Popen", side_effect=AssertionError("Nenhuma CLI")), redirect_stdout(StringIO()) as out:
+            status = cli_main([
+                "pipeline", "lab-diagnose",
+                "--workspace", str(self.workspace),
+                "--evidence-dir", str(self.evidence),
+                "--json",
+            ])
+        self.assertEqual(status, 0)
+        report = json.loads(out.getvalue())
+        self.assertEqual(report["status"], "DIAGNOSTICO_SOMENTE_LEITURA")
+        self.assertTrue(report["agy_log_exists"])
+        self.assertIn("src/estoque.py", report["missing_files"])
+        self.assertEqual(before_files, sorted(self.workspace.rglob("*")))
+
+    def test_sem_log_agy_diagnostica_sem_falha(self):
+        self.agy_behavior = "NO_OUTPUT"
+        self.run_fake()
+        (self.evidence / "resposta_agy.md").unlink()
+        report = diagnose_existing_lab(
+            workspace=self.workspace, evidence=self.evidence
+        )
+        self.assertFalse(report["agy_log_exists"])
+        self.assertIsNone(report["agy_log_bytes"])
 
     def test_escopo_extra_bloqueia(self):
         self.agy_behavior = "EXTRA"
