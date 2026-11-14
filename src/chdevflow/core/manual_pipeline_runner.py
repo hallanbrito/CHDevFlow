@@ -156,7 +156,9 @@ def _safe_relative(path: str, root: Path) -> bool:
     return current.resolve().is_relative_to(root.resolve())
 
 
-def plan_manual_mission(mission: Mission, *, observed_sha: str | None = None) -> PipelinePlan:
+def plan_manual_mission(mission: Mission, *, observed_sha: str | None = None,
+                        observed_branch: str | None = None,
+                        worktree_clean: bool | None = None) -> PipelinePlan:
     """Planejamento fail-closed. Não acessa rede, não executa agentes."""
     stages = ("PREFLIGHT", "AGY", "TESTES", "CODEX", "DOSSIER", "CH1")
     reason = ""
@@ -193,6 +195,10 @@ def plan_manual_mission(mission: Mission, *, observed_sha: str | None = None) ->
             reason = "Baseline live Git não verificado"
         elif observed_sha.lower() != mission.base_sha.lower():
             reason = "Baseline SHA divergente"
+        elif not isinstance(observed_branch, str) or observed_branch in {"main", "master", "HEAD", ""}:
+            reason = "Branch isolada não verificada ou protegida"
+        elif worktree_clean is not True:
+            reason = "Worktree sem prova de estado limpo"
         else:
             # O comando plan verifica o contrato; não autentica aprovação PO
             # nem confirma custo adicional R$0.
