@@ -346,9 +346,16 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
             agy_result.stdout + "\n" + agy_result.stderr, encoding="utf-8")
         if agy_result.code or agy_result.timed_out:
             raise ValueError("AGY falhou ou excedeu timeout")
-        recovered_from_text = _recover_source_from_response(
-            workspace, agy_result.stdout, original
-        )
+        try:
+            recovered_from_text = _recover_source_from_response(
+                workspace, agy_result.stdout, original
+            )
+        except ValueError as exc:
+            data.stages["AGY"] = "BLOQUEADO"
+            data.stages["ESCOPO"] = "BLOQUEADO"
+            raise ValueError(
+                f"AGY não entregou artefato válido {SOURCE}: {exc}"
+            ) from exc
         if recovered_from_text:
             data.stages["AGY_TEXT_ADAPTER"] = "PASS"
             data.findings.append("CHDevFlow aplicou o código da resposta AGY em src/estoque.py")
