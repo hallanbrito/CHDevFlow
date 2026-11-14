@@ -100,6 +100,39 @@ class ExperimentalPilotTests(unittest.TestCase):
                 accepted=True, timeout=300, **kwargs,
             )
 
+    def test_subprocessos_reais_com_cli_fake_e_testes_python_reais(self):
+        """Popen REAL (AGY/Codex fakes), nove aceites Python REAIS."""
+        agy_script = self.root / "fake_agy_subprocess.py"
+        codex_script = self.root / "fake_codex_subprocess.py"
+        response = "```python\n" + SOURCE + "```\n"
+        agy_script.write_text(
+            "import sys\nsys.stdout.write(" + repr(response) + ")\n",
+            encoding="utf-8",
+        )
+        codex_script.write_text(
+            "import sys\n"
+            "prompt = sys.stdin.read()\n"
+            "assert 'Patch:' in prompt\n"
+            "print('VEREDITO: APROVAR_LAB')\n",
+            encoding="utf-8",
+        )
+        with patch(
+            "chdevflow.core.experimental_pilot._executables",
+            return_value=([sys.executable, str(agy_script)],
+                          [sys.executable, str(codex_script)]),
+        ):
+            report = run_local_pilot(
+                workspace=self.workspace, evidence=self.evidence,
+                accepted=True, timeout=300,
+            )
+        self.assertEqual(report.status, "LAB_APROVADO_AGUARDANDO_CH1", report.findings)
+        self.assertEqual(report.agent_calls, ["agy", "codex"])
+        self.assertEqual(report.codex_verdict, "APROVAR_LAB")
+        self.assertEqual(report.stages["AGY_TEXT_ADAPTER"], "PASS")
+        self.assertIn("Ran 9 tests", (self.evidence / "logs_testes.txt").read_text())
+        self.assertTrue((self.workspace / "src" / "estoque.py").exists())
+        self.assertTrue((self.evidence / "auditoria_codex.md").exists())
+
     def test_piloto_completo_com_fakes_e_dossie(self):
         report = self.run_fake()
         self.assertEqual(report.status, "LAB_APROVADO_AGUARDANDO_CH1", report.findings)
