@@ -37,3 +37,15 @@ O comando cria um diretório de laboratório e outro de evidências em `~/CHDevF
 `src/chdevflow/core/local_executor.py` oferece CLI nativa; `experimental_pilot.py` mantém pipeline real e dossiê; `tests/test_ch_local_executor.py` valida a entrada sem chamar modelos. A suíte F5 conserva teste de subprocessos reais com CLIs falsas e nove aceites independentes.
 
 Uma execução ponta a ponta com **AGY/Codex reais** só estará demonstrada com dossiê gerado por terminal local autenticado; CI com dublês não substitui essa evidência.
+## Entrada integrada à CLI CHDevFlow
+
+Além do módulo Python, a CLI `ch` oferece os comandos de execução local:
+
+```shell
+ch pipeline local-doctor
+ch pipeline local-once --i-accept-local-risk
+```
+
+Para decidir onde guardar as pastas e mudar o timeout: `ch pipeline local-once --root CAMINHO --timeout 480 --i-accept-local-risk`.
+
+O comando usa o pipeline F5 existente, sem nova autenticação e sem transferir a execução para o Work. Cada disparo opt-in executa uma única missão e retorna código 0 apenas com parecer `LAB_APROVADO_AGUARDANDO_CH1`. Incerteza de credencial do AGY é registrada como bloqueio com dossiê.
