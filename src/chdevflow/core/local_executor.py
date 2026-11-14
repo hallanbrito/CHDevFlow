@@ -166,3 +166,102 @@ def run_local_command(command: list[str], *, cwd: Path, stdin: str | None,
     except BaseException:
         _kill_tree(process, platform=system)
         raise
+
+
+def _executables() -> tuple[list[str], list[str]]:
+    """Verificacao read-only das CLIs no PATH da sessao local."""
+    agents = resolve_local_agents()
+    return list(agents.agy), list(agents.codex)
+
+
+def _doctor() -> dict:
+    import getpass
+    import platform as os_platform
+    agy, codex = _executables()
+    return {
+        "status": "PRONTO_PARA_LAB" if agy and codex else "FALTAM_CLIS",
+        "host_os": os_platform.system(),
+        "current_user": getpass.getuser(),
+        "agy_detected": bool(agy),
+        "codex_detected": bool(codex),
+        "authentication_verified": False,
+        "credential_access_verified": False,
+        "isolation_verified": False,
+        "note": "CLI encontrada nao comprova login. Rodar na mesma conta autenticada.",
+    }
+
+
+def run_local_pilot(**kwargs):
+    """Import tardio: experimental_pilot usa este modulo para subprocessos."""
+    from chdevflow.core.experimental_pilot import run_local_pilot as pilot
+    return pilot(**kwargs)
+
+
+def run_controlled_pilot(**kwargs):
+    """Import tardio: ciclo CCC-01 sem acoplamento ao executor de processos."""
+    from chdevflow.core.controlled_cycle import run_controlled_pilot as cycle
+    return cycle(**kwargs)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entradas de CLI multiplataforma: doctor, run (F5) e cycle (CCC-01)."""
+    import argparse
+    import getpass
+    import json
+    import platform as os_platform
+    from uuid import uuid4
+    from datetime import datetime, timezone
+
+    parser = argparse.ArgumentParser(prog="ch-local")
+    subs = parser.add_subparsers(dest="action", required=True)
+    subs.add_parser("doctor", help="Encontra CLIs sem chamadas de IA.")
+    for command in ("run", "cycle"):
+        sub = subs.add_parser(command, help=(
+            "F5 - tentativa unica" if command == "run"
+            else "CCC-01 - ate 3 AGY e 2 devolucoes, com tempo total limitado"
+        ))
+        sub.add_argument("--root", type=Path, default=Path.home() / "CHDevFlow-Labs")
+        sub.add_argument("--timeout", type=int, default=480)
+        sub.add_argument("--i-accept-local-risk", action="store_true")
+    args = parser.parse_args(argv)
+    if args.action == "doctor":
+        result = _doctor()
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["status"] == "PRONTO_PARA_LAB" else 2
+    if not args.i_accept_local_risk:
+        print("BLOQUEADO: use --i-accept-local-risk para chamar agentes reais", file=sys.stderr)
+        return 2
+    if type(args.timeout) is not int or not 120 <= args.timeout <= 900:
+        print("BLOQUEADO: timeout TOTAL permitido 120..900 segundos", file=sys.stderr)
+        return 2
+    root = args.root.expanduser().absolute()
+    if root.exists() and (root.is_symlink() or not root.is_dir()):
+        print("BLOQUEADO: raiz invalida", file=sys.stderr)
+        return 2
+    root.mkdir(parents=True, exist_ok=True)
+    ident = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:10]
+    workspace = root / f"CH-Lab-{ident}"
+    evidence = root / f"CH-Dossie-{ident}"
+    print(json.dumps({
+        "action": args.action, "host_os": os_platform.system(),
+        "current_user": getpass.getuser(), "workspace": str(workspace),
+        "evidence_dir": str(evidence),
+        "timeout_total": args.timeout,
+    }, ensure_ascii=False))
+    try:
+        runner = run_controlled_pilot if args.action == "cycle" else run_local_pilot
+        result = runner(
+            workspace=workspace, evidence=evidence, accepted=True,
+            timeout=args.timeout)
+    except (ValueError, PermissionError, OSError) as exc:
+        print(f"LAB_BLOQUEADO: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return 2
+    print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+    print(f"DOSSIE_CH1: {evidence / 'RELATORIO_COMPLETO_CH1.md'}")
+    return 0 if result.status in (
+        "LAB_APROVADO_AGUARDANDO_CH1", "APROVADO_AGUARDANDO_CH1"
+    ) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
