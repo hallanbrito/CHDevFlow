@@ -62,6 +62,15 @@ class Acceptance(unittest.TestCase):
     def test_separar_bool(self):
         with self.assertRaises(ValueError): mod.pode_separar(4,True)
 '''
+# O ciclo controlado possui regressao independente para o achado real do Codex.
+ACCEPTANCE_CCC = ACCEPTANCE + '''    def test_tipo_nao_string_eq_enganoso(self):
+        class SimulaEntrada:
+            def __eq__(self, other):
+                return other == "entrada"
+        with self.assertRaises(ValueError):
+            mod.movimentar(3, SimulaEntrada(), 2)
+'''
+
 _SECRET = re.compile(
     r"(?i)(?:github_pat_[a-z0-9_]{14,}|gh[opsur]_[a-z0-9_]{16,}"
     r"|sk-[a-z0-9_-]{18,}|(?:token|api[_-]?key|password)\s*[:=]\s*\S+)"
@@ -87,6 +96,7 @@ class LabResult:
     agent_calls: list[str] = field(default_factory=list)
     code_sha256: str | None = None
     codex_verdict: str = "NAO_EXECUTADO"
+    failure_kind: str = "NENHUMA"
     workspace: str = ""
     evidence_dir: str = ""
     cost_verified: bool = False
@@ -354,7 +364,8 @@ def _report(folder: Path, data: LabResult) -> None:
              f"Workspace: {data.workspace}",
              f"Agentes chamados: {', '.join(data.agent_calls) or 'nenhum'}",
              f"SHA256: {data.code_sha256 or 'não gerado'}",
-             f"Veredito: {data.codex_verdict}", "", "## Etapas"]
+             f"Veredito: {data.codex_verdict}",
+             f"Tipo de falha: {data.failure_kind}", "", "## Etapas"]
     lines.extend(f"- {k}: {v}" for k, v in data.stages.items())
     lines.extend(["", "## Achados"])
     lines.extend(f"- {x}" for x in data.findings)
@@ -365,12 +376,22 @@ def _report(folder: Path, data: LabResult) -> None:
 
 
 def run_local_pilot(*, workspace: Path, evidence: Path,
-                    accepted: bool, timeout: int = 480) -> LabResult:
+                    accepted: bool, timeout: int = 480,
+                    feedback: str | None = None, previous_source: str | None = None,
+                    acceptance_source: str = ACCEPTANCE) -> LabResult:
     """Aciona agentes somente depois de confirmação manual expressa na CLI."""
     if not accepted:
         raise PermissionError("Aceite --i-accept-local-risk obrigatório")
     if type(timeout) is not int or not 120 <= timeout <= 900:
         raise ValueError("Timeout permitido: 120 a 900 segundos")
+    if feedback is not None and (not isinstance(feedback, str) or len(feedback) > 12000):
+        raise ValueError("Feedback invalido ou maior que 12 KiB")
+    if previous_source is not None:
+        if not isinstance(previous_source, str) or len(previous_source.encode("utf-8")) > 16000:
+            raise ValueError("Codigo anterior invalido")
+        _validate_estoque_ast(previous_source)
+    if not isinstance(acceptance_source, str) or acceptance_source not in (ACCEPTANCE, ACCEPTANCE_CCC):
+        raise ValueError("Aceite deve ser um dos contratos oficiais imutaveis")
     workspace, evidence = workspace.expanduser(), evidence.expanduser()
     if any(_is_link(path) for path in (workspace, evidence)):
         raise ValueError("Workspace e evidência não podem ser links")
@@ -398,16 +419,22 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         (workspace / "src").mkdir()
         (workspace / "tests").mkdir()
         (workspace / "mission.txt").write_text(MISSION, encoding="utf-8")
-        (workspace / "tests" / "test_acceptance.py").write_text(ACCEPTANCE, encoding="utf-8")
+        (workspace / "tests" / "test_acceptance.py").write_text(acceptance_source, encoding="utf-8")
         original = _files(workspace)
         agy, codex = _executables()
         if not agy or not codex:
             raise ValueError("CLIs AGY e Codex devem estar instaladas no PATH")
         data.stages["AGY"] = "EM_EXECUCAO"
         data.agent_calls.append("agy")
+        agy_prompt = AGY_OUTPUT_PROMPT
+        if feedback is not None:
+            agy_prompt += "\n\nREQUISITOS E CORRECOES VINCULANTES DO CICLO CONTROLADO:\n" + feedback
+        if previous_source is not None:
+            agy_prompt += ("\nCODIGO ANTERIOR (corrija este mesmo modulo, somente src/estoque.py):\n"
+                           "```python\n" + previous_source + "\n```\n")
         agy_result = _run_command(
             [*agy, "--sandbox", "--mode", "plan", "--disable-slash-commands",
-             "--output-format", "json", "--print", AGY_OUTPUT_PROMPT],
+             "--output-format", "json", "--print", agy_prompt],
             cwd=workspace, stdin=None, timeout=min(remaining(), int(timeout * .65)))
         _write_process_log(evidence / "resposta_agy.md", agy_result)
         if agy_result.timed_out:
@@ -445,6 +472,9 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
             cwd=workspace, stdin=None, timeout=min(60, remaining()))
         _write_process_log(evidence / "logs_testes.txt", acceptance)
         if acceptance.code or acceptance.timed_out:
+            if (not acceptance.timed_out and acceptance.code and
+                re.search(r"FAILED\s*\((?:failures|errors)=", acceptance.stdout + acceptance.stderr)):
+                data.failure_kind = "TESTES_REPROVADOS"
             raise ValueError("Testes de aceite não passaram")
         if _files(workspace) != generated:
             raise ValueError("Workspace alterado durante os testes")
@@ -477,6 +507,8 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         if verdict:
             data.codex_verdict = verdict.group(1)
         if data.codex_verdict != "APROVAR_LAB":
+            if data.codex_verdict == "BLOQUEADO":
+                data.failure_kind = "CODEX_REPROVOU"
             raise ValueError("Codex não emitiu veredito de aprovação")
         if _files(workspace) != generated:
             raise ValueError("Workspace alterado durante a auditoria")
@@ -488,6 +520,8 @@ def run_local_pilot(*, workspace: Path, evidence: Path,
         for stage, value in tuple(data.stages.items()):
             if value == "EM_EXECUCAO":
                 data.stages[stage] = "BLOQUEADO"
+        if data.failure_kind == "NENHUMA":
+            data.failure_kind = "BLOQUEADO_INFRA_OU_ESCOPO"
         data.findings.append(_clean(str(exc)))
         data.status = "LAB_BLOQUEADO"
     finally:
