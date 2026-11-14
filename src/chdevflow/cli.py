@@ -394,6 +394,13 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_once.add_argument("--timeout", type=int, default=480)
     pipeline_once.add_argument("--i-accept-local-risk", action="store_true")
 
+    pipeline_cycle = pipeline_subs.add_parser(
+        "local-cycle", help="CCC-01: AGY, testes, Codex, ate 2 devolucoes (3 tentativas)."
+    )
+    pipeline_cycle.add_argument("--root", type=Path)
+    pipeline_cycle.add_argument("--timeout", type=int, default=480)
+    pipeline_cycle.add_argument("--i-accept-local-risk", action="store_true")
+
     pipeline_lab = pipeline_subs.add_parser(
         "lab-pilot", help="Piloto descartável manual AGY→testes→Codex; exige aceite explícito."
     )
@@ -661,6 +668,14 @@ def main(argv: list[str] | None = None) -> int:
             return local_executor_main(["doctor"])
         if args.pipeline_action == "local-once":
             forwarded = ["run", "--timeout", str(args.timeout)]
+            if args.root is not None:
+                forwarded.extend(["--root", str(args.root)])
+            if args.i_accept_local_risk:
+                forwarded.append("--i-accept-local-risk")
+            return local_executor_main(forwarded)
+
+        if args.pipeline_action == "local-cycle":
+            forwarded = ["cycle", "--timeout", str(args.timeout)]
             if args.root is not None:
                 forwarded.extend(["--root", str(args.root)])
             if args.i_accept_local_risk:
