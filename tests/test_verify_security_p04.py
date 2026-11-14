@@ -125,11 +125,11 @@ class TestVerifySecurityP04(unittest.TestCase):
         echo_bin = shutil.which("echo") or "/bin/echo"
         with patch("shutil.which", return_value=echo_bin):
             tokens_test = parse_and_validate_command("npm test", self.root, sanitized_path)
-            self.assertEqual(tokens_test[0], echo_bin)
+            self.assertEqual(tokens_test[0], str(Path(echo_bin).resolve()))
             self.assertEqual(tokens_test[1:], ["test"])
 
             tokens_run = parse_and_validate_command("npm run test:ci", self.root, sanitized_path)
-            self.assertEqual(tokens_run[0], echo_bin)
+            self.assertEqual(tokens_run[0], str(Path(echo_bin).resolve()))
             self.assertEqual(tokens_run[1:], ["run", "test:ci"])
 
     def test_tp06_fail_fast_behavior(self) -> None:
@@ -159,19 +159,19 @@ class TestVerifySecurityP04(unittest.TestCase):
     def test_tp08_adapter_subcommands_allowed(self) -> None:
         """TP-08: Subcomandos de adaptadores permitidos (dotnet, cargo, go)."""
         sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
-        # /usr/bin/echo é um binário executável garantido no sistema Linux
-        echo_bin = "/usr/bin/echo"
+        # O runner pode apontar /usr/bin/echo para coreutils via symlink.
+        echo_bin = shutil.which("echo") or "/bin/echo"
         with patch("shutil.which", return_value=echo_bin):
             tokens_dotnet = parse_and_validate_command("dotnet test", self.root, sanitized_path)
-            self.assertEqual(tokens_dotnet[0], echo_bin)
+            self.assertEqual(tokens_dotnet[0], str(Path(echo_bin).resolve()))
             self.assertEqual(tokens_dotnet[1:], ["test"])
 
             tokens_cargo = parse_and_validate_command("cargo test", self.root, sanitized_path)
-            self.assertEqual(tokens_cargo[0], echo_bin)
+            self.assertEqual(tokens_cargo[0], str(Path(echo_bin).resolve()))
             self.assertEqual(tokens_cargo[1:], ["test"])
 
             tokens_go = parse_and_validate_command("go test", self.root, sanitized_path)
-            self.assertEqual(tokens_go[0], echo_bin)
+            self.assertEqual(tokens_go[0], str(Path(echo_bin).resolve()))
             self.assertEqual(tokens_go[1:], ["test"])
 
     def test_tp09_exit_simulation_pass(self) -> None:
