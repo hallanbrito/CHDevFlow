@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 from chdevflow.core.intake import validate_issue
 from chdevflow.core.experimental_pilot import _is_link
+from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation import (
     EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
     OWNER, PROJECT, REPO, SCHEMA, _safe_outbox,
@@ -221,6 +222,9 @@ def _eligible_outbox(path: Path) -> dict:
             or status not in allowed
             or outbox.get("evidence_files") != list(allowed[status])):
         raise PublicationError("Outbox sem causa da terceira reprovacao: somente preview F7")
+    # No modo publicacao, a V1 precisa comprovar toda a linha de producao.
+    # Preview legado continua permitido em po_escalation.py.
+    verify_provenance(path.parent, outbox)
     return outbox
 
 
@@ -283,6 +287,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "schema": PLAN_SCHEMA, "repo": REPO, "project": PROJECT,
         "issue": outbox["issue"], "execution_id": outbox["execution_id"],
         "mission_id": outbox["mission_id"], "code_sha256": outbox["code_sha256"],
+        "mission_digest": outbox["provenance"]["mission_digest"],
+        "base_sha": outbox["provenance"]["base_sha"],
         "approval_comment": approval["id"],
         "project_state": preview["state"],
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
@@ -378,6 +384,8 @@ def apply_publication_plan(
             or plan.get("execution_id") != outbox["execution_id"]
             or plan.get("code_sha256") != outbox["code_sha256"]
             or plan.get("mission_id") != outbox["mission_id"]
+            or plan.get("mission_digest") != outbox["provenance"]["mission_digest"]
+            or plan.get("base_sha") != outbox["provenance"]["base_sha"]
             or type(plan.get("approval_comment")) is not int):
         raise PublicationError("Plano nao pertence a outbox")
     def current_plan() -> dict:
