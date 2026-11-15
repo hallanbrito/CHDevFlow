@@ -268,6 +268,11 @@ class GenericCycleTests(unittest.TestCase):
              "RELATORIO_COMPLETO_CH1.md"])
         self.assertNotIn(str(self.worktree), json.dumps(payload))
         self.assertNotIn(str(self.evidence), json.dumps(payload))
+        self.assertIn("provenance", payload)
+        from chdevflow.core.po_escalation_provenance import verify_provenance
+        proof = verify_provenance(self.evidence, payload)
+        self.assertEqual(proof["mission_digest"], report.mission_digest)
+        self.assertEqual(proof["base_sha"], BASE)
 
     def test_terceiro_teste_reprovado_outbox_nao_exige_codex_inexistente(self):
         self.fail_tests = {1, 2, 3}
@@ -283,6 +288,8 @@ class GenericCycleTests(unittest.TestCase):
         from chdevflow.core.po_escalation import _safe_outbox
         restored = _safe_outbox(self.evidence / "escalonamento_po.json")
         self.assertEqual(restored["third_attempt_status"], "TESTES_REPROVADOS")
+        from chdevflow.core.po_escalation_provenance import verify_provenance
+        verify_provenance(self.evidence, payload)
         self.assertFalse(
             (self.evidence / "attempt-03" / "auditoria_codex.md").exists())
 
