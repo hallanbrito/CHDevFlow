@@ -145,6 +145,57 @@ A implementacao e os testes offline nao constituem autorizacao para usar
 a funcao de aplicacao na Issue #85 nem para habilita-la em producao.
 A CI do novo HEAD e revisao independente permanecem gates obrigatorios.
 
+## Segurança D-3 — veto independente do Codex e remediação
+
+Auditoria Codex real do PO em 15/11/2026 sobre HEAD `d7aa472`:
+**VEREDITO: BLOQUEADO**, com cinco achados ALTOS e quatro MÉDIOS.
+Evidência local `CH-F7-Codex-Auditoria-d7aa472a.jsonl`.
+A CI `#43728084714` ficou verde com 746 testes **no HEAD antigo**;
+isso NÃO revoga o veto do Codex.
+
+Correções posteriores à auditoria (exigem nova CI e novo parecer):
+- terceira reprovação por **testes** não requer `auditoria_codex.md`,
+  pois Codex não foi chamado; V1 identifica `third_attempt_status`;
+- a outbox V1 agora carrega `provenance`, com digest do manifesto
+  canônico, SHA Git **base da missão** e hashes de TODOS os artefatos
+  exigidos pelas três tentativas (`execucao.json`, relatório, código,
+  patch, log de testes e log/parecer Codex quando realmente houve);
+  publicação falha fechado se faltarem provas, qualquer arquivo for
+  adulterado ou manifesto/execução divergirem;
+- aprovação individual exige uma única linha EXATA e vigente, com
+  `CODE_SHA256` (código AGY), `BASE_SHA` (commit base da missão),
+  `MISSION_DIGEST` (manifesto), Issue e execution ID:
+  
+      CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#<issue> EXECUTION#<id> CODE_SHA256=<sha64> BASE_SHA=<gitsha40> MISSION_DIGEST=<sha64> ACTION=COMMENT_ONLY
+
+- aprovação no comentário da Issue de origem ou #63 é conferida em
+  histórico LIVE (inclusive edições). Revogação posterior por comentário
+  PO com prefixo `CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#<issue>
+  EXECUTION#<id>` em qualquer um desses dois tópicos bloqueia POST;
+- nova consulta LIVE depois de adquirir lock e antes de tentar POST;
+- `f7-publicacao-<id>.lock` é um journal local **durável e pendente ANTES
+  do POST**, `remote_effect=INDETERMINADO`, sem retry; apenas readback
+  muda o status local para `PUBLICADO_VERIFICADO`.
+
+**Limitações importantes que continuam BLOQUEANDO a liberação real:**
+1. A prova local por hashes é **consistência dos artefatos**, não
+   assinatura externa independente nem proteção contra quem pode
+   substituir o dossiê inteiro por dados coerentes.
+2. Não há exclusão distribuída atômica entre HOSTS distintos: GitHub
+   Issues Comments não tem chave de idempotência global. Exige escritor
+   único e um protocolo operacional/teste auditável antes de liberar.
+3. Revogação e mudanças de estado podem ocorrer imediatamente após a
+   última releitura LIVE; coordenação/atomicidade global não demonstrada.
+4. Filesystem reparse/TOCTOU em Windows/Linux não foi ensaiado em
+   condições concorrentes reais. Não declarar prova resistente a
+   substituição atômica maliciosa de paths.
+5. `PYTHONUTF8` não é requisito após fix de bytes/UTF-8, mas a nova
+   versão requer a execução novamente da suíte Windows e CI Linux.
+
+**Status de governança:** PR #88 Draft; sem chamada de publicação real,
+sem admissão/escrita de cartão Project #2, sem merge/deploy; a F7 segue
+BLOQUEADA por auditoria até nova evidência e correção de riscos residuais.
+
 ## Próxima frente: Control Center visual (depois dos gates Python)
 
 Após F7 e homologação dos gates: expandir o Control Center já existente
