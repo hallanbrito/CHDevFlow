@@ -29,6 +29,9 @@ EVIDENCE_FILES = (
     "attempt-03/auditoria_codex.md",
     "RELATORIO_COMPLETO_CH1.md",
 )
+EVIDENCE_FILES_TESTS_REPROVADOS = tuple(
+    path for path in EVIDENCE_FILES if path != "attempt-03/auditoria_codex.md"
+)
 _HEX = re.compile(r"^[0-9a-f]{32}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MISSION = re.compile(r"^[A-Za-z0-9_.-]{3,80}$")
@@ -87,9 +90,16 @@ def _safe_outbox(path: Path) -> dict:
         if not isinstance(code_sha, str) or not _SHA256.fullmatch(code_sha):
             raise ValueError("SHA256 da implementacao invalido")
         evidence_files = data.get("evidence_files")
-        if evidence_files != list(EVIDENCE_FILES):
+        third_attempt_status = data.get("third_attempt_status")
+        if third_attempt_status == "TESTES_REPROVADOS":
+            expected_files = EVIDENCE_FILES_TESTS_REPROVADOS
+        elif third_attempt_status in ("CODEX_REPROVOU", None):
+            expected_files = EVIDENCE_FILES
+        else:
+            raise ValueError("Estado da terceira tentativa invalido")
+        if evidence_files != list(expected_files):
             raise ValueError("Evidencias da outbox nao foram sanitizadas")
-        for relative in EVIDENCE_FILES:
+        for relative in expected_files:
             _safe_file_within(path.parent, relative)
         # Arquivo codigo.py pode usar CRLF no host Windows; read_text()
         # normaliza as quebras para validar o SHA logico do candidato AGY.
@@ -100,7 +110,8 @@ def _safe_outbox(path: Path) -> dict:
     return {"execution_id": execution, "mission_id": mission,
             "issue": issue, "attempts": 3, "returns": 2,
             "status": "AGUARDANDO_PO", "schema": data.get("schema"),
-            "code_sha256": code_sha, "evidence_files": evidence_files}
+            "code_sha256": code_sha, "evidence_files": evidence_files,
+            "third_attempt_status": data.get("third_attempt_status")}
 
 
 def _project_snapshot() -> dict:
