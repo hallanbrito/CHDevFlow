@@ -260,7 +260,7 @@ class ExperimentalPilotTests(unittest.TestCase):
         self.assertEqual(report.status, "LAB_APROVADO_AGUARDANDO_CH1", report.findings)
         self.assertEqual(self.calls, ["agy.exe", sys.executable, "codex.cmd"])
         self.assertEqual(report.stages["AGY_TEXT_ADAPTER"], "PASS")
-        self.assertEqual((self.workspace / "src" / "estoque.py").read_text(), SOURCE)
+        self.assertEqual((self.workspace / "src" / "estoque.py").read_text(encoding="utf-8"), SOURCE)
         self.assertEqual(report.codex_verdict, "APROVAR_LAB")
 
     def test_agy_texto_com_import_nao_e_escrito_nem_executado(self):
