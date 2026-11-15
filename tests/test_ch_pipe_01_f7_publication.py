@@ -128,14 +128,16 @@ class PublicationTests(unittest.TestCase):
         return pub.build_publication_plan(self._outbox(), self.context)
 
     def _apply(self, plan=None, reader=None, poster=None, answer=None):
+        """Somente simulacao offline; habilitacao temporaria no escopo do teste."""
         plan = plan or self._plan()
-        return pub.apply_publication_plan(
-            self.outbox, plan, plan["digest"],
-            reader=reader or (lambda *_: self.context),
-            poster=poster or (lambda *_: self.fail("POST proibido")),
-            human_prompt=answer or (
-                lambda _: "APROVO F7 PUBLICAR " + plan["digest"][:12]),
-            audit=self.audit.append)
+        with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True):
+            return pub.apply_publication_plan(
+                self.outbox, plan, plan["digest"],
+                reader=reader or (lambda *_: self.context),
+                poster=poster or (lambda *_: self.fail("POST proibido")),
+                human_prompt=answer or (
+                    lambda _: "APROVO F7 PUBLICAR " + plan["digest"][:12]),
+                audit=self.audit.append)
 
     def test_plano_seguro_sem_segredos_e_sem_project_write(self):
         plan = self._plan()
@@ -623,6 +625,22 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(status["status"], "COMENTARIO_NAO_OBSERVADO")
         self.assertEqual(status["remote_writes"], 0)
         self.assertFalse(status["retry_allowed"])
+
+    def test_api_apply_bloqueia_callback_remoto_com_gate_off(self):
+        """Nao basta barrar CLI e _post_comment: a API tambem deve bloquear."""
+        plan = self._plan()
+        calls = []
+        with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", False):
+            with self.assertRaisesRegex(pub.PublicationError, "desativada"):
+                pub.apply_publication_plan(
+                    self.outbox, plan, plan["digest"],
+                    reader=lambda *_: calls.append("GET") or self.context,
+                    poster=lambda *_: calls.append("POST") or {"id": 1},
+                    human_prompt=lambda *_: calls.append("INPUT") or "sim",
+                    audit=lambda *_: calls.append("AUDIT"),
+                )
+        self.assertEqual(calls, [])
+        self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
 
     def test_post_real_permanece_desativado_sem_gh(self):
         with patch.object(pub, "_gh_json",
