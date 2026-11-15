@@ -66,10 +66,12 @@ def _read_safe(root: Path, relative: str) -> bytes:
 def _preflight(path: Path):
     if path.is_symlink() or not path.is_file():
         raise ValueError("Manifesto ausente ou link simbolico")
-    root = path.parent.resolve()
     mission = load_manifest(path)
-    if Path(mission.worktree).resolve() != root:
-        raise ValueError("Worktree nao corresponde ao manifesto")
+    root = Path(mission.worktree).resolve()
+    if not root.is_dir() or root.is_symlink():
+        raise ValueError("Worktree nao existe ou e link")
+    if root in path.parents:
+        raise ValueError("Manifesto deve ficar fora da worktree: SHA e conteudo pinados")
     if not root.name.startswith("CH-Lab-"):
         raise ValueError("Use worktree Git DESCARTAVEL denominada CH-Lab-*")
     if len(mission.allowed_paths) != 1:
@@ -169,11 +171,11 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     manifest_path = manifest_path.expanduser().absolute()
     evidence = evidence.expanduser().absolute()
     if (evidence.exists() or evidence.is_symlink() or
-            not evidence.parent.is_dir() or evidence.parent.is_symlink() or
-            manifest_path.parent in evidence.parents or
-            evidence in manifest_path.parent.parents):
-        raise ValueError("Dossie deve ser pasta NOVA fora da worktree")
+            not evidence.parent.is_dir() or evidence.parent.is_symlink()):
+        raise ValueError("Dossie deve ser pasta NOVA")
     mission, root, target, prompt, snapshot = _preflight(manifest_path)
+    if root in evidence.parents or evidence in root.parents or root == evidence:
+        raise ValueError("Dossie deve ficar FORA da worktree")
     agy, codex = _executables()
     if not agy or not codex:
         raise ValueError("CLIs locais AGY e Codex ausentes")
