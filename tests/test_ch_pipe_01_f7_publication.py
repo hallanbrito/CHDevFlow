@@ -400,6 +400,23 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Docker isolada"):
             self._outbox()
 
+    def test_outbox_com_json_duplicado_falha_fechado(self):
+        original = self.outbox.read_text(encoding="utf-8")
+        self.outbox.write_text(
+            original.replace('"schema":', '"schema": "LEGADA", "schema":', 1),
+            encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            self._outbox()
+
+    def test_estado_execucao_json_duplicado_falha_fechado(self):
+        record_path = self.root / "execucao.json"
+        original = record_path.read_text(encoding="utf-8")
+        record_path.write_text(
+            original.replace('"status":', '"status":"AGUARDANDO_PO","status":', 1),
+            encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            self._outbox()
+
     def test_prova_de_proveniencia_detecta_log_adulterado(self):
         (self.root / "attempt-01" / "testes.log").write_text(
             "log falsificado", encoding="utf-8")
@@ -625,6 +642,19 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(parsed["title"], "Ação")
         self.assertNotIn("text", call.call_args.kwargs)
         self.assertNotIn("encoding", call.call_args.kwargs)
+
+    def test_gh_json_com_chaves_duplicadas_falha_fechado(self):
+        response = subprocess.CompletedProcess(
+            ["gh"], 0, b'{"id":1,"id":2}', b"")
+        with patch.object(pub.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(pub.PublicationError, "JSON/UTF-8"):
+                pub._gh_json("api", "user")
+
+    def test_local_json_duplicado_falha_fechado(self):
+        path = self.root / "duplicate-plan.json"
+        path.write_text('{"digest":"a","digest":"b"}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            pub._read_local_json(path)
 
     def test_gh_bytes_invalidos_falha_fechado(self):
         response = subprocess.CompletedProcess(["gh"], 0, b'{"x":"' + bytes([0x9d]) + b'"}', b"")
