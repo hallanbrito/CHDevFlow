@@ -22,6 +22,7 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from chdevflow.core import po_escalation_publication as pub
+from chdevflow.core.po_escalation_attestation import SSH_NAMESPACE, execution_statement, statement_bytes
 from chdevflow.core.manual_pipeline_runner import Mission, SCHEMA as MISSION_SCHEMA
 from chdevflow.core.po_escalation_provenance import create_provenance, verify_provenance
 from chdevflow.core.po_escalation_reservation import (
@@ -136,6 +137,11 @@ class PublicationTests(unittest.TestCase):
         protection_patch = patch.object(pub, "_verify_reservation_protection")
         self.addCleanup(protection_patch.stop)
         self.gate = protection_patch.start()
+        self.verify_attestation = pub._verify_attestation
+        attestation_patch = patch.object(pub, "_verify_attestation")
+        self.addCleanup(attestation_patch.stop)
+        self.attestation = attestation_patch.start()
+        self.attestation.return_value = {"producer_run": "isolated-test", "producer_sha": "e" * 40}
 
     def _outbox(self):
         return pub._eligible_outbox(self.outbox)
@@ -531,6 +537,62 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(pub.PublicationError, "imutabilidade"):
                 self._apply(poster=lambda *_: self.fail("POST sem ruleset"))
         self.reservations.assert_not_called()
+
+    def test_sem_atestacao_bloqueia_reserva_e_post(self):
+        self.attestation.side_effect = self.verify_attestation
+        with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": ""}):
+            with self.assertRaisesRegex(ValueError, "Chave confiavel"):
+                self._apply(poster=lambda *_: self.fail("POST sem atestacao"))
+        self.reservations.assert_not_called()
+
+    def test_atestacao_openssh_rejeita_dossie_adulterado_e_assinante_local(self):
+        self.attestation.side_effect = self.verify_attestation
+        producer_sha = "e" * 40
+        origin = "ci-f7:issuer-receipt-1"
+        with tempfile.TemporaryDirectory() as isolated_issuer:
+            trusted, untrusted = (Path(isolated_issuer) / name for name in ("trusted", "local"))
+            for key in (trusted, untrusted):
+                subprocess.run(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                    capture_output=True, check=True)
+            key = " ".join(trusted.with_suffix(".pub").read_text(encoding="ascii").split()[:2])
+            path = self.root / "f7-attestation.json"
+
+            def sign(statement, signer):
+                signed = subprocess.run(
+                    ["ssh-keygen", "-Y", "sign", "-n", SSH_NAMESPACE, "-f", str(signer)],
+                    input=statement_bytes(statement), capture_output=True, check=True)
+                signature = signed.stdout.decode("ascii").replace("\r\n", "\n")
+                path.write_text(json.dumps({"statement": statement, "signature": signature}),
+                                encoding="ascii")
+
+            def observe():
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    code = pub.main(["--outbox", str(self.outbox), "--verify-attestation"])
+                return code, output.getvalue()
+
+            with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": key,
+                                         "CH_F7_TRUSTED_RUNNER_SHA": producer_sha}):
+                original = execution_statement(
+                    self._outbox(), producer_sha=producer_sha, producer_run=origin)
+                sign(original, trusted)
+                code, result = observe()
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(result)["producer_run"], origin)
+
+                (self.root / "attempt-02" / "testes.log").write_text(
+                    "Log alterado e hashes locais recalculados", encoding="utf-8")
+                self.data["provenance"] = create_provenance(self.root)
+                self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+                with contextlib.redirect_stderr(io.StringIO()) as error:
+                    self.assertEqual(observe()[0], 1)
+                self.assertIn("diverge do dossie", error.getvalue())
+
+                sign(execution_statement(self._outbox(), producer_sha=producer_sha,
+                                         producer_run=origin), untrusted)
+                with contextlib.redirect_stderr(io.StringIO()) as error:
+                    self.assertEqual(observe()[0], 1)
+                self.assertIn("nao corresponde ao produtor", error.getvalue())
 
     def test_reserva_git_real_sobrevive_post_inconclusivo_e_troca_de_executor(self):
         if os.name == "nt" and "#!sandbox." in str(self.root):

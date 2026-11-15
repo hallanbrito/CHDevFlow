@@ -16,6 +16,7 @@ import sys
 from typing import Any, Callable
 
 from chdevflow.core.intake import validate_issue, _fields, _get
+from chdevflow.core.po_escalation_attestation import verify_external_attestation
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation_reservation import (
@@ -112,6 +113,14 @@ def _reconciliation_context(issue: int, _approval_comment: int) -> dict:
 
 def _reservation_store() -> GitReservationStore:
     return GitReservationStore(f"https://github.com/{REPO}.git")
+
+
+def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
+    return verify_external_attestation(
+        outbox_path.parent / "f7-attestation.json", outbox,
+        trusted_key=os.environ.get("CH_F7_TRUSTED_RUNNER_PUBKEY", ""),
+        trusted_producer_sha=os.environ.get("CH_F7_TRUSTED_RUNNER_SHA", ""),
+    )
 
 
 def _verify_reservation_protection() -> None:
@@ -581,6 +590,7 @@ def apply_publication_plan(
         raise PublicationError("Acao de publicacao fora do escopo")
     if current_plan() != plan:
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
+    custody = _verify_attestation(outbox_path, outbox)
     _verify_reservation_protection()
     journal = _claim_publication(
         outbox_path, outbox["execution_id"], supplied_digest)
@@ -601,6 +611,7 @@ def apply_publication_plan(
         ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
            "reservation_sha": reservation_sha,
+           "producer": custody,
            "issue": outbox["issue"], "digest": supplied_digest})
     try:
         posted = poster(outbox["issue"], plan["body"])
@@ -672,10 +683,19 @@ def main(argv=None) -> int:
     parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--apply-plan", type=Path)
     parser.add_argument("--reconcile-plan", type=Path)
+    parser.add_argument("--verify-attestation", action="store_true")
     parser.add_argument("--confirm")
     parser.add_argument("--audit-file", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.verify_attestation:
+            if (args.apply_plan or args.reconcile_plan or args.plan_file or args.approval_comment
+                    or args.confirm or args.audit_file):
+                raise PublicationError("Validacao externa aceita somente --verify-attestation")
+            outbox = _eligible_outbox(args.outbox)
+            proof = _verify_attestation(args.outbox, outbox)
+            print(json.dumps({"status": "ATESTACAO_VERIFICADA", **proof}))
+            return 0
         if args.reconcile_plan:
             if (args.apply_plan or args.plan_file or args.approval_comment
                     or args.confirm or args.audit_file):
