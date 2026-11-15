@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -68,6 +69,16 @@ def _safe_outbox(path: Path) -> dict:
         evidence_files = data.get("evidence_files")
         if evidence_files != list(EVIDENCE_FILES):
             raise ValueError("Evidencias da outbox nao foram sanitizadas")
+        for relative in EVIDENCE_FILES:
+            source = path.parent / relative
+            if (source.is_symlink() or not source.is_file() or
+                    source.stat().st_size > 100000):
+                raise ValueError("Evidencia ausente, link ou excessiva")
+        # Arquivo codigo.py pode usar CRLF no host Windows; read_text()
+        # normaliza as quebras para validar o SHA logico do candidato AGY.
+        source_text = (path.parent / EVIDENCE_FILES[0]).read_text(encoding="utf-8")
+        if hashlib.sha256(source_text.encode("utf-8")).hexdigest() != code_sha:
+            raise ValueError("Evidencia AGY nao confere com code_sha256")
     return {"execution_id": execution, "mission_id": mission,
             "issue": issue, "attempts": 3, "returns": 2,
             "status": "AGUARDANDO_PO", "schema": data.get("schema"),
@@ -152,17 +163,57 @@ def preview(outbox_path: Path, *, reader=_project_snapshot) -> dict:
     return build_escalation_preview(_safe_outbox(outbox_path), reader())
 
 
+def pending_publication_receipt(outbox_path: Path, *, reason: str) -> dict:
+    """Recibo LOCAL de falha GitHub; sem qualquer escrita ou retry remoto."""
+    outbox = _safe_outbox(outbox_path)
+    return {
+        "schema": "CHDEVFLOW-F7-PENDING-RECEIPT/1",
+        "execution_id": outbox["execution_id"],
+        "mission_id": outbox["mission_id"],
+        "issue": outbox["issue"],
+        "code_sha256": outbox.get("code_sha256"),
+        "publication_status": "PENDENTE_PUBLICACAO",
+        "reason": reason,
+        "remote_writes": 0,
+        "retry_agents": False,
+        "requires_live_po_approval": True,
+    }
+
+
+def write_receipt_once(path: Path, payload: dict) -> None:
+    """Grava um unico recibo local; nao apaga arquivos existentes."""
+    if (path.exists() or path.is_symlink() or not path.parent.is_dir() or
+            path.parent.is_symlink()):
+        raise ValueError("Recibo ja existe ou destino invalido")
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="F7 - leitura/preview de escalonamento Project #2, SEM escrita")
     parser.add_argument("--outbox", required=True, type=Path)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--receipt", type=Path,
+        help="Somente em falha de Project: recibo local novo e exclusivo")
     args = parser.parse_args(argv)
     try:
         plan = preview(args.outbox)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     except (ValueError, OSError, UnicodeError) as exc:
+        if args.receipt is not None:
+            try:
+                write_receipt_once(
+                    args.receipt,
+                    pending_publication_receipt(
+                        args.outbox, reason="PROJECT_INDISPONIVEL_OU_INCONCLUSIVO"))
+            except (ValueError, OSError, UnicodeError) as receipt_exc:
+                print("F7 RECIBO BLOQUEADO: " + str(receipt_exc)[:200],
+                      file=sys.stderr)
         print("F7 BLOQUEADO: " + str(exc)[:400], file=sys.stderr)
         return 1
 
