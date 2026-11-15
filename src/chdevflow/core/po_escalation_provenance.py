@@ -59,11 +59,13 @@ def _state(root: Path) -> tuple[Mission, dict]:
     state = json.loads(_read_text(root, "execucao.json"))
     if not isinstance(state, dict):
         raise ValueError("Registro de execucao invalido")
-    if (state.get("mission_digest") != mission.digest or
+    if (mission.repository != "hallanbrito/CHDevFlow" or
+            state.get("mission_digest") != mission.digest or
             state.get("mission_id") != mission.mission_id or
             state.get("issue") != mission.issue or
             state.get("status") != "AGUARDANDO_PO"):
-        raise ValueError("Registro e manifesto da missao divergentes")
+        raise ValueError("Registro, repositorio e manifesto da missao divergentes")
+    _expected_files(state)  # valida tipos, indices e estados antes de iterar
     if not SHA40.fullmatch(mission.base_sha):
         raise ValueError("Base Git da missao invalida")
     for i, row in enumerate(state.get("attempts", []), 1):
