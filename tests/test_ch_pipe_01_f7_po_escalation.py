@@ -1,7 +1,9 @@
 """F7: contratos offline para Project #2, SEM chamadas gh nem escrita."""
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import sys
@@ -132,6 +134,105 @@ class EscalationPreviewTests(unittest.TestCase):
         self.assertEqual(saved["remote_writes"], 0)
         self.assertEqual(run.call_args.args[0][:3],
                          ["gh", "project", "item-list"])
+
+    def _issue(self, labels=None, body=""):
+        return {
+            "id": "I_mock_85", "number": 85, "state": "OPEN",
+            "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
+            "title": "Missao F6 existente", "body": body,
+            "labels": [] if labels is None else labels,
+        }
+
+    def test_intake_nao_inscrito_nao_sugere_admissao(self):
+        called = []
+        def issue_reader(number):
+            called.append(number)
+            return self._issue()
+        plan = f7.preview(
+            self.outbox, reader=lambda: {"totalCount": 0, "items": []},
+            issue_reader=issue_reader)
+        self.assertEqual(called, [85])
+        self.assertEqual(plan["state"], "EXIGE_TRIAGEM_INTAKE")
+        self.assertEqual(plan["intake_status"], "OUT_OF_SCOPE")
+        self.assertIn("NOT_ENROLLED", plan["intake_reasons"])
+        self.assertEqual(plan["writes"], 0)
+        self.assertIn("nao adicionar labels", plan["next_step"])
+
+    def test_intake_bloqueia_issue_rotulada_sem_contrato(self):
+        issue = self._issue(
+            labels=[{"name": "ch:workflow"}, {"name": "ch:agy"}],
+            body="Resumo livre sem campos do Intake")
+        plan = f7.preview(
+            self.outbox, reader=lambda: {"totalCount": 0, "items": []},
+            issue_reader=lambda _: issue)
+        self.assertEqual(plan["state"], "EXIGE_TRIAGEM_INTAKE")
+        self.assertEqual(plan["intake_status"], "BLOCKED")
+        self.assertIn("OBJECTIVE_MISSING", plan["intake_reasons"])
+        self.assertEqual(plan["writes"], 0)
+
+    def test_intake_valido_ainda_exige_gate_ksync(self):
+        body = ("### Esteira\nAGY\n"
+                "### Nivel de autonomia\nCH-0\n"
+                "### Objetivo e valor\nEntregar piloto de frete\n"
+                "### Escopo, exclusoes e criterios de aceite\n"
+                "Somente codigo frete e testes independentes\n"
+                "### Baseline Git (branch e SHA)\nfeat/f6 abcdef0123456\n"
+                "### Verificacoes e evidencias exigidas\n"
+                "Suite de testes Docker e auditoria Codex\n")
+        # O validador usa chaves exatas do contrato Intake F1.
+        body = body.replace("Nivel de autonomia", "Nível de autonomia").replace(
+            "Escopo, exclusoes e criterios de aceite",
+            "Escopo, exclusões e critérios de aceite").replace(
+            "Verificacoes e evidencias exigidas",
+            "Verificações e evidências exigidas")
+        issue = self._issue(
+            labels=[{"name": "ch:workflow"}, {"name": "ch:agy"}],
+            body=body)
+        plan = f7.preview(
+            self.outbox, reader=lambda: {"totalCount": 0, "items": []},
+            issue_reader=lambda _: issue)
+        self.assertEqual(plan["state"], "EXIGE_ADMISSAO_PO")
+        self.assertEqual(plan["intake_status"], "CONTENT_VALID")
+        self.assertEqual(plan["intake_reasons"], [])
+        self.assertIn("historico CLEAR", plan["next_step"])
+        self.assertEqual(plan["writes"], 0)
+
+    def test_cartao_existente_pula_consulta_intake_sem_escrita(self):
+        plan = f7.preview(
+            self.outbox,
+            reader=lambda: {"totalCount": 1, "items": [issue_item()]},
+            issue_reader=lambda _: self.fail("Nao consultar issue existente"))
+        self.assertEqual(plan["state"], "JA_EXISTE_NO_PROJECT")
+        self.assertEqual(plan["writes"], 0)
+
+    def test_intake_live_identidade_divergente_bloqueia(self):
+        issue = self._issue()
+        issue["url"] = "https://attacker.example/issues/85"
+        with self.assertRaisesRegex(ValueError, "identidade divergente"):
+            f7.preview(
+                self.outbox, reader=lambda: {"totalCount": 0, "items": []},
+                issue_reader=lambda _: issue)
+
+    def test_cli_live_somente_gh_project_list_e_issue_view(self):
+        import subprocess
+        calls = []
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            if argv[:3] == ["gh", "project", "item-list"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, json.dumps({"totalCount": 0, "items": []}), "")
+            if argv[:3] == ["gh", "issue", "view"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, json.dumps(
+                        self._issue(), ensure_ascii=False).encode("utf-8"), b"")
+            self.fail("Chamada gh fora de leitura: " + repr(argv))
+        with patch.object(f7.subprocess, "run", side_effect=fake_run):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                rc = f7.main(["--outbox", str(self.outbox), "--json"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(json.loads(output.getvalue())["state"],
+                         "EXIGE_TRIAGEM_INTAKE")
 
     def test_issue_existente_nao_gera_mutacao(self):
         project = {"totalCount": 1, "items": [issue_item()]}
