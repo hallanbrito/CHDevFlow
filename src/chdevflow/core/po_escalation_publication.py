@@ -98,10 +98,21 @@ def _live_context(issue: int, approval_comment: int) -> dict:
         "--format", "json", "-L", "500")
     approval = _gh_json(
         "api", f"repos/{REPO}/issues/comments/{approval_comment}")
+    issue_url = approval.get("issue_url")
+    allow = {
+        f"https://api.github.com/repos/{REPO}/issues/{issue}",
+        f"https://api.github.com/repos/{REPO}/issues/{APPROVAL_ISSUE}",
+    }
+    if issue_url not in allow:
+        raise PublicationError("Comentario PO vinculado a Issue inesperada")
+    approval_thread_number = int(issue_url.rsplit("/", 1)[1])
+    comments = _issue_comments(issue)
+    approval_history = (comments if approval_thread_number == issue
+                        else _issue_comments(approval_thread_number))
     return {
         "who": who, "repository": repository, "issue": target,
         "project": project, "approval": approval,
-        "comments": _issue_comments(issue),
+        "comments": comments, "approval_history": approval_history,
     }
 
 
@@ -122,7 +133,8 @@ def _expected_comment(outbox: dict, approval_id: int) -> str:
     )
 
 
-def _approval_fingerprint(proof: dict, outbox: dict) -> dict:
+def _approval_fingerprint(proof: dict, outbox: dict,
+                          history: list[dict]) -> dict:
     if not isinstance(proof, dict):
         raise PublicationError("Comentario PO invalido")
     approval_id = proof.get("id")
@@ -142,8 +154,30 @@ def _approval_fingerprint(proof: dict, outbox: dict) -> dict:
         "ACTION=COMMENT_ONLY"
     )
     body = proof.get("body")
-    if not isinstance(body, str) or statement not in body.splitlines():
-        raise PublicationError("Autorizacao nao confere com execucao/acao/SHA")
+    # Uma declaracao isolada: rejeita linhas contraditorias ou edicoes que
+    # mantenham a autorizacao mas acrescentem texto de revogacao.
+    if not isinstance(body, str) or body.strip() != statement:
+        raise PublicationError("Autorizacao nao confere ou foi alterada/revogada")
+    if not isinstance(history, list):
+        raise PublicationError("Historico de revogacao do PO indisponivel")
+    _comment_snapshot(history)  # fail-closed em paginacao/itens invalidos
+    matching = [comment for comment in history
+                if comment.get("id") == approval_id]
+    if (len(matching) != 1 or matching[0].get("body") != body
+            or matching[0].get("user", {}).get("login") != OWNER
+            or matching[0].get("updated_at") != proof.get("updated_at")):
+        raise PublicationError("Aprovacao nao confirmada no historico LIVE")
+    revoke_prefix = (
+        f"CH-GOV-01 F7 REVOGAR PROJECT#{PROJECT} ISSUE#{outbox['issue']} "
+        f"EXECUTION#{outbox['execution_id']}"
+    )
+    for comment in history:
+        if (comment["id"] > approval_id
+                and comment["user"].get("login") == OWNER
+                and isinstance(comment.get("body"), str)
+                and any(line.strip().startswith(revoke_prefix)
+                        for line in comment["body"].splitlines())):
+            raise PublicationError("Aprovacao do PO revogada em comentario posterior")
     return {
         "id": approval_id, "updated_at": proof.get("updated_at"),
         "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
@@ -208,7 +242,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
             + " " + ", ".join(diagnosis["reasons"]))
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
-    approval = _approval_fingerprint(context.get("approval"), outbox)
+    approval = _approval_fingerprint(
+        context.get("approval"), outbox, context.get("approval_history"))
     comment_text = _expected_comment(outbox, approval["id"])
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     normalized = _comment_snapshot(context.get("comments"))
@@ -231,6 +266,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "project": _digest(context["project"]),
         "comments": _digest(normalized),
         "approval": _digest(approval),
+        "approval_history": _digest(_comment_snapshot(context["approval_history"])),
         "identity": _digest({
             "who": context["who"].get("login"),
             "permissions": context["repository"].get("permissions"),
