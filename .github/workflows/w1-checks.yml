@@ -37,6 +37,23 @@ jobs:
       - name: Compilação sintática de todos os componentes
         run: python -m compileall -q src scripts apps
 
+      - name: Parser PowerShell da auditoria F7 (sem executar Codex)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/Auditar_F7_Codex.ps1).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            foreach ($errorInfo in $errors) {
+              Write-Host ("PowerShell parser: " + $errorInfo.Message)
+            }
+            exit 1
+          }
+
       - name: Prévia offline de governança W1
         run: python scripts/w1_github_project.py
 
