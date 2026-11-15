@@ -18,7 +18,8 @@ from typing import Any, Callable
 from chdevflow.core.intake import validate_issue
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation import (
-    EVIDENCE_FILES, OWNER, PROJECT, REPO, SCHEMA, _safe_outbox,
+    EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
+    OWNER, PROJECT, REPO, SCHEMA, _safe_outbox,
     build_escalation_preview, write_receipt_once,
 )
 
@@ -210,10 +211,16 @@ def _comment_snapshot(comments: list[dict]) -> list[dict]:
 
 def _eligible_outbox(path: Path) -> dict:
     outbox = _safe_outbox(path)
+    allowed = {
+        "CODEX_REPROVOU": EVIDENCE_FILES,
+        "TESTES_REPROVADOS": EVIDENCE_FILES_TESTS_REPROVADOS,
+    }
+    status = outbox.get("third_attempt_status")
     if (outbox.get("schema") != SCHEMA
             or not isinstance(outbox.get("code_sha256"), str)
-            or outbox.get("evidence_files") != list(EVIDENCE_FILES)):
-        raise PublicationError("Outbox legada/incompleta: somente preview F7")
+            or status not in allowed
+            or outbox.get("evidence_files") != list(allowed[status])):
+        raise PublicationError("Outbox sem causa da terceira reprovacao: somente preview F7")
     return outbox
 
 
