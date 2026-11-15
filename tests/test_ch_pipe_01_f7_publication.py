@@ -79,6 +79,8 @@ class PublicationTests(unittest.TestCase):
             "status": "AGUARDANDO_PO", "execution_id": self.data["execution_id"],
             "mission_id": self.data["mission_id"], "issue": 85,
             "mission_digest": manifest.digest, "returns_used": 2,
+            "os_isolation_verified": True,
+            "test_execution": "docker-readonly-no-network:sha256:" + ("c" * 64),
             "attempts": [{
                 "number": num, "status": "CODEX_REPROVOU",
                 "sha256": self.data["code_sha256"],
@@ -376,6 +378,27 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(validated["evidence_files"],
                          list(pub.EVIDENCE_FILES_TESTS_REPROVADOS))
         self.assertEqual(self._plan()["action"], "POST_COMMENT")
+
+    def test_proveniencia_sem_isolamento_docker_nao_e_publicavel(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["test_execution"] = "host"
+        state["os_isolation_verified"] = False
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Docker isolada"):
+            self._outbox()
+
+    def test_proveniencia_sem_flag_isolamento_nao_publica(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["os_isolation_verified"] = False
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Docker isolada"):
+            self._outbox()
 
     def test_prova_de_proveniencia_detecta_log_adulterado(self):
         (self.root / "attempt-01" / "testes.log").write_text(
