@@ -140,6 +140,23 @@ def _guard(root: Path, target: str, snapshot: dict, *, allow_target: bool):
         raise ValueError("Prompt ou teste independente adulterado")
 
 
+def _audit_patch(baseline: str, candidate: str, target: str) -> str:
+    """Diff textual LF do baseline original; nunca compara com tentativa anterior.
+
+    Normaliza linhas sem LF final para impedir hunks concatenados. O arquivo
+    completo e SHA seguem separados para auditoria byte-a-byte do candidato.
+    """
+    def lines(value: str) -> list[str]:
+        clean = value.replace("\r\n", "\n").replace("\r", "\n")
+        if clean and not clean.endswith("\n"):
+            clean += "\n"
+        return clean.splitlines(keepends=True)
+
+    return "".join(difflib.unified_diff(
+        lines(baseline), lines(candidate),
+        fromfile="a/" + target, tofile="b/" + target))
+
+
 def _extract(response: str) -> str:
     if not isinstance(response, str) or len(response) > 40000:
         raise ValueError("AGY respondeu conteudo invalido")
@@ -211,7 +228,8 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
         result.test_execution = "docker-readonly-no-network:" + docker_image_id
     deadline = time.monotonic() + min(timeout, mission.timeout_seconds)
     source_path = root / target
-    previous = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
+    baseline = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
+    previous = baseline
     feedback = ""
     _persist(evidence, result)
     for number in range(1, MAX_ATTEMPTS + 1):
@@ -253,12 +271,12 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
             row["sha256"] = sha
             (directory / "codigo.py").write_text(candidate, encoding="utf-8")
-            patch = "".join(difflib.unified_diff(
-                previous.splitlines(keepends=True),
-                candidate.splitlines(keepends=True),
-                fromfile="a/" + target, tofile="b/" + target))
+            patch = _audit_patch(baseline, candidate, target)
+            if not patch:
+                raise ValueError("Arquivo sem mudancas frente ao baseline; auditoria vazia proibida")
             (directory / "alteracoes.patch").write_text(_clean(patch), encoding="utf-8")
             _guard(root, target, snapshot, allow_target=True)
+            changed_files = _git(root, "status", "--porcelain", "--untracked-files=all")
             stage = "TESTES"
             remaining = int(deadline - time.monotonic())
             if remaining < 30:
@@ -296,7 +314,12 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                     "Primeira linha OBRIGATORIA: VEREDITO: APROVAR_LAB ou "
                     "VEREDITO: BLOQUEADO. Em seguida achados e correcoes.\n"
                     f"Missao:\n{prompt}\nArquivo: {target}\n"
-                    f"Patch:\n{patch}\nTestes:\n{test_output[-6000:]}")
+                    f"Codigo completo gerado, SHA256={sha}:\n"
+                    f"{fence}python\n{candidate}{fence}\n"
+                    f"Arquivos alterados (Git Porcelain, validados pela allowlist):\n"
+                    f"{changed_files}\n"
+                    f"Patch textual (baseline original vs codigo, LF normalizado):\n"
+                    f"{patch}\nTestes Docker/host:\n{test_output[-6000:]}")
                 audit = _run_command(
                     [*codex, "-a", "never", "exec", "--sandbox", "read-only",
                      "--ephemeral", "--skip-git-repo-check", "--json", "-"],
