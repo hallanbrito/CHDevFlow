@@ -420,19 +420,31 @@ def reconcile_pending_publication(
     if reader is None:
         reader = _live_context
     context = reader(outbox["issue"], plan["approval_comment"])
-    observed = build_publication_plan(outbox, context)
-    if (observed["body"] != plan.get("body")
-            or observed["issue"] != plan["issue"]
-            or observed["execution_id"] != execution):
-        raise PublicationError("Identidade de publicacao remota divergente")
-    if observed["action"] == "ALREADY_PUBLISHED":
+    # Readback de publicacao e diferente de NOVA autorizacao. Deve funcionar
+    # inclusive apos Issue CLOSED/revogacao, sem consultar permissoes de POST.
+    if (not isinstance(context, dict)
+            or context.get("who", {}).get("login") != OWNER
+            or not isinstance(context.get("issue"), dict)
+            or context["issue"].get("number") != outbox["issue"]
+            or context["issue"].get("url") !=
+                f"https://github.com/{REPO}/issues/{outbox['issue']}"):
+        raise PublicationError("Identidade LIVE de reconciliacao invalida")
+    comments = context.get("comments")
+    _comment_snapshot(comments)
+    marker = MARKER_PREFIX + execution + " -->"
+    matches = [item for item in comments if marker in item["body"]]
+    if len(matches) > 1:
+        raise PublicationError("Colisao de publicacoes remotas; bloquear retry")
+    if matches:
+        item = matches[0]
+        if (item.get("body") != plan.get("body")
+                or item["user"].get("login") != OWNER):
+            raise PublicationError("Marcador remoto nao autentico; bloquear retry")
         status = "COMENTARIO_REMOTO_ENCONTRADO"
-        comment_id = observed["published_comment_id"]
-    elif observed["action"] == "POST_COMMENT":
+        comment_id = item["id"]
+    else:
         status = "COMENTARIO_NAO_OBSERVADO"
         comment_id = None
-    else:
-        raise PublicationError("Estado remoto de reconciliacao inesperado")
     return {
         "status": status, "execution_id": execution,
         "comment_id": comment_id, "journal_status": record["publication_status"],
