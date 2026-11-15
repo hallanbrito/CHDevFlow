@@ -15,7 +15,7 @@ import subprocess
 import sys
 from typing import Any, Callable
 
-from chdevflow.core.intake import validate_issue
+from chdevflow.core.intake import validate_issue, _fields, _get
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation import (
@@ -242,6 +242,18 @@ def _eligible_outbox(path: Path) -> dict:
     return outbox
 
 
+def _validate_issue_baseline(issue: dict, expected_sha: str) -> None:
+    """Issue LIVE deve identificar a MESMA base Git completa do manifesto."""
+    body = issue.get("body")
+    if not isinstance(body, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
+        raise PublicationError("Base Git invalida; publicacao bloqueada")
+    baseline = _get(body, _fields(body), ("Baseline Git (branch e SHA)", "Base SHA"))
+    hashes = re.findall(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])",
+                        baseline)
+    if len(hashes) != 1 or hashes[0].lower() != expected_sha:
+        raise PublicationError("Baseline Git da Issue LIVE diverge do manifesto")
+
+
 def build_publication_plan(outbox: dict, context: dict) -> dict:
     """Plano puro: bloqueia Intake invalido, duplicidade e autorizacao implicita."""
     if not isinstance(context, dict):
@@ -265,6 +277,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         raise PublicationError(
             "Intake F1 bloqueou publicacao: " + diagnosis["content_status"]
             + " " + ", ".join(diagnosis["reasons"]))
+    _validate_issue_baseline(issue, outbox["provenance"]["base_sha"])
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
     approval = _approval_fingerprint(
