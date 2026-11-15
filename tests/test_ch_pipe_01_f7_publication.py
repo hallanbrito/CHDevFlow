@@ -534,6 +534,27 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(found["remote_writes"], 0)
         self.assertEqual(lock.read_bytes(), original)
 
+    def test_reconciliacao_apos_revogacao_e_issue_closed(self):
+        plan = self._plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        self.context["issue"]["state"] = "CLOSED"
+        self.context["approval"]["body"] = "REVOGADA"
+        self.context["comments"].append({
+            "id": 9090, "body": plan["body"],
+            "user": {"login": "hallanbrito"},
+        })
+        result = pub.reconcile_pending_publication(
+            self.outbox, plan, reader=lambda *_: self.context)
+        self.assertEqual(result["comment_id"], 9090)
+        self.assertEqual(result["remote_writes"], 0)
+        self.assertFalse(result["retry_allowed"])
+
     def test_reconciliacao_journal_divergente_bloqueia(self):
         plan = self._plan()
         lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
