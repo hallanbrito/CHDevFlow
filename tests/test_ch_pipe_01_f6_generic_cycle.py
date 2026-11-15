@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -125,6 +126,30 @@ class GenericCycleTests(unittest.TestCase):
                 manifest_path=self.manifest,
                 evidence=self.evidence,
                 accepted=True, timeout=480)
+
+    def test_git_porcelain_preserva_espaco_xy_e_autoriza_alvo(self):
+        # Regressao real do incidente Windows F6-FRETE: strip() quebrava XY.
+        payload = subprocess.CompletedProcess(
+            ["git", "status", "--porcelain"], 0,
+            " M src/resposta.py\\r\\n", "")
+        with patch.object(f6.subprocess, "run", return_value=payload):
+            dirty = f6._git(
+                self.worktree, "status", "--porcelain", "--untracked-files=all")
+        self.assertEqual(dirty, " M src/resposta.py")
+        snapshot = {
+            "prompt.txt": (self.worktree / "prompt.txt").read_bytes(),
+            "tests/test_resposta.py": (
+                self.worktree / "tests" / "test_resposta.py").read_bytes(),
+        }
+        with patch.object(f6, "_git", return_value=dirty):
+            f6._guard(self.worktree, "src/resposta.py", snapshot,
+                      allow_target=True)
+        # Arquivos NAO autorizados continuam bloqueados.
+        with patch.object(
+                f6, "_git", return_value=" M src/extra.py"):
+            with self.assertRaisesRegex(ValueError, "fora do escopo"):
+                f6._guard(self.worktree, "src/resposta.py", snapshot,
+                          allow_target=True)
 
     def test_aprova_primeira_e_nao_repete_modelos(self):
         report = self.run_fake()
