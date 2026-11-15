@@ -160,7 +160,7 @@ class GenericCycleTests(unittest.TestCase):
         # Regressao real do incidente Windows F6-FRETE: strip() quebrava XY.
         payload = subprocess.CompletedProcess(
             ["git", "status", "--porcelain"], 0,
-            " M src/resposta.py\\r\\n", "")
+            " M src/resposta.py\r\n", "")
         with patch.object(f6.subprocess, "run", return_value=payload):
             dirty = f6._git(
                 self.worktree, "status", "--porcelain", "--untracked-files=all")
