@@ -688,6 +688,22 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicada"):
             pub._read_local_json(path)
 
+    def test_json_nao_finito_bloqueia_entrada_e_digests(self):
+        from chdevflow.core.po_escalation import _json_unique
+        for invalid in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "nao finita"):
+                    _json_unique('{"nested":{"value":' + invalid + '}}')
+
+    def test_outbox_json_nao_finito_falha_antes_da_publicacao(self):
+        original = self.outbox.read_text(encoding="utf-8")
+        replacement = original.replace(
+            '"attempts": 3', '"attempts": 3, "extra": NaN', 1)
+        self.assertNotEqual(original, replacement)
+        self.outbox.write_text(replacement, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "nao finita"):
+            self._outbox()
+
     def test_gh_bytes_invalidos_falha_fechado(self):
         response = subprocess.CompletedProcess(["gh"], 0, b'{"x":"' + bytes([0x9d]) + b'"}', b"")
         with patch.object(pub.subprocess, "run", return_value=response):
