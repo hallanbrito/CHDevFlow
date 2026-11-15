@@ -103,7 +103,32 @@ def _project_snapshot() -> dict:
         raise ValueError("Resposta Project nao e JSON valido") from exc
 
 
-def build_escalation_preview(outbox: dict, project: dict) -> dict:
+def _issue_snapshot(number: int) -> dict:
+    """Consulta a Issue real somente em modo leitura; texto UTF-8 estrito."""
+    if type(number) is not int or number < 1:
+        raise ValueError("Issue de consulta invalida")
+    try:
+        process = subprocess.run(
+            ["gh", "issue", "view", str(number), "-R", REPO,
+             "--json", "id,number,title,body,labels,state,url"],
+            capture_output=True, stdin=subprocess.DEVNULL,
+            timeout=25, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError("Intake LIVE indisponivel; sem admissao") from exc
+    if process.returncode:
+        raise ValueError("Issue LIVE indisponivel; sem admissao")
+    try:
+        raw = process.stdout.decode("utf-8", errors="strict")
+        issue = json.loads(raw)
+    except (UnicodeError, ValueError, AttributeError) as exc:
+        raise ValueError("Issue LIVE retornou JSON/UTF-8 invalido") from exc
+    if not isinstance(issue, dict):
+        raise ValueError("Resposta de Issue LIVE invalida")
+    return issue
+
+
+def build_escalation_preview(outbox: dict, project: dict,
+                             intake_issue: dict | None = None) -> dict:
     """Valida estado total e detecta duplicidade antes de sugerir admissao."""
     if (not isinstance(project, dict) or
             not isinstance(project.get("items"), list) or
@@ -153,14 +178,44 @@ def build_escalation_preview(outbox: dict, project: dict) -> dict:
             "plano digest e readback, nunca publicar automaticamente"
         )
     }
+    if intake_issue is not None and not items:
+        if (not isinstance(intake_issue, dict) or
+                intake_issue.get("number") != issue or
+                intake_issue.get("url") != f"https://github.com/{REPO}/issues/{issue}" or
+                intake_issue.get("state") != "OPEN"):
+            raise ValueError("Intake Issue LIVE fora do escopo ou identidade divergente")
+        # Usa a MESMA regra pura que KSYNC-03 usa em make_admit_plan().
+        from chdevflow.core.intake import validate_issue
+        diagnosis = validate_issue(intake_issue)
+        base["intake_status"] = diagnosis["content_status"]
+        base["intake_reasons"] = diagnosis["reasons"]
+        if diagnosis["content_status"] != "CONTENT_VALID":
+            base["state"] = "EXIGE_TRIAGEM_INTAKE"
+            base["next_step"] = (
+                "Issue nao elegivel ao KSYNC-03: triagem de escopo/conteudo "
+                "e decisao PO necessarias; nao adicionar labels por inferencia "
+                "nem admitir automaticamente"
+            )
+        else:
+            base["next_step"] = (
+                "Intake elegivel; KSYNC-03 ainda deve verificar historico CLEAR, "
+                "aprovacao PO autenticada, plano digest pinado e readback"
+            )
     base["digest"] = hashlib.sha256(
         json.dumps(base, sort_keys=True, ensure_ascii=False,
                    separators=(",", ":")).encode("utf-8")).hexdigest()
     return base
 
 
-def preview(outbox_path: Path, *, reader=_project_snapshot) -> dict:
-    return build_escalation_preview(_safe_outbox(outbox_path), reader())
+def preview(outbox_path: Path, *, reader=_project_snapshot,
+            issue_reader=None) -> dict:
+    outbox = _safe_outbox(outbox_path)
+    project = reader()
+    plan = build_escalation_preview(outbox, project)
+    if plan["state"] == "EXIGE_ADMISSAO_PO" and issue_reader is not None:
+        return build_escalation_preview(
+            outbox, project, intake_issue=issue_reader(outbox["issue"]))
+    return plan
 
 
 def pending_publication_receipt(outbox_path: Path, *, reason: str) -> dict:
@@ -201,7 +256,7 @@ def main(argv=None) -> int:
         help="Somente em falha de Project: recibo local novo e exclusivo")
     args = parser.parse_args(argv)
     try:
-        plan = preview(args.outbox)
+        plan = preview(args.outbox, issue_reader=_issue_snapshot)
         print(json.dumps(plan, ensure_ascii=False, indent=2))
         return 0
     except (ValueError, OSError, UnicodeError) as exc:
