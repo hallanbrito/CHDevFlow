@@ -126,7 +126,9 @@ def _expected_comment(outbox: dict, approval_id: int) -> str:
         f"Missao: {outbox['mission_id']}\n"
         f"Issue de origem: #{outbox['issue']}\n"
         "Estado: AGUARDANDO_PO (3 reprovacoes / 2 devolucoes)\n"
-        f"SHA-256 do codigo: {outbox['code_sha256']}\n"
+        f"SHA-256 do codigo AGY: {outbox['code_sha256']}\n"
+        f"SHA Git base da missao: {outbox['provenance']['base_sha']}\n"
+        f"Digest do manifesto: {outbox['provenance']['mission_digest']}\n"
         f"Autorizacao especifica: comentario #{approval_id}\n\n"
         "Evidencias locais permanecem sob custodia do PO. "
         "Esta publicacao nao autoriza admissao no Project #2, "
@@ -152,7 +154,10 @@ def _approval_fingerprint(proof: dict, outbox: dict,
         raise PublicationError("Aprovacao PO vinculada a Issue incorreta")
     statement = (
         f"CH-GOV-01 F7 PUBLICAR PROJECT#{PROJECT} ISSUE#{outbox['issue']} "
-        f"EXECUTION#{outbox['execution_id']} SHA256={outbox['code_sha256']} "
+        f"EXECUTION#{outbox['execution_id']} "
+        f"CODE_SHA256={outbox['code_sha256']} "
+        f"BASE_SHA={outbox['provenance']['base_sha']} "
+        f"MISSION_DIGEST={outbox['provenance']['mission_digest']} "
         "ACTION=COMMENT_ONLY"
     )
     body = proof.get("body")
