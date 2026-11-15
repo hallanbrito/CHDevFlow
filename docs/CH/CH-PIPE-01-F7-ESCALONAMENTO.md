@@ -83,6 +83,68 @@ Testes offline:
 
 Sem merge, deploy, cron, escrita em Project #2 ou liberação de execução de produção.
 
+## Publicacao por comentario F7 — desenvolvimento opt-in, nao liberado
+
+Modulo novo: `src/chdevflow/core/po_escalation_publication.py`.
+Nao roda AGY ou Codex; a unica operacao de escrita que contem e **POST de
+comentario na Issue de origem**. Nunca altera cartoes, etiquetas, Esteira,
+Etapa CH, Autonomia, merge ou deploy. A admissao permanece responsabilidade
+separada do `scripts/ch_project_assist.py admit` (KSYNC-03).
+
+**Gate obrigatorio para gerar plano** (sem qualquer escrita):
+- Outbox **V1 completa**, com hash do codigo e evidencias locais validas;
+  outbox historica/legada da F6 so permite preview.
+- Issue LIVE aberta, numero/URL corretos, Intake F1 `CONTENT_VALID`;
+  a Issue #85 historica retorna `OUT_OF_SCOPE / NOT_ENROLLED` e portanto
+  **NAO permite geracao de plano de publicacao**. Nao forcar rótulos ou
+  alterar corpo para burlar isso.
+- Sessao `gh api user` pertence ao PO; permissao LIVE no repositorio
+  deve indicar `push`, `maintain` ou `admin` explicitamente.
+- Comentario de aprovacao LIVE, escrito pelo login do PO, vinculado a
+  propria Issue ou a Issue de governanca #63. Precisa conter linha exata
+  para a execucao e SHA avaliados (sem inferir autorizacao por labels):
+
+      CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#<issue>
+      EXECUTION#<execution_id> SHA256=<code_sha256> ACTION=COMMENT_ONLY
+
+  Essa declaracao e uma unica linha no comentario real do PO, nao duas.
+- Snapshot completo e coerente do Project #2. Cartao existente e preservado;
+  cartao ausente nao e criado. Autorizacao para comentario nao e autorizacao
+  de admissao de cartao.
+- Nenhum comentario com o mesmo marcador e corpo divergente, autoria invalida
+  ou marcador duplicado; idempotencia por execution_id.
+
+**Operacao local apos homologacao adicional e autorizacao nova do PO**:
+
+    python -m chdevflow.core.po_escalation_publication --outbox <OUTBOX_V1>
+
+Mostra somente preview local e `writes=0` (sem consulta remota). Para
+preparar um plano, usar `--approval-comment <ID_REAL_DO_PO> --plan-file
+<ARQUIVO_NOVO>`; o plano contem digest de issue, Project, comentarios,
+aprovacao/ACL, corpo sanitizado e escopo COMMENT_ONLY. Sem aprovar/aplicar,
+essa etapa e exclusivamente leitura.
+
+Aplicacao real **nao autorizada por esta documentacao**: exige
+`--apply-plan <PLANO> --confirm <DIGEST_COMPLETO> --audit-file
+<ARQUIVO_NOVO>`, mais confirmacao humana interativa especifica
+`APROVO F7 PUBLICAR <12primeirosdigitosdigest>`. Revalida estado LIVE
+duas vezes, usa lock exclusivo duravel no dossie e realiza NO MAXIMO um
+POST. Readback confere comentario unico e exato; falha/timeout de POST ou
+readback grava auditoria e recibo local `PENDENTE_PUBLICACAO` com
+`remote_effect=INDETERMINADO`. **Nao repetir automaticamente**: e
+obrigatorio reconciliar o comentario LIVE e registrar novo gate do PO.
+
+**Limite de idempotencia:** lock exclui concorrencia no *mesmo dossie local*
+e marcador detecta comentarios existentes; a API de comentarios GitHub
+nao oferece chave de idempotencia atomica entre hosts distintos. Por isso
+frota multi-host deve usar escritor unico/serializacao externa antes de
+ligar publicacao autonoma. Autorizacoes e readback evitam duplicatas normais,
+mas **nao garantem exactly-once distribuido**.
+
+A implementacao e os testes offline nao constituem autorizacao para usar
+a funcao de aplicacao na Issue #85 nem para habilita-la em producao.
+A CI do novo HEAD e revisao independente permanecem gates obrigatorios.
+
 ## Próxima frente: Control Center visual (depois dos gates Python)
 
 Após F7 e homologação dos gates: expandir o Control Center já existente
