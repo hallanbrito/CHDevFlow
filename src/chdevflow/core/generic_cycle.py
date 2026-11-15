@@ -82,6 +82,15 @@ def _preflight(path: Path):
     if target == mission.prompt_ref:
         raise ValueError("Prompt da missao nao pode ser artefato AGY")
     observed = _git(root, "rev-parse", "--verify", "HEAD")
+    remote = _git(root, "remote", "get-url", "origin")
+    allowed_remotes = {
+        f"https://github.com/{mission.repository}",
+        f"https://github.com/{mission.repository}.git",
+        f"git@github.com:{mission.repository}.git",
+        f"ssh://git@github.com/{mission.repository}.git",
+    }
+    if remote not in allowed_remotes:
+        raise ValueError("Origin Git nao coincide com o repositorio da missao")
     branch = _git(root, "branch", "--show-current")
     clean = _git(root, "status", "--porcelain", "--untracked-files=all") == ""
     plan = plan_manual_mission(
