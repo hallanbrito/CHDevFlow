@@ -39,9 +39,26 @@ _ISSUE_URL = re.compile(
     r"^https://github\.com/hallanbrito/CHDevFlow/issues/([1-9][0-9]*)$")
 
 
+def _assert_no_link_ancestors(path: Path) -> None:
+    """Rejeita links/junctions tambem ACIMA da raiz declarada do dossie."""
+    if ".." in path.parts:
+        raise ValueError("Travessia de caminho nao autorizada")
+    node = path.absolute()
+    while True:
+        if _is_link(node):
+            raise ValueError("Link/reparse point em ancestral do dossie")
+        if node.parent == node:
+            break
+        node = node.parent
+
+
 def _safe_file_within(root: Path, relative: str) -> Path:
     """Rejeita symlink/reparse Windows em TODOS os componentes da evidência."""
+    if (not isinstance(relative, str) or Path(relative).is_absolute()
+            or ".." in Path(relative).parts):
+        raise ValueError("Caminho de evidencia fora do dossie")
     target = root / relative
+    _assert_no_link_ancestors(target)
     if not target.is_relative_to(root):
         raise ValueError("Evidencia fora do dossie")
     node = target
@@ -57,6 +74,7 @@ def _safe_file_within(root: Path, relative: str) -> Path:
 
 
 def _safe_outbox(path: Path) -> dict:
+    _assert_no_link_ancestors(path)
     if (_is_link(path) or _is_link(path.parent) or not path.is_file()
             or path.stat().st_size > 15000):
         raise ValueError("Outbox local ausente, link ou maior que limite")
