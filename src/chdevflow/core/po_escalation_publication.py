@@ -472,6 +472,12 @@ def apply_publication_plan(
     human_prompt: Callable[[str], str] | None = None,
 ) -> dict:
     """Uma tentativa, guardada por digest, frase PO e duplo snapshot LIVE."""
+    # Gate na API publica, nao apenas CLI/adapter HTTP. Sem ele, qualquer
+    # chamador pode injetar um "poster" remoto e contornar _post_comment().
+    # A suite offline pode habilitar este gate apenas sob mock isolado.
+    if not REMOTE_PUBLICATION_ENABLED:
+        raise PublicationError(
+            "Aplicacao F7 desativada: custodia externa e executor unico pendentes")
     # Callbacks resolvidos em tempo de execucao para simular GitHub no teste
     # da CLI, sem executar qualquer chamada remota verdadeira.
     if reader is None:
