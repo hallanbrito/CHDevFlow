@@ -23,7 +23,7 @@ from uuid import uuid4
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
 from chdevflow.core.experimental_pilot import (
     _agy_response, _clean, _codex_final_message, _executables,
-    _run_command, _write_process_log,
+    _is_link, _run_command, _write_process_log,
 )
 
 MAX_ATTEMPTS = 3
@@ -58,7 +58,7 @@ def _git(root: Path, *args: str) -> str:
 
 def _read_safe(root: Path, relative: str) -> bytes:
     p = root / relative
-    if p.is_symlink() or not p.is_file() or p.stat().st_size > 100000:
+    if _is_link(p) or not p.is_file() or p.stat().st_size > 100000:
         raise ValueError("Arquivo independente invalido")
     return p.read_bytes()
 
@@ -68,7 +68,7 @@ def _preflight(path: Path):
         raise ValueError("Manifesto ausente ou link simbolico")
     mission = load_manifest(path)
     root = Path(mission.worktree).resolve()
-    if not root.is_dir() or root.is_symlink():
+    if not root.is_dir() or _is_link(root):
         raise ValueError("Worktree nao existe ou e link")
     if root in path.parents:
         raise ValueError("Manifesto deve ficar fora da worktree: SHA e conteudo pinados")
@@ -89,7 +89,7 @@ def _preflight(path: Path):
     if plan.state != "PLANEJADO_AGUARDANDO_GATE":
         raise ValueError("Missao invalida: " + plan.reason)
     p = root / target
-    if not p.parent.is_dir() or p.is_symlink():
+    if not p.parent.is_dir() or _is_link(p) or _is_link(p.parent):
         raise ValueError("Diretorio do arquivo nao existe ou e link")
     if p.exists() and (not p.is_file() or p.stat().st_size > 32000):
         raise ValueError("Arquivo de destino invalido")
@@ -97,7 +97,7 @@ def _preflight(path: Path):
     if not prompt.strip() or len(prompt) > 12000:
         raise ValueError("Prompt vazio ou excessivo")
     tests = root / "tests"
-    if not tests.is_dir() or tests.is_symlink():
+    if not tests.is_dir() or _is_link(tests):
         raise ValueError("Testes independentes obrigatorios")
     snapshot = {mission.prompt_ref: _read_safe(root, mission.prompt_ref)}
     for test in tests.rglob("test_*.py"):
@@ -109,6 +109,11 @@ def _preflight(path: Path):
 
 
 def _guard(root: Path, target: str, snapshot: dict, *, allow_target: bool):
+    leaf = root / target
+    if _is_link(root) or _is_link(leaf) or any(
+        _is_link(p) for p in leaf.parents if p == root or p.is_relative_to(root)
+    ):
+        raise ValueError("Symlink ou reparse point no caminho de escrita")
     dirty = _git(root, "status", "--porcelain", "--untracked-files=all")
     for line in dirty.splitlines():
         # Porcelain v1: prefixo XY e caminho relativo.
@@ -248,6 +253,12 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                 raise ValueError("Suite nao reportou testes reais")
             _guard(root, target, snapshot, allow_target=True)
             if tests.code:
+                # Nao devolver falhas de instalacao/importacao ou ambiente ao AGY.
+                # Apenas reprovacao assertion de testes de aceite e corrigivel.
+                if (re.search(r"ModuleNotFoundError|ImportError|FileNotFoundError",
+                              test_output) or
+                        not re.search(r"FAILED\s*\(failures=[1-9]", test_output)):
+                    raise ValueError("Suite falhou por infra/erro inconclusivo")
                 row["status"] = "TESTES_REPROVADOS"
                 feedback = _clean(test_output)[-6000:]
             else:
