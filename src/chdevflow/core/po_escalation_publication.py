@@ -16,6 +16,7 @@ import sys
 from typing import Any, Callable
 
 from chdevflow.core.intake import validate_issue
+from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation import (
     EVIDENCE_FILES, OWNER, PROJECT, REPO, SCHEMA, _safe_outbox,
     build_escalation_preview, write_receipt_once,
@@ -265,7 +266,7 @@ def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Non
     if not HEX32.fullmatch(execution_id):
         raise PublicationError("Execution ID do lock invalido")
     lock = outbox_path.parent / ("f7-publicacao-" + execution_id + ".lock")
-    if lock.is_symlink() or lock.exists():
+    if _is_link(lock) or _is_link(lock.parent) or lock.exists():
         raise PublicationError("Publicacao anterior existe; reconciliar antes de repetir")
     try:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -281,12 +282,20 @@ def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Non
 
 def apply_publication_plan(
     outbox_path: Path, plan: dict, confirmation: str, *,
-    reader: Callable[[int, int], dict] = _live_context,
-    poster: Callable[[int, str], dict] = _post_comment,
+    reader: Callable[[int, int], dict] | None = None,
+    poster: Callable[[int, str], dict] | None = None,
     audit: Callable[[dict], None],
-    human_prompt: Callable[[str], str] = input,
+    human_prompt: Callable[[str], str] | None = None,
 ) -> dict:
     """Uma tentativa, guardada por digest, frase PO e duplo snapshot LIVE."""
+    # Callbacks resolvidos em tempo de execucao para simular GitHub no teste
+    # da CLI, sem executar qualquer chamada remota verdadeira.
+    if reader is None:
+        reader = _live_context
+    if poster is None:
+        poster = _post_comment
+    if human_prompt is None:
+        human_prompt = input
     if not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA:
         raise PublicationError("Plano F7 invalido")
     supplied_digest = plan.get("digest")
@@ -298,6 +307,7 @@ def apply_publication_plan(
     if (plan.get("issue") != outbox["issue"]
             or plan.get("execution_id") != outbox["execution_id"]
             or plan.get("code_sha256") != outbox["code_sha256"]
+            or plan.get("mission_id") != outbox["mission_id"]
             or type(plan.get("approval_comment")) is not int):
         raise PublicationError("Plano nao pertence a outbox")
     def current_plan() -> dict:
@@ -347,8 +357,8 @@ def apply_publication_plan(
 
 
 def _write_json_once(path: Path, payload: dict) -> None:
-    if (path.exists() or path.is_symlink() or not path.parent.is_dir()
-            or path.parent.is_symlink()):
+    if (path.exists() or _is_link(path) or not path.parent.is_dir()
+            or _is_link(path.parent)):
         raise PublicationError("Plano ja existe ou destino inseguro")
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -359,8 +369,8 @@ def _write_json_once(path: Path, payload: dict) -> None:
 
 
 def _audit_writer(path: Path):
-    if (path.exists() or path.is_symlink() or not path.parent.is_dir()
-            or path.parent.is_symlink()):
+    if (path.exists() or _is_link(path) or not path.parent.is_dir()
+            or _is_link(path.parent)):
         raise PublicationError("Auditoria existe ou destino invalido")
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     handle = os.fdopen(fd, "w", encoding="utf-8")
