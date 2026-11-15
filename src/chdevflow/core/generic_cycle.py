@@ -349,14 +349,31 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             if number == MAX_ATTEMPTS:
                 result.status = "AGUARDANDO_PO"
                 result.findings.append("Tres reprovações; nenhuma quarta chamada")
-                (evidence / "escalonamento_po.json").write_text(
-                    json.dumps({
-                        "execution_id": result.execution_id,
-                        "mission_id": mission.mission_id, "issue": mission.issue,
-                        "status": "AGUARDANDO_PO",
-                        "publication_status": "PENDENTE_DE_AUTORIZACAO",
-                        "attempts": 3, "returns": result.returns_used,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
+                # Outbox F7 duravel e sem caminhos absolutos/segredos.
+                # NUNCA tenta publicar ou reinicia agentes por falha de GitHub.
+                outbox = {
+                    "schema": "CHDEVFLOW-F7-OUTBOX/1",
+                    "execution_id": result.execution_id,
+                    "mission_id": mission.mission_id, "issue": mission.issue,
+                    "status": "AGUARDANDO_PO",
+                    "publication_status": "PENDENTE_DE_AUTORIZACAO",
+                    "attempts": 3, "returns": result.returns_used,
+                    "code_sha256": sha,
+                    "evidence_files": [
+                        "attempt-03/codigo.py",
+                        "attempt-03/alteracoes.patch",
+                        "attempt-03/testes.log",
+                        "attempt-03/auditoria_codex.md",
+                        "RELATORIO_COMPLETO_CH1.md",
+                    ],
+                }
+                receipt = evidence / "escalonamento_po.json"
+                temporary = evidence / "escalonamento_po.json.tmp"
+                with temporary.open("x", encoding="utf-8") as handle:
+                    json.dump(outbox, handle, ensure_ascii=False, indent=2)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, receipt)
                 break
             (directory / "feedback_para_agy.md").write_text(
                 _clean(feedback), encoding="utf-8")
