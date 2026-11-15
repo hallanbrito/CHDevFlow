@@ -69,6 +69,7 @@ class GenericCycleTests(unittest.TestCase):
         self.agy_infra_error = False
         self.agy_changes_test = False
         self.tests_infra_error = False
+        self.tests_modify_target = False
 
     def _write_manifest(self):
         self.manifest.write_text(
@@ -107,6 +108,8 @@ class GenericCycleTests(unittest.TestCase):
             return ProcessResult(
                 0, json.dumps({"status": "SUCCESS", "response": response}), "")
         if command[0] == sys.executable:
+            if self.tests_modify_target:
+                self.target.write_text("def resposta():\n    return -1\n", encoding="utf-8")
             if self.tests_infra_error:
                 return ProcessResult(
                     1, "", "Ran 2 tests\nFAILED (errors=1)\nModuleNotFoundError")
@@ -183,6 +186,16 @@ class GenericCycleTests(unittest.TestCase):
         self.assertEqual(
             hashlib.sha256(BAD.encode("utf-8")).hexdigest(),
             result.attempts[1]["sha256"])
+
+    def test_rejeita_codigo_alterado_pelos_testes_antes_do_codex(self):
+        self.tests_modify_target = True
+        result = self.run_fake()
+        self.assertEqual(result.status, "BLOQUEADO_INFRA_OU_ESCOPO")
+        self.assertEqual(self.calls_agy, 1)
+        self.assertEqual(self.calls_codex, 0)
+        self.assertIn("diverge", " ".join(result.findings))
+        self.assertFalse(
+            (self.evidence / "attempt-01" / "auditoria_codex.md").exists())
 
     def test_aprova_primeira_e_nao_repete_modelos(self):
         report = self.run_fake()
