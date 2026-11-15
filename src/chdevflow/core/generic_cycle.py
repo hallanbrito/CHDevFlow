@@ -351,6 +351,11 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                 result.findings.append("Tres reprovações; nenhuma quarta chamada")
                 # Outbox F7 duravel e sem caminhos absolutos/segredos.
                 # NUNCA tenta publicar ou reinicia agentes por falha de GitHub.
+                from chdevflow.core.po_escalation import (
+                    EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
+                )
+                files = (EVIDENCE_FILES_TESTS_REPROVADOS
+                         if row["status"] == "TESTES_REPROVADOS" else EVIDENCE_FILES)
                 outbox = {
                     "schema": "CHDEVFLOW-F7-OUTBOX/1",
                     "execution_id": result.execution_id,
@@ -359,13 +364,8 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                     "publication_status": "PENDENTE_DE_AUTORIZACAO",
                     "attempts": 3, "returns": result.returns_used,
                     "code_sha256": sha,
-                    "evidence_files": [
-                        "attempt-03/codigo.py",
-                        "attempt-03/alteracoes.patch",
-                        "attempt-03/testes.log",
-                        "attempt-03/auditoria_codex.md",
-                        "RELATORIO_COMPLETO_CH1.md",
-                    ],
+                    "third_attempt_status": row["status"],
+                    "evidence_files": list(files),
                 }
                 receipt = evidence / "escalonamento_po.json"
                 temporary = evidence / "escalonamento_po.json.tmp"
