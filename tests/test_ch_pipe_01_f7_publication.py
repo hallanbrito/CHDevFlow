@@ -19,7 +19,7 @@ if str(ROOT / "src") not in sys.path:
 
 from chdevflow.core import po_escalation_publication as pub
 from chdevflow.core.manual_pipeline_runner import Mission, SCHEMA as MISSION_SCHEMA
-from chdevflow.core.po_escalation_provenance import create_provenance
+from chdevflow.core.po_escalation_provenance import create_provenance, verify_provenance
 
 
 def issue_body():
@@ -387,6 +387,20 @@ class PublicationTests(unittest.TestCase):
         state_path.write_text(json.dumps(state), encoding="utf-8")
         self.data["provenance"] = create_provenance(self.root)
         self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Docker isolada"):
+            self._outbox()
+
+    def test_f6_host_preserva_integridade_sem_liberar_publicacao_f7(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["test_execution"] = "host"
+        state["os_isolation_verified"] = False
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        self.assertEqual(
+            verify_provenance(self.root, self.data),
+            self.data["provenance"])
         with self.assertRaisesRegex(ValueError, "Docker isolada"):
             self._outbox()
 
