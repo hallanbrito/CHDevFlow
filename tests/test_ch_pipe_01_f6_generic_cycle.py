@@ -269,6 +269,23 @@ class GenericCycleTests(unittest.TestCase):
         self.assertNotIn(str(self.worktree), json.dumps(payload))
         self.assertNotIn(str(self.evidence), json.dumps(payload))
 
+    def test_terceiro_teste_reprovado_outbox_nao_exige_codex_inexistente(self):
+        self.fail_tests = {1, 2, 3}
+        report = self.run_fake()
+        self.assertEqual(report.status, "AGUARDANDO_PO")
+        self.assertEqual(self.calls_agy, 3)
+        self.assertEqual(self.calls_codex, 0)
+        payload = json.loads(
+            (self.evidence / "escalonamento_po.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["third_attempt_status"], "TESTES_REPROVADOS")
+        self.assertNotIn("attempt-03/auditoria_codex.md",
+                         payload["evidence_files"])
+        from chdevflow.core.po_escalation import _safe_outbox
+        restored = _safe_outbox(self.evidence / "escalonamento_po.json")
+        self.assertEqual(restored["third_attempt_status"], "TESTES_REPROVADOS")
+        self.assertFalse(
+            (self.evidence / "attempt-03" / "auditoria_codex.md").exists())
+
     def test_falha_de_teste_nao_gasta_codex_na_primeira(self):
         self.fail_tests = {1}
         report = self.run_fake()
