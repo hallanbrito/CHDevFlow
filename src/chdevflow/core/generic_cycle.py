@@ -21,6 +21,7 @@ import time
 from uuid import uuid4
 
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
+from chdevflow.core import docker_acceptance
 from chdevflow.core.experimental_pilot import (
     _agy_response, _clean, _codex_final_message, _executables,
     _is_link, _run_command, _write_process_log,
@@ -41,6 +42,7 @@ class GenericResult:
     findings: list[str] = field(default_factory=list)
     cost_verified: bool = False
     os_isolation_verified: bool = False
+    test_execution: str = "host"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -179,7 +181,8 @@ def _persist(out: Path, result: GenericResult):
 
 
 def run_generic_cycle(*, manifest_path: Path, evidence: Path,
-                      accepted: bool, timeout: int = 480) -> GenericResult:
+                      accepted: bool, timeout: int = 480,
+                      isolated_tests: bool = False) -> GenericResult:
     """Execucao real opt-in. No maximo 3 AGY/2 devolucoes, tempo TOTAL."""
     if not accepted:
         raise PermissionError("Exige --i-accept-local-risk")
@@ -191,6 +194,7 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             not evidence.parent.is_dir() or evidence.parent.is_symlink()):
         raise ValueError("Dossie deve ser pasta NOVA")
     mission, root, target, prompt, snapshot = _preflight(manifest_path)
+    docker_image_id = docker_acceptance.preflight() if isolated_tests else ""
     if root in evidence.parents or evidence in root.parents or root == evidence:
         raise ValueError("Dossie deve ficar FORA da worktree")
     agy, codex = _executables()
@@ -199,6 +203,8 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     evidence.mkdir(mode=0o700)
     result = GenericResult(
         "INICIADO", uuid4().hex, mission.mission_id, mission.issue, mission.digest)
+    if isolated_tests:
+        result.test_execution = "docker-readonly-no-network:" + docker_image_id
     deadline = time.monotonic() + min(timeout, mission.timeout_seconds)
     source_path = root / target
     previous = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
@@ -253,10 +259,13 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             remaining = int(deadline - time.monotonic())
             if remaining < 30:
                 raise ValueError("Orcamento sem tempo para testes/Codex")
-            tests = _run_command(
+            test_command = (
+                docker_acceptance.build_command(root) if isolated_tests else
                 [sys.executable, "-I", "-B", "-m", "unittest", "discover",
-                 "-s", "tests", "-p", "test_*.py", "-v"],
-                cwd=root, stdin=None, timeout=min(60, remaining))
+                 "-s", "tests", "-p", "test_*.py", "-v"])
+            tests = _run_command(
+                test_command, cwd=root, stdin=None,
+                timeout=min(60, remaining))
             _write_process_log(directory / "testes.log", tests)
             if tests.timed_out:
                 raise ValueError("Timeout nos testes")
@@ -340,11 +349,14 @@ def main(argv=None) -> int:
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=480)
     parser.add_argument("--i-accept-local-risk", action="store_true")
+    parser.add_argument("--isolated-tests", action="store_true",
+                        help="Docker Linux sem rede e com bind mount read-only")
     args = parser.parse_args(argv)
     try:
         result = run_generic_cycle(
             manifest_path=args.manifest, evidence=args.evidence_dir,
-            accepted=args.i_accept_local_risk, timeout=args.timeout)
+            accepted=args.i_accept_local_risk, timeout=args.timeout,
+            isolated_tests=args.isolated_tests)
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         return 0 if result.status == "APROVADO_AGUARDANDO_CH1" else 1
     except (ValueError, PermissionError, OSError) as exc:
