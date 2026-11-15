@@ -270,7 +270,6 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                 raise ValueError("Arquivo sem mudancas frente ao baseline; auditoria vazia proibida")
             (directory / "alteracoes.patch").write_text(_clean(patch), encoding="utf-8")
             _guard(root, target, snapshot, allow_target=True)
-            changed_files = _git(root, "status", "--porcelain", "--untracked-files=all")
             stage = "TESTES"
             remaining = int(deadline - time.monotonic())
             if remaining < 30:
@@ -286,6 +285,9 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             if not re.search(r"Ran [1-9][0-9]* tests?", test_output):
                 raise ValueError("Suite nao reportou testes reais")
             _guard(root, target, snapshot, allow_target=True)
+            if source_path.read_bytes() != candidate.encode("utf-8"):
+                raise ValueError("Arquivo do teste diverge do codigo AGY auditado")
+            changed_files = _git(root, "status", "--porcelain", "--untracked-files=all")
             if tests.code:
                 # Nao devolver falhas de instalacao/importacao ou ambiente ao AGY.
                 # Apenas reprovacao assertion de testes de aceite e corrigivel.
@@ -326,6 +328,8 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                     raise ValueError("Codex sem parecer final valido")
                 row["codex_verdict"] = verdict.split(": ", 1)[1]
                 _guard(root, target, snapshot, allow_target=True)
+                if source_path.read_bytes() != candidate.encode("utf-8"):
+                    raise ValueError("Arquivo alterado durante auditoria; parecer invalido")
                 if row["codex_verdict"] == "APROVAR_LAB":
                     row["status"] = "PASS"
                     result.status = "APROVADO_AGUARDANDO_CH1"
