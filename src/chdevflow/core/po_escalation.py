@@ -113,17 +113,18 @@ def _verify_windows_handle(path: Path, handle) -> None:
     if not 0 < length < len(buffer):
         raise ValueError("Caminho do descritor Windows indisponivel")
     actual = buffer.value
-    if actual.startswith("\\\\?\\UNC\\"):
-        actual = "\\\\" + actual[8:]
-    elif actual.startswith("\\\\?\\"):
-        actual = actual[4:]
     # TEMP nos runners Windows pode usar nomes DOS 8.3. Expandir os nomes
     # sem resolver o alvo de junctions, que continuam proibidas pelo leitor.
     get_long_path = kernel32.GetLongPathNameW
     get_long_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
     get_long_path.restype = wintypes.DWORD
     length = get_long_path(str(path), buffer, len(buffer))
-    if not 0 < length < len(buffer) or Path(actual) != Path(buffer.value):
+    def without_prefix(value: str) -> Path:
+        if value.upper().startswith("\\\\?\\UNC\\"):
+            return Path("\\\\" + value[8:])
+        return Path(value.removeprefix("\\\\?\\"))
+
+    if not 0 < length < len(buffer) or without_prefix(actual) != without_prefix(buffer.value):
         raise ValueError("Caminho da evidencia mudou antes da leitura")
 
 

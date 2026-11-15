@@ -915,6 +915,15 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Link/reparse"):
             bridge._read_evidence_bytes(link / "log")
 
+    @unittest.skipUnless(os.name == "nt", "prefixo de caminho Windows")
+    def test_leitor_aceita_prefixo_de_caminho_windows(self):
+        from chdevflow.core import po_escalation as bridge
+
+        target = self.root / "evidence.log"
+        target.write_bytes(b"evidencia")
+        extended = Path("\\\\?\\" + str(target))
+        self.assertEqual(bridge._read_evidence_bytes(extended), b"evidencia")
+
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"
         pub._write_json_once(target, self._plan())
