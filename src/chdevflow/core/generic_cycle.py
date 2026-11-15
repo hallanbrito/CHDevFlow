@@ -145,7 +145,10 @@ def _extract(response: str) -> str:
     source = code[len(prefix):-len(fence)].strip() + "\n"
     if len(source.encode("utf-8")) > 32000:
         raise ValueError("Arquivo Python excessivo")
-    ast.parse(source)
+    try:
+        ast.parse(source)
+    except SyntaxError as exc:
+        raise ValueError("AGY retornou Python com sintaxe invalida") from exc
     return source
 
 
