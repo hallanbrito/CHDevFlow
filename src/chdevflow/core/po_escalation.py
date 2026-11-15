@@ -39,6 +39,18 @@ _ISSUE_URL = re.compile(
     r"^https://github\.com/hallanbrito/CHDevFlow/issues/([1-9][0-9]*)$")
 
 
+def _json_unique(payload: str | bytes):
+    """JSON estrito: nenhuma chave duplicada, inclusive em objetos aninhados."""
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("JSON contem chave duplicada")
+            result[key] = value
+        return result
+    return json.loads(payload, object_pairs_hook=unique_pairs)
+
+
 def _assert_no_link_ancestors(path: Path) -> None:
     """Rejeita links/junctions tambem ACIMA da raiz declarada do dossie."""
     if ".." in path.parts:
@@ -78,7 +90,7 @@ def _safe_outbox(path: Path) -> dict:
     if (_is_link(path) or _is_link(path.parent) or not path.is_file()
             or path.stat().st_size > 15000):
         raise ValueError("Outbox local ausente, link ou maior que limite")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = _json_unique(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError("Outbox JSON invalido")
     if data.get("status") != "AGUARDANDO_PO":
