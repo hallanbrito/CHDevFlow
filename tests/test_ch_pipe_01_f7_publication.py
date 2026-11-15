@@ -174,6 +174,28 @@ class PublicationTests(unittest.TestCase):
             " ACTION=COMMENT_ONLY"),
             })
 
+    def test_revogacao_no_ultimo_snapshot_live_bloqueia_post(self):
+        plan = self._plan()
+        calls = []
+        def reader(*_):
+            calls.append("GET")
+            if len(calls) == 3:
+                self.context["approval_history"].append({
+                    "id": self.approval_id + 99,
+                    "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                             + self.data["execution_id"]),
+                    "user": {"login": "hallanbrito"},
+                })
+            return self.context
+        with self.assertRaises(pub.PublicationPending):
+            self._apply(
+                plan, reader=reader,
+                poster=lambda *_: self.fail("POST apos revogacao"))
+        self.assertEqual(len(calls), 3)
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        self.assertEqual(json.loads(lock.read_text())["publication_status"],
+                         "PENDENTE_PUBLICACAO")
+
     def test_revogacao_posterior_do_po_bloqueia_antes_do_post(self):
         self.context["approval_history"].append({
             "id": self.approval_id + 1,
@@ -541,7 +563,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(result["comment_id"], 987654)
         self.assertEqual(result["remote_writes"], 1)
         self.assertEqual([event[0] for event in calls].count("POST_SIMULADO"), 1)
-        self.assertEqual([event[0] for event in calls].count("GET_LIVE"), 4)
+        self.assertEqual([event[0] for event in calls].count("GET_LIVE"), 5)
         audit_events = [
             json.loads(row)["event"] for row in
             audit_file.read_text(encoding="utf-8").splitlines()
