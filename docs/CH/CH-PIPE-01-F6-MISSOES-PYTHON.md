@@ -85,6 +85,34 @@ os processos AGY/Codex reais e o veredito da auditoria. Sem isso, estado
 
 Os testes offline utilizam AGY e Codex simulados: não são prova de integração real. F6 não faz merge, deploy, cron nem escrita no Project #2.
 
+## Incidente real F6-FRETE-29d75943ef e contrato do auditor
+
+Em 15/11/2026, o laboratório Docker executou 15/15 testes por rodada, porém
+Codex vetou as 3 rodadas por evidência **insuficiente**: na primeira, um diff
+textual concatenou linha sem newline; nas seguintes, o patch ficou vazio porque
+o AGY repetiu exatamente o mesmo código e o diff era calculado em relação
+à tentativa anterior. O CCC-01 respeitou 3 chamadas AGY / 2 devoluções e
+escalonou localmente como `AGUARDANDO_PO`.
+
+A correção posterior preserva o estado histórico daquele dossiê e altera apenas
+execuções **novas**:
+- Diff textual com quebras de linha normalizadas para LF, comparado sempre
+  com o **baseline original**, inclusive quando o AGY repete bytes.
+- Auditoria textual fornece código Python completo, SHA256, inventário
+  Git Porcelain de arquivos alterados e resultados dos testes.
+- Antes e depois da auditoria, confirma que o arquivo do disco tem os
+  mesmos bytes que a resposta do AGY; alterações por testes ou ferramentas
+  invalidam a auditoria e bloqueiam o ciclo.
+- Patch vazio frente ao baseline bloqueia por falta de alteração legítima
+  antes de chamar Codex.
+
+Esses ajustes não substituem a validação independente do Codex e não fazem
+o sistema aprovar retroativamente uma missão `AGUARDANDO_PO`.
+A execução precisa de nova CI antes de qualquer novo laboratório real.
+Evitar refazer uma missão enquanto os motivos do veto forem de evidência e
+não de implementação; o reparo do auditor deve ocorrer antes de gastar
+cotas adicionais.
+
 ## Limites ainda pendentes
 
 - Arquivos múltiplos, stacks .NET, Java, Angular/TypeScript e comandos de teste não-Python.
