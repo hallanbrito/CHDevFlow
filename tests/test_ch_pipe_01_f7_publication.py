@@ -668,6 +668,20 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(ReservationError, "outro plano"):
                 store.read({**plan, "digest": "f" * 64})
 
+            class LostAcknowledgmentStore(GitReservationStore):
+                def _git(self, directory, *args, **kwargs):
+                    output = super()._git(directory, *args, **kwargs)
+                    if args[0] == "push":
+                        raise ReservationError("resposta da reserva perdida")
+                    return output
+
+            another = {**plan, "execution_id": "d" * 32}
+            with self.assertRaisesRegex(ReservationError, "nao confirmada"):
+                LostAcknowledgmentStore(remote.as_posix()).claim(another)
+            self.assertRegex(store.read(another), r"^[0-9a-f]{40}$")
+            with self.assertRaisesRegex(ReservationError, "nao confirmada"):
+                store.claim(another)
+
     def test_project_existente_preserva_campos_manuais(self):
         project = {
             "items": [{

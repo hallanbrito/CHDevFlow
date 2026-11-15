@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -47,12 +48,18 @@ class GitReservationStore:
 
     @staticmethod
     def _git(directory: Path, *args: str, data: bytes = b"") -> bytes:
+        env = os.environ.copy()
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"):
+            env.pop(name, None)
+        env["GIT_TERMINAL_PROMPT"] = "0"
         try:
             completed = subprocess.run(
                 ["git", "-c", "user.name=CHDevFlow F7",
                  "-c", "user.email=f7@users.noreply.github.com",
                  "-c", "commit.gpgSign=false", *args],
-                cwd=directory, input=data, capture_output=True, check=False, timeout=25,
+                cwd=directory, env=env, input=data, capture_output=True,
+                check=False, timeout=25,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise ReservationError("Comando Git da reserva indisponivel") from exc
@@ -68,7 +75,7 @@ class GitReservationStore:
         payload = json.dumps(record, sort_keys=True, separators=(",", ":")).encode("ascii")
         with TemporaryDirectory(prefix="ch-f7-reserve-") as workspace:
             root = Path(workspace)
-            self._git(root, "init", "--bare", "--template=")
+            self._git(root, "init", "--bare", "--template=", "--object-format=sha1")
             tree = self._git(root, "mktree").decode("ascii").strip()
             commit = self._git(root, "commit-tree", tree, data=payload).decode("ascii").strip()
             try:
@@ -88,7 +95,7 @@ class GitReservationStore:
         ref, expected = _reservation_fields(plan)
         with TemporaryDirectory(prefix="ch-f7-reconcile-") as workspace:
             root = Path(workspace)
-            self._git(root, "init", "--bare", "--template=")
+            self._git(root, "init", "--bare", "--template=", "--object-format=sha1")
             self._git(root, "fetch", "--no-tags", "--", self.remote, ref)
             commit = self._git(root, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
             sha = commit.decode("ascii").strip()
