@@ -690,7 +690,7 @@ class PublicationTests(unittest.TestCase):
 
     def test_json_nao_finito_bloqueia_entrada_e_digests(self):
         from chdevflow.core.po_escalation import _json_unique
-        for invalid in ("NaN", "Infinity", "-Infinity"):
+        for invalid in ("NaN", "Infinity", "-Infinity", "1e999", "-1e999"):
             with self.subTest(invalid=invalid):
                 with self.assertRaisesRegex(ValueError, "nao finita"):
                     _json_unique('{"nested":{"value":' + invalid + '}}')
