@@ -21,6 +21,7 @@ from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation import (
     EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
     OWNER, PROJECT, REPO, SCHEMA, _safe_outbox, _assert_no_link_ancestors,
+    _json_unique,
     build_escalation_preview, write_receipt_once,
 )
 
@@ -49,6 +50,14 @@ def _digest(value: Any) -> str:
     ).encode("utf-8")).hexdigest()
 
 
+def _read_local_json(path: Path, *, cap: int = 100000) -> Any:
+    """Leitura estrita de plano/recibo, sem JSON excessivo ou chaves duplicadas."""
+    _assert_no_link_ancestors(path)
+    if not path.is_file() or path.stat().st_size > cap:
+        raise PublicationError("JSON local ausente ou excessivo")
+    return _json_unique(path.read_text(encoding="utf-8"))
+
+
 def _gh_json(*args: str, expected_type: type = dict) -> Any:
     """Comunicacao GH por bytes UTF-8, sem locale cp1252 e sem expor stderr."""
     try:
@@ -59,8 +68,10 @@ def _gh_json(*args: str, expected_type: type = dict) -> Any:
         raise PublicationError("GitHub CLI indisponivel; sem escrita") from exc
     if done.returncode:
         raise PublicationError("Consulta GitHub negada/indisponivel; sem escrita")
+    if not isinstance(done.stdout, bytes) or len(done.stdout) > 4_000_000:
+        raise PublicationError("Resposta GitHub ausente ou excessiva")
     try:
-        parsed = json.loads(done.stdout.decode("utf-8", errors="strict"))
+        parsed = _json_unique(done.stdout.decode("utf-8", errors="strict"))
     except (UnicodeError, ValueError, AttributeError) as exc:
         raise PublicationError("GitHub CLI retornou JSON/UTF-8 invalido") from exc
     if not isinstance(parsed, expected_type):
@@ -368,7 +379,7 @@ def _mark_verified(lock: Path, *, comment_id: int) -> None:
     """Atualiza journal somente DEPOIS do readback confirmado."""
     if type(comment_id) is not int or comment_id <= 0:
         raise PublicationError("Comentario verificado sem ID valido")
-    record = json.loads(lock.read_text(encoding="utf-8"))
+    record = _read_local_json(lock, cap=10000)
     if record.get("publication_status") != "PENDENTE_PUBLICACAO":
         raise PublicationError("Estado da tentativa de publicacao divergente")
     record.update({
@@ -408,7 +419,7 @@ def reconcile_pending_publication(
     _assert_no_link_ancestors(lock)
     if not lock.is_file() or lock.stat().st_size > 10000:
         raise PublicationError("Journal de publicacao ausente/invalido")
-    record = json.loads(lock.read_text(encoding="utf-8"))
+    record = _read_local_json(lock, cap=10000)
     if (not isinstance(record, dict)
             or record.get("schema") != RECEIPT_SCHEMA
             or record.get("execution_id") != execution
@@ -592,7 +603,7 @@ def main(argv=None) -> int:
                     or args.confirm or args.audit_file):
                 raise PublicationError("Reconciliacao aceita somente --reconcile-plan")
             _assert_no_link_ancestors(args.reconcile_plan)
-            plan = json.loads(args.reconcile_plan.read_text(encoding="utf-8"))
+            plan = _read_local_json(args.reconcile_plan)
             result = reconcile_pending_publication(args.outbox, plan)
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return 0
@@ -608,7 +619,7 @@ def main(argv=None) -> int:
                     "POST F7 desativado ate autenticidade externa, "
                     "executor unico e isolamento comprovado")
             _assert_no_link_ancestors(args.apply_plan)
-            plan = json.loads(args.apply_plan.read_text(encoding="utf-8"))
+            plan = _read_local_json(args.apply_plan)
             handle, audit = _audit_writer(args.audit_file)
             with handle:
                 try:
