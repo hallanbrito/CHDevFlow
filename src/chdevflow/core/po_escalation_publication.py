@@ -293,7 +293,7 @@ def _post_comment(issue: int, body: str) -> dict:
         "-f", "body=" + body)
 
 
-def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> None:
+def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Path:
     """Lock local permanente: evita POST concorrente/repetido no mesmo dossie.
 
     Em erro inconclusivo NAO remover o lock automaticamente. Reconciliacao
@@ -309,11 +309,38 @@ def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Non
     except FileExistsError as exc:
         raise PublicationError("Outro executor possui o lock de publicacao") from exc
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump({"execution_id": execution_id, "digest": digest,
-                   "state": "PUBLICATION_ATTEMPT_CLAIMED"}, handle)
+        json.dump({
+            "schema": RECEIPT_SCHEMA, "execution_id": execution_id,
+            "digest": digest, "publication_status": "PENDENTE_PUBLICACAO",
+            "remote_effect": "INDETERMINADO",
+            "requires_reconciliation": True, "retry_agents": False,
+        }, handle)
         handle.write("\n")
         handle.flush()
         os.fsync(handle.fileno())
+    return lock
+
+
+def _mark_verified(lock: Path, *, comment_id: int) -> None:
+    """Atualiza journal somente DEPOIS do readback confirmado."""
+    if type(comment_id) is not int or comment_id <= 0:
+        raise PublicationError("Comentario verificado sem ID valido")
+    record = json.loads(lock.read_text(encoding="utf-8"))
+    if record.get("publication_status") != "PENDENTE_PUBLICACAO":
+        raise PublicationError("Estado da tentativa de publicacao divergente")
+    record.update({
+        "publication_status": "PUBLICADO_VERIFICADO",
+        "remote_effect": "CONFIRMADO", "comment_id": comment_id,
+        "requires_reconciliation": False,
+    })
+    temp = lock.with_suffix(".tmp")
+    fd = os.open(temp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(record, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temp, lock)
 
 
 def apply_publication_plan(
@@ -362,7 +389,8 @@ def apply_publication_plan(
         raise PublicationError("Acao de publicacao fora do escopo")
     if current_plan() != plan:
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
-    _claim_publication(outbox_path, outbox["execution_id"], supplied_digest)
+    journal = _claim_publication(
+        outbox_path, outbox["execution_id"], supplied_digest)
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
            "issue": outbox["issue"], "digest": supplied_digest})
     try:
@@ -387,7 +415,14 @@ def apply_publication_plan(
         audit({"event": "PENDENTE_PUBLICACAO", "reason": "READBACK_INCONCLUSIVO"})
         raise PublicationPending(
             "Escrita possivel/realizada; reconciliar LIVE, nao repetir automaticamente") from exc
-    audit({"event": "PUBLICADO_VERIFICADO", "comment_id": posted["id"]})
+    try:
+        _mark_verified(journal, comment_id=posted["id"])
+        audit({"event": "PUBLICADO_VERIFICADO", "comment_id": posted["id"]})
+    except Exception as exc:
+        # Journal permanece PENDENTE_PUBLICACAO em queda/erro local.
+        raise PublicationPending(
+            "Readback OK, mas comprovante local inconclusivo; reconciliar LIVE"
+        ) from exc
     return {"status": "PUBLICADO_VERIFICADO", "comment_id": posted["id"],
             "remote_writes": 1}
 
