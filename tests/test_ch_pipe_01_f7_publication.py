@@ -356,6 +356,91 @@ class PublicationTests(unittest.TestCase):
         self.assertIs(record["requires_reconciliation"], True)
         self.assertNotIn("secret", err.getvalue())
 
+    def test_v1_elegivel_cli_integral_simulada_com_readback(self):
+        """Homologacao de laboratorio: CLI real + GH simulado, nenhuma rede."""
+        plan_file = self.root / "plano-v1.json"
+        audit_file = self.root / "auditoria-v1.jsonl"
+        calls = []
+
+        def reader(issue, approval):
+            calls.append(("GET_LIVE", issue, approval))
+            return copy.deepcopy(self.context)
+
+        def poster(issue, body):
+            calls.append(("POST_SIMULADO", issue))
+            self.context["comments"].append({
+                "id": 987654, "body": body,
+                "user": {"login": "hallanbrito"},
+                "updated_at": "2026-11-15T14:00:00Z",
+            })
+            return {"id": 987654}
+
+        with (patch.object(pub, "_live_context", side_effect=reader),
+              patch.object(pub, "_post_comment", side_effect=poster),
+              patch.object(pub.subprocess, "run",
+                           side_effect=AssertionError("rede proibida"))):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                planned = pub.main([
+                    "--outbox", str(self.outbox),
+                    "--approval-comment", str(self.approval_id),
+                    "--plan-file", str(plan_file),
+                ])
+            self.assertEqual(planned, 0)
+            plan = json.loads(plan_file.read_text(encoding="utf-8"))
+            self.assertEqual(plan["action"], "POST_COMMENT")
+            self.assertEqual(plan["remote_project_writes"], 0)
+            self.assertEqual(json.loads(output.getvalue())["digest"], plan["digest"])
+            phrase = "APROVO F7 PUBLICAR " + plan["digest"][:12]
+            with patch("builtins.input", return_value=phrase) as human:
+                with contextlib.redirect_stdout(io.StringIO()) as result_output:
+                    applied = pub.main([
+                        "--outbox", str(self.outbox),
+                        "--apply-plan", str(plan_file),
+                        "--confirm", plan["digest"],
+                        "--audit-file", str(audit_file),
+                    ])
+        self.assertEqual(applied, 0)
+        human.assert_called_once()
+        result = json.loads(result_output.getvalue())
+        self.assertEqual(result["status"], "PUBLICADO_VERIFICADO")
+        self.assertEqual(result["comment_id"], 987654)
+        self.assertEqual(result["remote_writes"], 1)
+        self.assertEqual([event[0] for event in calls].count("POST_SIMULADO"), 1)
+        self.assertEqual([event[0] for event in calls].count("GET_LIVE"), 4)
+        audit_events = [
+            json.loads(row)["event"] for row in
+            audit_file.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(audit_events, ["ATTEMPT_POST", "PUBLICADO_VERIFICADO"])
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        self.assertTrue(lock.exists())
+        self.assertEqual(len(self.context["comments"]), 1)
+
+    def test_missao_alterada_mesmo_com_digest_novo_eh_bloqueada(self):
+        plan = self._plan()
+        plan["mission_id"] = "F6-MISSAO-ERRADA"
+        plan["digest"] = pub._digest({k: v for k, v in plan.items() if k != "digest"})
+        with self.assertRaisesRegex(pub.PublicationError, "nao pertence"):
+            self._apply(plan, reader=lambda *_: self.fail("gh nao deve ser chamado"))
+        self.assertFalse(self.audit)
+
+    def test_junction_de_pasta_do_dossie_bloqueia_lock(self):
+        plan = self._plan()
+        with patch.object(pub, "_is_link",
+                          side_effect=lambda p: p == self.root):
+            with self.assertRaises(pub.PublicationError):
+                self._apply(
+                    plan, poster=lambda *_: self.fail("post proibido"))
+        self.assertFalse(any(x.get("event") == "ATTEMPT_POST" for x in self.audit))
+
+    def test_junction_de_pasta_de_evidencia_bloqueia_outbox(self):
+        from chdevflow.core import po_escalation as bridge
+        with patch.object(
+            bridge, "_is_link", side_effect=lambda p: p == self.root / "attempt-03"
+        ):
+            with self.assertRaisesRegex(ValueError, "Link/reparse"):
+                self._outbox()
+
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"
         pub._write_json_once(target, self._plan())
