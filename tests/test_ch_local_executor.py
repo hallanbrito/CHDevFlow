@@ -22,7 +22,7 @@ from chdevflow.core import local_executor as local
 class LocalExecutorTests(unittest.TestCase):
     def test_doctor_linux_with_clis(self):
         with patch.object(local, "_executables", return_value=(["/usr/bin/agy"], ["/usr/bin/codex"])), \
-             patch.object(local.platform, "system", return_value="Linux"):
+             patch("platform.system", return_value="Linux"):
             report = local._doctor()
         self.assertEqual(report["status"], "PRONTO_PARA_LAB")
         self.assertEqual(report["host_os"], "Linux")
@@ -30,7 +30,7 @@ class LocalExecutorTests(unittest.TestCase):
 
     def test_doctor_windows_with_clis(self):
         with patch.object(local, "_executables", return_value=(["C:/agy.exe"], ["C:/codex.exe"])), \
-             patch.object(local.platform, "system", return_value="Windows"):
+             patch("platform.system", return_value="Windows"):
             report = local._doctor()
         self.assertEqual(report["status"], "PRONTO_PARA_LAB")
         self.assertFalse(report["credential_access_verified"])
