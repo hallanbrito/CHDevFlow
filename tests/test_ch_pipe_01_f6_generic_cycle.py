@@ -66,6 +66,7 @@ class GenericCycleTests(unittest.TestCase):
         self.calls_codex = 0
         self.agy_infra_error = False
         self.agy_changes_test = False
+        self.tests_infra_error = False
 
     def _write_manifest(self):
         self.manifest.write_text(
@@ -75,6 +76,8 @@ class GenericCycleTests(unittest.TestCase):
         self.assertEqual(root, self.worktree)
         if args[0] == "rev-parse":
             return BASE
+        if args[0] == "remote":
+            return "https://github.com/hallanbrito/CHDevFlow.git"
         if args[0] == "branch":
             return "feat/f6-test"
         if args[0] == "status":
@@ -102,6 +105,9 @@ class GenericCycleTests(unittest.TestCase):
             return ProcessResult(
                 0, json.dumps({"status": "SUCCESS", "response": response}), "")
         if command[0] == sys.executable:
+            if self.tests_infra_error:
+                return ProcessResult(
+                    1, "", "Ran 2 tests\nFAILED (errors=1)\nModuleNotFoundError")
             if self.calls_agy in self.fail_tests:
                 return ProcessResult(1, "", "Ran 2 tests\nFAILED (failures=1)")
             return ProcessResult(0, "", "Ran 2 tests\nOK")
@@ -161,6 +167,14 @@ class GenericCycleTests(unittest.TestCase):
 
     def test_falha_de_autenticacao_nao_repete(self):
         self.agy_infra_error = True
+        report = self.run_fake()
+        self.assertEqual(report.status, "BLOQUEADO_INFRA_OU_ESCOPO")
+        self.assertEqual(self.calls_agy, 1)
+        self.assertEqual(self.calls_codex, 0)
+        self.assertEqual(report.returns_used, 0)
+
+    def test_erro_importacao_de_testes_nao_gasta_segunda_rodada(self):
+        self.tests_infra_error = True
         report = self.run_fake()
         self.assertEqual(report.status, "BLOQUEADO_INFRA_OU_ESCOPO")
         self.assertEqual(self.calls_agy, 1)
