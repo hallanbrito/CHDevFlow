@@ -20,7 +20,7 @@ from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation import (
     EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
-    OWNER, PROJECT, REPO, SCHEMA, _safe_outbox,
+    OWNER, PROJECT, REPO, SCHEMA, _safe_outbox, _assert_no_link_ancestors,
     build_escalation_preview, write_receipt_once,
 )
 
@@ -29,6 +29,9 @@ PLAN_SCHEMA = "CHDEVFLOW-F7-COMMENT-PLAN/1"
 RECEIPT_SCHEMA = "CHDEVFLOW-F7-COMMENT-PENDING/1"
 MAX_COMMENT_PAGES = 15
 MARKER_PREFIX = "<!-- CHDEVFLOW-F7-EXECUTION:"
+# A bloqueio definitivo e proposital ate prova externa de custodia,
+# serializacao entre hosts e reauditoria. Nao habilitar apenas por env.
+REMOTE_PUBLICATION_ENABLED = False
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -181,8 +184,9 @@ def _approval_fingerprint(proof: dict, outbox: dict,
         f"EXECUTION#{outbox['execution_id']}"
     )
     for comment in history:
-        if (comment["id"] > approval_id
-                and comment["user"].get("login") == OWNER
+        # Revogacao editada em comentario anterior tambem bloqueia.
+        # Uma nova autorizacao para esta mesma execucao nao a reabilita.
+        if (comment["user"].get("login") == OWNER
                 and isinstance(comment.get("body"), str)
                 and any(line.strip().startswith(revoke_prefix)
                         for line in comment["body"].splitlines())):
@@ -310,7 +314,9 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
 
 
 def _post_comment(issue: int, body: str) -> dict:
-    """Unica escrita permitida: um comentario na Issue; sem retry."""
+    """Nenhum POST real ate reauditoria de autenticidade e serializacao."""
+    if not REMOTE_PUBLICATION_ENABLED:
+        raise PublicationError("POST F7 desativado: custodia e executor unico pendentes")
     return _gh_json(
         "api", "-X", "POST", f"repos/{REPO}/issues/{issue}/comments",
         "-f", "body=" + body)
@@ -325,6 +331,7 @@ def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Pat
     if not HEX32.fullmatch(execution_id):
         raise PublicationError("Execution ID do lock invalido")
     lock = outbox_path.parent / ("f7-publicacao-" + execution_id + ".lock")
+    _assert_no_link_ancestors(lock)
     if _is_link(lock) or _is_link(lock.parent) or lock.exists():
         raise PublicationError("Publicacao anterior existe; reconciliar antes de repetir")
     try:
@@ -462,6 +469,7 @@ def apply_publication_plan(
 
 
 def _write_json_once(path: Path, payload: dict) -> None:
+    _assert_no_link_ancestors(path)
     if (path.exists() or _is_link(path) or not path.parent.is_dir()
             or _is_link(path.parent)):
         raise PublicationError("Plano ja existe ou destino inseguro")
@@ -474,6 +482,7 @@ def _write_json_once(path: Path, payload: dict) -> None:
 
 
 def _audit_writer(path: Path):
+    _assert_no_link_ancestors(path)
     if (path.exists() or _is_link(path) or not path.parent.is_dir()
             or _is_link(path.parent)):
         raise PublicationError("Auditoria existe ou destino invalido")
@@ -502,6 +511,13 @@ def main(argv=None) -> int:
                     not args.confirm or args.audit_file is None):
                 raise PublicationError(
                     "Aplicacao exige somente --apply-plan, --confirm e --audit-file")
+            # Modo producao intencionalmente desligado antes de criar
+            # journal/lock. CLI offline pode ser testada com mocks explicitos.
+            if not REMOTE_PUBLICATION_ENABLED:
+                raise PublicationError(
+                    "POST F7 desativado ate autenticidade externa, "
+                    "executor unico e isolamento comprovado")
+            _assert_no_link_ancestors(args.apply_plan)
             plan = json.loads(args.apply_plan.read_text(encoding="utf-8"))
             handle, audit = _audit_writer(args.audit_file)
             with handle:
