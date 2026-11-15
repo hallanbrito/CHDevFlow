@@ -49,7 +49,7 @@ class GenericCycleTests(unittest.TestCase):
             "Implemente resposta() -> 42.", encoding="utf-8")
         (self.worktree / "tests" / "test_resposta.py").write_text(
             "# Teste independente para resposta", encoding="utf-8")
-        self.manifest = self.worktree / "mission.json"
+        self.manifest = root / "mission.json"
         self.data = {
             "schema": SCHEMA, "mission_id": "F6-TEST-001",
             "repository": "hallanbrito/CHDevFlow", "issue": 85,
