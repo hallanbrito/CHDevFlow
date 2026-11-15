@@ -230,7 +230,7 @@ class CommandTests(unittest.TestCase):
     def test_gh_nao_utf8_bloqueia_antes_de_parsear_json(self):
         completed = sync.subprocess.CompletedProcess(
             ["gh", "project", "view"], 0,
-            stdout=b'{"title":"bad-\\x9d"}'.replace(b"\\\\x9d", b"\\x9d"),
+            stdout=b'{"title":"bad-' + bytes([0x9d]) + b'"}',
             stderr=b"")
         with mock.patch.object(sync.subprocess, "run", return_value=completed):
             with self.assertRaisesRegex(RuntimeError, "UTF-8 valido"):
