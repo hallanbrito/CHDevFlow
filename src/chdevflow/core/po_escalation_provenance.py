@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 
 from chdevflow.core.manual_pipeline_runner import Mission
-from chdevflow.core.po_escalation import _safe_file_within
+from chdevflow.core.po_escalation import _safe_file_within, _json_unique
 
 SCHEMA = "CHDEVFLOW-F7-PROVENANCE/1"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -54,9 +54,9 @@ def _artifact_hashes(root: Path, paths: list[str]) -> dict[str, str]:
 
 
 def _state(root: Path) -> tuple[Mission, dict]:
-    mission_data = json.loads(_read_text(root, "manifesto_missao.json"))
+    mission_data = _json_unique(_read_text(root, "manifesto_missao.json"))
     mission = Mission.from_dict(mission_data)
-    state = json.loads(_read_text(root, "execucao.json"))
+    state = _json_unique(_read_text(root, "execucao.json"))
     if not isinstance(state, dict):
         raise ValueError("Registro de execucao invalido")
     if (mission.repository != "hallanbrito/CHDevFlow" or
