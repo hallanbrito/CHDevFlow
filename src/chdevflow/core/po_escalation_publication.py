@@ -249,7 +249,7 @@ def _eligible_outbox(path: Path) -> dict:
         raise PublicationError("Outbox sem causa da terceira reprovacao: somente preview F7")
     # No modo publicacao, a V1 precisa comprovar toda a linha de producao.
     # Preview legado continua permitido em po_escalation.py.
-    verify_provenance(path.parent, outbox)
+    verify_provenance(path.parent, outbox, require_isolation=True)
     return outbox
 
 
