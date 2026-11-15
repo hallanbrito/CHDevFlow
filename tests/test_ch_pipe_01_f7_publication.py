@@ -229,6 +229,17 @@ class PublicationTests(unittest.TestCase):
             self._apply(plan, poster=lambda *_: self.fail("POST desautorizado"))
         self.assertFalse(self.audit)
 
+    def test_revogacao_editada_em_comentario_antigo_bloqueia(self):
+        self.context["approval_history"].insert(0, {
+            "id": self.approval_id - 1,
+            "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                     + self.data["execution_id"]),
+            "user": {"login": "hallanbrito"},
+            "updated_at": "2026-11-15T14:00:00Z",
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "revogada"):
+            self._plan()
+
     def test_intake_out_of_scope_nao_publica(self):
         self.context["issue"]["labels"] = []
         with self.assertRaisesRegex(pub.PublicationError, "Intake F1"):
@@ -460,6 +471,30 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "Plano/digest"):
             self._apply(plan, reader=lambda *_: self.fail("GH chamado"))
 
+    def test_post_real_permanece_desativado_sem_gh(self):
+        with patch.object(pub, "_gh_json",
+                          side_effect=AssertionError("POST real proibido")):
+            with self.assertRaisesRegex(pub.PublicationError, "desativado"):
+                pub._post_comment(85, "nao publicar")
+
+    def test_cli_apply_producao_bloqueia_antes_do_journal(self):
+        plan_file = self.root / "plano-bloqueado.json"
+        plan_file.write_text(json.dumps(self._plan()), encoding="utf-8")
+        audit_path = self.root / "auditoria-bloqueada.jsonl"
+        with patch.object(pub.subprocess, "run",
+                          side_effect=AssertionError("rede proibida")):
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                result = pub.main([
+                    "--outbox", str(self.outbox),
+                    "--apply-plan", str(plan_file),
+                    "--confirm", self._plan()["digest"],
+                    "--audit-file", str(audit_path),
+                ])
+        self.assertEqual(result, 1)
+        self.assertIn("desativado", error.getvalue())
+        self.assertFalse(audit_path.exists())
+        self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
+
     def test_gh_bytes_windows_unicode_sem_locale(self):
         response = subprocess.CompletedProcess(
             ["gh"], 0, b'{"title":"A\xc3\xa7\xc3\xa3o"}', b"")
@@ -552,6 +587,7 @@ class PublicationTests(unittest.TestCase):
 
         with (patch.object(pub, "_live_context", side_effect=reader),
               patch.object(pub, "_post_comment", side_effect=poster),
+              patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True),
               patch.object(pub.subprocess, "run",
                            side_effect=AssertionError("rede proibida"))):
             with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -615,6 +651,19 @@ class PublicationTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "Link/reparse"):
                 self._outbox()
+
+    def test_junction_ancestral_da_raiz_bloqueia_dossie(self):
+        from chdevflow.core import po_escalation as bridge
+        with patch.object(
+            bridge, "_is_link", side_effect=lambda p: p == self.root.parent
+        ):
+            with self.assertRaisesRegex(ValueError, "ancestral"):
+                self._outbox()
+
+    def test_evidencia_com_travessia_rejeitada(self):
+        from chdevflow.core import po_escalation as bridge
+        with self.assertRaisesRegex(ValueError, "fora do dossie"):
+            bridge._safe_file_within(self.root, "../fora.txt")
 
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"
