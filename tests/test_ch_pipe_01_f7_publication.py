@@ -81,6 +81,7 @@ class PublicationTests(unittest.TestCase):
             },
             "comments": [],
         }
+        self.context["approval_history"] = [self.context["approval"]]
         self.audit = []
 
     def _outbox(self):
@@ -134,6 +135,39 @@ class PublicationTests(unittest.TestCase):
                          "EXECUTION#" + self.data["execution_id"] + " "
                          "SHA256=" + self.data["code_sha256"] + " ACTION=COMMENT_ONLY"),
             })
+
+    def test_revogacao_posterior_do_po_bloqueia_antes_do_post(self):
+        self.context["approval_history"].append({
+            "id": self.approval_id + 1,
+            "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                     + self.data["execution_id"] + " ACTION=COMMENT_ONLY"),
+            "user": {"login": "hallanbrito"},
+            "updated_at": "2026-11-15T13:00:00Z",
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "revogada"):
+            self._plan()
+
+    def test_autorizacao_com_linha_contraditoria_bloqueia(self):
+        self.context["approval"]["body"] += "\\nREVOGADO PELO PO"
+        with self.assertRaisesRegex(pub.PublicationError, "alterada"):
+            self._plan()
+
+    def test_historico_aprovacao_indisponivel_bloqueia(self):
+        self.context.pop("approval_history")
+        with self.assertRaisesRegex(pub.PublicationError, "Historico"):
+            self._plan()
+
+    def test_retirada_apos_plano_invalida_digest_antes_post(self):
+        plan = self._plan()
+        self.context["approval_history"].append({
+            "id": self.approval_id + 3,
+            "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                     + self.data["execution_id"]),
+            "user": {"login": "hallanbrito"},
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "revogada"):
+            self._apply(plan, poster=lambda *_: self.fail("POST desautorizado"))
+        self.assertFalse(self.audit)
 
     def test_intake_out_of_scope_nao_publica(self):
         self.context["issue"]["labels"] = []
