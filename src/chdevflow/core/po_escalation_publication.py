@@ -122,6 +122,7 @@ def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
         outbox_path.parent / "f7-attestation.json", outbox,
         trusted_key=os.environ.get("CH_F7_TRUSTED_RUNNER_PUBKEY", ""),
         trusted_producer_sha=os.environ.get("CH_F7_TRUSTED_RUNNER_SHA", ""),
+        revoked_fingerprints=os.environ.get("CH_F7_REVOKED_RUNNER_FINGERPRINTS", ""),
     )
 
 
@@ -601,7 +602,7 @@ def apply_publication_plan(
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
     custody = _verify_attestation(outbox_path, outbox)
     if (outbox["mission_id"] == "F7-CUSTODY-PROBE"
-            or custody["producer_run"].startswith("github-actions:probe:")):
+            or custody["producer_run"].startswith(("github-actions:probe:", "github-actions:custody:"))):
         raise PublicationError("Atestacao de sonda F7 somente para verificacao")
     _verify_reservation_protection()
     journal = _claim_publication(

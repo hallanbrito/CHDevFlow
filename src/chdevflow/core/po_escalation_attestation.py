@@ -1,6 +1,8 @@
 """Verifica um recibo F7 assinado por um produtor externo confiavel."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -39,13 +41,29 @@ def execution_statement(outbox: dict, *, producer_sha: str, producer_run: str) -
     }
 
 
-def verify_external_attestation(
-    path: Path, outbox: dict, *, trusted_key: str, trusted_producer_sha: str,
-) -> dict:
-    """A chave e o SHA esperados vem de uma politica externa ao dossie."""
+def validate_trusted_key(trusted_key: str, revoked_fingerprints: str) -> str:
     if not isinstance(trusted_key, str) or not re.fullmatch(
             r"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}", trusted_key):
         raise ValueError("Chave confiavel do produtor F7 ausente ou invalida")
+    if revoked_fingerprints == "NONE":
+        revoked_fingerprints = ""
+    if not isinstance(revoked_fingerprints, str) or any(
+            not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", value)
+            for value in revoked_fingerprints.split()):
+        raise ValueError("Lista de revogacao indisponivel ou invalida")
+    key_blob = base64.b64decode(trusted_key.split()[1], validate=True)
+    fingerprint = "SHA256:" + base64.b64encode(hashlib.sha256(key_blob).digest()).decode().rstrip("=")
+    if fingerprint in revoked_fingerprints.split():
+        raise ValueError("Chave do atestador revogada")
+    return fingerprint
+
+
+def verify_external_attestation(
+    path: Path, outbox: dict, *, trusted_key: str, trusted_producer_sha: str,
+    revoked_fingerprints: str = "",
+) -> dict:
+    """A chave e o SHA esperados vem de uma politica externa ao dossie."""
+    validate_trusted_key(trusted_key, revoked_fingerprints)
     receipt = _json_unique(_read_evidence_bytes(path, cap=30000))
     if not isinstance(receipt, dict) or set(receipt) != {"statement", "signature"}:
         raise ValueError("Recibo externo F7 invalido")

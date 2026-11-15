@@ -110,6 +110,9 @@ jobs:
   f7-custody-attestor:
     needs: f7-custody-producer
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -121,6 +124,33 @@ jobs:
       - name: Assinar e verificar o dossie em runner independente
         run: |
           python scripts/f7_custody_probe.py sign "$RUNNER_TEMP/f7-evidence" "$RUNNER_TEMP/f7-receipt"
+      - name: Verificar ZIP e digest pela API GitHub em laboratorio sem segredo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: scripts
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from f7_custody_live import api, unpack
+
+          run_id = int(os.environ["GITHUB_RUN_ID"])
+          name = "f7-probe-evidence"
+          items = api(f"actions/runs/{run_id}/artifacts?name={name}&per_page=2")["artifacts"]
+          if len(items) != 1 or items[0]["name"] != name:
+              raise ValueError("Artefato de laboratorio ambiguo")
+          artifact = items[0]
+          outbox = "escalonamento_po.json"
+          with TemporaryDirectory() as folder:
+              root = Path(folder)
+              unpack(api(f"actions/artifacts/{artifact['id']}/zip", binary=True),
+                     artifact["digest"], root)
+              expected = Path(os.environ["RUNNER_TEMP"]) / "f7-evidence" / outbox
+              if (root / outbox).read_bytes() != expected.read_bytes():
+                  raise ValueError("Transporte GitHub divergente")
+          print("F7_LAB_GITHUB_ARTIFACT_DIGEST_VERIFIED")
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: f7-probe-public-receipt
