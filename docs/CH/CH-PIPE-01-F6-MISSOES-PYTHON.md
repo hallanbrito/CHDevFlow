@@ -42,11 +42,76 @@ Execução experimental em PowerShell (exemplo, não executar em ambiente import
 
 **Aviso:** a execução de código gerado por IA dentro dos testes Python permite ações sob o usuário do host. NÃO HÁ sandbox de SO comprovado. O custo e as cotas não foram atestados. O uso das sessões autenticadas é voluntário; não usar informações privadas, segredos nem repositórios reais nesta fatia.
 
+
+## Homologação com execução de testes isolada (Docker Linux)
+
+Em 15/11/2026, o F6 recebeu um modo experimental `--isolated-tests`.
+
+- **Pré-requisito local:** Docker Desktop/Engine com Linux Containers e a imagem
+  `python:3.12-slim` previamente baixada via `docker pull python:3.12-slim`.
+- Antes de qualquer AGY/Codex, o executor verifica o Docker Linux e o ID da imagem.
+  Falha de pré-requisito é **BLOQUEADA SEM GASTO DE AGENTES**.
+- Para cada tentativa, os testes independentes rodam com `docker run --rm --pull=never`,
+  `--network=none`, `--read-only`, `--cap-drop=ALL`,
+  `--security-opt=no-new-privileges`, `--user=65534:65534`,
+  limite de processos/memória/CPU e bind mount de leitura apenas do laboratório.
+- A imagem não é obtida automaticamente durante a missão, evitando pull com rede
+  na etapa de testes. Nenhuma chave ou diretório pessoal é montado.
+- Os CLIs AGY/Codex **ainda executam no host autenticado, em modos plan/read-only**;
+  portanto o isolamento é dos **testes gerados**, NÃO do pipeline completo.
+  Contêineres reduzem exposição mas não são prova formal de impossibilidade de escape.
+- `os_isolation_verified` permanece `false` por honestidade; o dossiê registra
+  `test_execution=docker-readonly-no-network:<id-da-imagem>`.
+
+Comando da missão local (manifesto, branch e dossiê precisam ser novos e válidos):
+
+    python -m chdevflow.core.generic_cycle --manifest C:\CHDevFlow-Labs\manifest-frete-001.json --evidence-dir C:\CHDevFlow-Labs\CH-Dossie-Frete-001 --timeout 480 --isolated-tests --i-accept-local-risk
+
+A missão experimental recomendada é **cálculo de frete em centavos**: função
+`cotar_frete`, quinze testes independentes, prompt pequeno e código inicial
+que falha no aceite. Um kit PowerShell gera uma Git worktree órfã/descartável,
+commita somente esses três arquivos, registra o SHA no manifesto externo e,
+mediante execução explícita, aciona AGY, testes Docker e Codex, sem push/merge.
+
+**O agente não pode repetir automaticamente uma execução:** cada laboratório usa
+`execution_id` e pasta de dossiê novas, e nenhuma reexecução é disparada por CI.
+A homologação real exige o `execucao.json` e os logs verificados, mostrando
+os processos AGY/Codex reais e o veredito da auditoria. Sem isso, estado
+`PENDENTE_HOMOLOGACAO_REAL`.
+
 ## Verificação offline
 
     python -m unittest discover -s tests -p "test_ch_pipe_01_f6_generic_cycle.py" -v
 
 Os testes offline utilizam AGY e Codex simulados: não são prova de integração real. F6 não faz merge, deploy, cron nem escrita no Project #2.
+
+## Incidente real F6-FRETE-29d75943ef e contrato do auditor
+
+Em 15/11/2026, o laboratório Docker executou 15/15 testes por rodada, porém
+Codex vetou as 3 rodadas por evidência **insuficiente**: na primeira, um diff
+textual concatenou linha sem newline; nas seguintes, o patch ficou vazio porque
+o AGY repetiu exatamente o mesmo código e o diff era calculado em relação
+à tentativa anterior. O CCC-01 respeitou 3 chamadas AGY / 2 devoluções e
+escalonou localmente como `AGUARDANDO_PO`.
+
+A correção posterior preserva o estado histórico daquele dossiê e altera apenas
+execuções **novas**:
+- Diff textual com quebras de linha normalizadas para LF, comparado sempre
+  com o **baseline original**, inclusive quando o AGY repete bytes.
+- Auditoria textual fornece código Python completo, SHA256, inventário
+  Git Porcelain de arquivos alterados e resultados dos testes.
+- Antes e depois da auditoria, confirma que o arquivo do disco tem os
+  mesmos bytes que a resposta do AGY; alterações por testes ou ferramentas
+  invalidam a auditoria e bloqueiam o ciclo.
+- Patch vazio frente ao baseline bloqueia por falta de alteração legítima
+  antes de chamar Codex.
+
+Esses ajustes não substituem a validação independente do Codex e não fazem
+o sistema aprovar retroativamente uma missão `AGUARDANDO_PO`.
+A execução precisa de nova CI antes de qualquer novo laboratório real.
+Evitar refazer uma missão enquanto os motivos do veto forem de evidência e
+não de implementação; o reparo do auditor deve ocorrer antes de gastar
+cotas adicionais.
 
 ## Limites ainda pendentes
 
