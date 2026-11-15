@@ -48,7 +48,13 @@ def _json_unique(payload: str | bytes):
                 raise ValueError("JSON contem chave duplicada")
             result[key] = value
         return result
-    return json.loads(payload, object_pairs_hook=unique_pairs)
+    def reject_nonfinite(value: str):
+        raise ValueError("JSON contem constante nao finita: " + value)
+
+    return json.loads(
+        payload, object_pairs_hook=unique_pairs,
+        parse_constant=reject_nonfinite,
+    )
 
 
 def _assert_no_link_ancestors(path: Path) -> None:
