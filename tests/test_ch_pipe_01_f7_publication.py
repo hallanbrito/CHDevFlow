@@ -26,12 +26,12 @@ from chdevflow.core.po_escalation_provenance import create_provenance, verify_pr
 def issue_body():
     return (
         "### Esteira\nAGY\n"
-        "### N�vel de autonomia\nCH-0\n"
+        "### Nível de autonomia\nCH-0\n"
         "### Objetivo e valor\nEntregar uma missao Python auditavel\n"
-        "### Escopo, exclus�es e crit�rios de aceite\n"
+        "### Escopo, exclusões e critérios de aceite\n"
         "Codigo Python com testes independentes e gate humano\n"
         "### Baseline Git (branch e SHA)\nfeat/f6 " + ("a" * 40) + "\n"
-        "### Verifica��es e evid�ncias exigidas\n"
+        "### Verificações e evidências exigidas\n"
         "Docker e Codex devem registrar resultados verificaveis\n"
     )
 
@@ -681,7 +681,7 @@ class PublicationTests(unittest.TestCase):
             ["gh"], 0, b'{"title":"A\xc3\xa7\xc3\xa3o"}', b"")
         with patch.object(pub.subprocess, "run", return_value=response) as call:
             parsed = pub._gh_json("issue", "view", "85")
-        self.assertEqual(parsed["title"], "A��o")
+        self.assertEqual(parsed["title"], "Ação")
         self.assertNotIn("text", call.call_args.kwargs)
         self.assertNotIn("encoding", call.call_args.kwargs)
 

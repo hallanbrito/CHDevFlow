@@ -2,7 +2,7 @@
 
 APENAS LEITURA/PLANEJAMENTO. Para escrita, o fluxo oficial
 scripts/ch_project_assist.py exige aprovacao live do PO, digest e readback.
-Nao transforma reprova��o de IA em autorizacao de escrita remota.
+Nao transforma reprovação de IA em autorizacao de escrita remota.
 """
 from __future__ import annotations
 
@@ -79,7 +79,7 @@ def _assert_no_link_ancestors(path: Path) -> None:
 
 
 def _safe_file_within(root: Path, relative: str) -> Path:
-    """Rejeita symlink/reparse Windows em TODOS os componentes da evid�ncia."""
+    """Rejeita symlink/reparse Windows em TODOS os componentes da evidência."""
     if (not isinstance(relative, str) or Path(relative).is_absolute()
             or ".." in Path(relative).parts):
         raise ValueError("Caminho de evidencia fora do dossie")
@@ -104,7 +104,8 @@ def _verify_windows_handle(path: Path, handle) -> None:
     from ctypes import wintypes
     import msvcrt
 
-    get_final_path = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_final_path = kernel32.GetFinalPathNameByHandleW
     get_final_path.argtypes = (wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD)
     get_final_path.restype = wintypes.DWORD
     buffer = ctypes.create_unicode_buffer(32768)
@@ -116,7 +117,13 @@ def _verify_windows_handle(path: Path, handle) -> None:
         actual = "\\\\" + actual[8:]
     elif actual.startswith("\\\\?\\"):
         actual = actual[4:]
-    if Path(actual) != path:
+    # TEMP nos runners Windows pode usar nomes DOS 8.3. Expandir os nomes
+    # sem resolver o alvo de junctions, que continuam proibidas pelo leitor.
+    get_long_path = kernel32.GetLongPathNameW
+    get_long_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    get_long_path.restype = wintypes.DWORD
+    length = get_long_path(str(path), buffer, len(buffer))
+    if not 0 < length < len(buffer) or Path(actual) != Path(buffer.value):
         raise ValueError("Caminho da evidencia mudou antes da leitura")
 
 
@@ -179,7 +186,7 @@ def _safe_outbox(path: Path) -> dict:
     if not isinstance(data, dict):
         raise ValueError("Outbox JSON invalido")
     if data.get("status") != "AGUARDANDO_PO":
-        raise ValueError("Somente terceira reprova��o gera escalonamento")
+        raise ValueError("Somente terceira reprovação gera escalonamento")
     if data.get("publication_status") != "PENDENTE_DE_AUTORIZACAO":
         raise ValueError("Outbox ja processado ou estado inconclusivo")
     if data.get("attempts") != 3 or data.get("returns") != 2:

@@ -74,7 +74,9 @@ class TestCiIntegralAudit(unittest.TestCase):
         # AUD-01: pull_request direcionado à main NÃO deve ter filtro 'paths',
         # garantindo execução também para PRs exclusivamente documentais.
         pr_config = on_config["pull_request"]
-        self.assertEqual(pr_config.get("branches"), ["main"], "pull_request deve monitorar branch main.")
+        for base in ("main", "feat/ch-pipe-01-f7-po-escalation",
+                     "fix/ch-pipe-01-f7-legacy-outbox-20261115"):
+            self.assertIn(base, pr_config.get("branches", []))
         self.assertNotIn(
             "paths",
             pr_config,

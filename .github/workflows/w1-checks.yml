@@ -28,7 +28,7 @@ jobs:
   python-checks:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout do reposit�rio
+      - name: Checkout do repositório
         uses: actions/checkout@v6
 
       - name: Configurar Python 3.12
@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Compila��o sint�tica de todos os componentes
+      - name: Compilação sintática de todos os componentes
         run: python -m compileall -q src scripts apps
 
       - name: Parser PowerShell da auditoria F7 (sem executar Codex)
@@ -56,17 +56,17 @@ jobs:
             exit 1
           }
 
-      - name: Pr�via offline de governan�a W1
+      - name: Prévia offline de governança W1
         run: python scripts/w1_github_project.py
 
-      - name: Instala��o de depend�ncias e pacotes locais
+      - name: Instalação de dependências e pacotes locais
         run: |
           python -m pip install --upgrade pip
           pip install -e ./apps/bootstrap/sentinela
           pip install -e ./apps/control-center[dev]
           pip install -e .[dev]
 
-      - name: Testes CLI e Governan�a Raiz (tests/)
+      - name: Testes CLI e Governança Raiz (tests/)
         run: python -m unittest discover -s tests -v
 
       - name: Testes Sentinela (apps/bootstrap/sentinela/tests/)

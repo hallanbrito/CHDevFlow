@@ -149,7 +149,7 @@ def _live_context(issue: int, approval_comment: int) -> dict:
 def _expected_comment(outbox: dict, approval_id: int) -> str:
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     return (
-        "CHDevFlow F7 - Escalonamento para decisao do PO\n\n"
+        "CHDevFlow F7 — Escalonamento para decisao do PO\n\n"
         f"Execucao: {outbox['execution_id']}\n"
         f"Missao: {outbox['mission_id']}\n"
         f"Issue de origem: #{outbox['issue']}\n"
