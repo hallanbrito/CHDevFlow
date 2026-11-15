@@ -3,14 +3,17 @@ from __future__ import annotations
 
 import contextlib
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -21,6 +24,9 @@ if str(ROOT / "src") not in sys.path:
 from chdevflow.core import po_escalation_publication as pub
 from chdevflow.core.manual_pipeline_runner import Mission, SCHEMA as MISSION_SCHEMA
 from chdevflow.core.po_escalation_provenance import create_provenance, verify_provenance
+from chdevflow.core.po_escalation_reservation import (
+    GitReservationStore, NAMESPACE, ReservationError,
+)
 
 
 def issue_body():
@@ -122,12 +128,26 @@ class PublicationTests(unittest.TestCase):
         }
         self.context["approval_history"] = [self.context["approval"]]
         self.audit = []
+        reservation_patch = patch.object(pub, "_reservation_store")
+        self.addCleanup(reservation_patch.stop)
+        self.reservations = reservation_patch.start()
+        self.reservations.return_value.claim.return_value = "e" * 40
+        self.guard_reservation = pub._verify_reservation_protection
+        protection_patch = patch.object(pub, "_verify_reservation_protection")
+        self.addCleanup(protection_patch.stop)
+        self.gate = protection_patch.start()
 
     def _outbox(self):
         return pub._eligible_outbox(self.outbox)
 
     def _plan(self):
         return pub.build_publication_plan(self._outbox(), self.context)
+
+    def _legacy_plan(self):
+        plan = self._plan()
+        plan.pop("reservation_protocol")
+        plan.pop("digest")
+        return {**plan, "digest": pub._digest(plan)}
 
     def _apply(self, plan=None, reader=None, poster=None, answer=None):
         """Somente simulacao offline; habilitacao temporaria no escopo do teste."""
@@ -505,6 +525,87 @@ class PublicationTests(unittest.TestCase):
                 plan, poster=lambda *_: self.fail("retry duplicado"))
         self.assertEqual(self.audit[-1]["event"], "PENDENTE_PUBLICACAO")
 
+    def test_ruleset_ausente_bloqueia_reserva_e_post(self):
+        self.gate.side_effect = self.guard_reservation
+        with patch.object(pub, "_gh_json", return_value=[]):
+            with self.assertRaisesRegex(pub.PublicationError, "imutabilidade"):
+                self._apply(poster=lambda *_: self.fail("POST sem ruleset"))
+        self.reservations.assert_not_called()
+
+    def test_reserva_git_real_sobrevive_post_inconclusivo_e_troca_de_executor(self):
+        if os.name == "nt" and "#!sandbox." in str(self.root):
+            self.skipTest("sandbox Windows bloqueia o processo Git receive-pack")
+        plan = self._plan()
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            remote = root / "remote.git"
+            subprocess.run(
+                ["git", "init", "--bare", "--template=", str(remote)],
+                check=True, capture_output=True)
+            hook = remote / "hooks" / "pre-receive"
+            hook.parent.mkdir(exist_ok=True)
+            hook.write_text(
+                "#!/bin/sh\nwhile read old new ref; do\n"
+                "  case \"$ref\" in\n"
+                "    refs/tags/chdevflow-f7-publication/*)\n"
+                "      [ \"$old\" = 0000000000000000000000000000000000000000 ] || exit 1 ;;\n"
+                "  esac\ndone\n", encoding="ascii", newline="\n")
+            hook.chmod(0o755)
+            outboxes = [
+                shutil.copytree(self.root, root / name) / self.outbox.name
+                for name in ("executor-a", "executor-b", "executor-c")
+            ]
+            barrier = threading.Barrier(2, timeout=20)
+            posts = []
+
+            class ConcurrentStore(GitReservationStore):
+                def claim(self, value):
+                    barrier.wait()
+                    return super().claim(value)
+
+            self.reservations.side_effect = lambda: ConcurrentStore(remote.as_posix())
+
+            def timeout(issue, body):
+                posts.append((issue, body))
+                raise TimeoutError("resposta HTTP perdida")
+
+            def attempt(outbox):
+                try:
+                    pub.apply_publication_plan(
+                        outbox, plan, plan["digest"], reader=lambda *_: self.context,
+                        poster=timeout, audit=lambda _: None,
+                        human_prompt=lambda _: "APROVO F7 PUBLICAR " + plan["digest"][:12])
+                except pub.PublicationPending as exc:
+                    return str(exc)
+                self.fail("A publicacao com timeout nao pode terminar confirmada")
+
+            with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    outcomes = list(pool.map(attempt, outboxes[:2]))
+                self.assertTrue(any("nenhum POST autorizado" in item for item in outcomes))
+                self.assertTrue(any("Envio inconclusivo" in item for item in outcomes))
+                self.assertEqual(posts, [(plan["issue"], plan["body"])])
+
+                store = GitReservationStore(remote.as_posix())
+                self.reservations.side_effect = lambda: store
+                receipt = pub.reconcile_pending_publication(
+                    outboxes[2], plan, reader=lambda *_: self.context)
+                self.assertEqual(receipt["status"], "COMENTARIO_NAO_OBSERVADO")
+                self.assertEqual(receipt["reservation_sha"], store.read(plan))
+                self.assertFalse(receipt["retry_allowed"])
+                self.assertIn("nenhum POST autorizado", attempt(outboxes[2]))
+                self.assertEqual(len(posts), 1)
+
+            ref = NAMESPACE + plan["execution_id"]
+            deletion = subprocess.run(
+                ["git", "--git-dir", str(remote), "push", str(remote), ":" + ref],
+                capture_output=True, check=False)
+            self.assertNotEqual(deletion.returncode, 0)
+            self.assertIn(b"pre-receive hook declined", deletion.stdout + deletion.stderr)
+            self.assertEqual(receipt["reservation_sha"], store.read(plan))
+            with self.assertRaisesRegex(ReservationError, "outro plano"):
+                store.read({**plan, "digest": "f" * 64})
+
     def test_project_existente_preserva_campos_manuais(self):
         project = {
             "items": [{
@@ -548,7 +649,7 @@ class PublicationTests(unittest.TestCase):
             self._apply(plan, reader=lambda *_: self.fail("GH chamado"))
 
     def test_reconciliacao_pendente_read_only_nao_reexecuta_post(self):
-        plan = self._plan()
+        plan = self._legacy_plan()
         lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
         lock.write_text(json.dumps({
             "schema": pub.RECEIPT_SCHEMA,
@@ -578,7 +679,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(lock.read_bytes(), original)
 
     def test_reconciliacao_apos_revogacao_e_issue_closed(self):
-        plan = self._plan()
+        plan = self._legacy_plan()
         lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
         lock.write_text(json.dumps({
             "schema": pub.RECEIPT_SCHEMA,
@@ -599,7 +700,7 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(result["retry_allowed"])
 
     def test_reconciliacao_journal_divergente_bloqueia(self):
-        plan = self._plan()
+        plan = self._legacy_plan()
         lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
         lock.write_text(json.dumps({
             "schema": pub.RECEIPT_SCHEMA,
@@ -612,7 +713,7 @@ class PublicationTests(unittest.TestCase):
                 self.outbox, plan, reader=lambda *_: self.fail("GH acionado"))
 
     def test_reconciliacao_cli_mock_sem_post_e_sem_escrita_local(self):
-        plan = self._plan()
+        plan = self._legacy_plan()
         plan_path = self.root / "recon-plan.json"
         plan_path.write_text(json.dumps(plan), encoding="utf-8")
         lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")

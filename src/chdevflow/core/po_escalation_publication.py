@@ -18,6 +18,9 @@ from typing import Any, Callable
 from chdevflow.core.intake import validate_issue, _fields, _get
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
+from chdevflow.core.po_escalation_reservation import (
+    GitReservationStore, NAMESPACE, SCHEMA as RESERVATION_SCHEMA, ReservationError,
+)
 from chdevflow.core.po_escalation import (
     _evidence_text, _read_evidence_bytes,
     EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
@@ -105,6 +108,31 @@ def _reconciliation_context(issue: int, _approval_comment: int) -> dict:
     # A consulta de um efeito existente independe de a aprovacao ainda existir.
     return {"who": _gh_json("api", "user"), "issue": _live_issue(issue),
             "comments": _issue_comments(issue)}
+
+
+def _reservation_store() -> GitReservationStore:
+    return GitReservationStore(f"https://github.com/{REPO}.git")
+
+
+def _verify_reservation_protection() -> None:
+    """Fail closed unless the reservation tags cannot be changed or removed."""
+    summaries = _gh_json("api", f"repos/{REPO}/rulesets?targets=tag&per_page=100",
+                         expected_type=list)
+    for summary in summaries:
+        if not isinstance(summary, dict) or type(summary.get("id")) is not int:
+            continue
+        if summary.get("target") != "tag" or summary.get("enforcement") != "active":
+            continue
+        rule = _gh_json("api", f"repos/{REPO}/rulesets/{summary['id']}")
+        if (rule.get("target") == "tag" and rule.get("enforcement") == "active"
+                and rule.get("bypass_actors") == []
+                and rule.get("conditions") == {
+                    "ref_name": {"include": [NAMESPACE + "*"], "exclude": []}}
+                and {"update", "deletion"} <= {
+                    entry.get("type") for entry in rule.get("rules", [])
+                    if isinstance(entry, dict)}):
+            return
+    raise PublicationError("Namespace de reservas Git sem regra ativa de imutabilidade")
 
 
 def _live_context(issue: int, approval_comment: int) -> dict:
@@ -359,6 +387,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
         "published_comment_id": found_id,
         "body": comment_text, "snapshot": snapshot,
+        "reservation_protocol": RESERVATION_SCHEMA,
         "remote_project_writes": 0,
     }
     return {**data, "digest": _digest(data)}
@@ -374,11 +403,7 @@ def _post_comment(issue: int, body: str) -> dict:
 
 
 def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Path:
-    """Lock local permanente: evita POST concorrente/repetido no mesmo dossie.
-
-    Em erro inconclusivo NAO remover o lock automaticamente. Reconciliacao
-    externa e aprovacao humana novas sao obrigatorias para uma segunda tentativa.
-    """
+    """Journal local complementar; a exclusao entre executores fica no Git."""
     if not HEX32.fullmatch(execution_id):
         raise PublicationError("Execution ID do lock invalido")
     lock = outbox_path.parent / ("f7-publicacao-" + execution_id + ".lock")
@@ -442,19 +467,27 @@ def reconcile_pending_publication(
             or plan.get("mission_digest") != outbox["provenance"]["mission_digest"]
             or type(plan.get("approval_comment")) is not int):
         raise PublicationError("Plano de reconciliacao nao pertence a outbox")
-    lock = outbox_path.parent / ("f7-publicacao-" + execution + ".lock")
-    _assert_no_link_ancestors(lock)
-    if not lock.is_file() or lock.stat().st_size > 10000:
-        raise PublicationError("Journal de publicacao ausente/invalido")
-    record = _read_local_json(lock, cap=10000)
-    if (not isinstance(record, dict)
-            or record.get("schema") != RECEIPT_SCHEMA
-            or record.get("execution_id") != execution
-            or record.get("digest") != plan["digest"]
-            or record.get("publication_status") not in (
-                "PENDENTE_PUBLICACAO", "PUBLICADO_VERIFICADO"
-            )):
-        raise PublicationError("Journal divergente; reconciliacao bloqueada")
+    reservation_sha = None
+    if plan.get("reservation_protocol") == RESERVATION_SCHEMA:
+        reservation_sha = _reservation_store().read(plan)
+        journal_status = "RESERVA_REMOTA_CONFIRMADA"
+    elif "reservation_protocol" not in plan:
+        lock = outbox_path.parent / ("f7-publicacao-" + execution + ".lock")
+        _assert_no_link_ancestors(lock)
+        if not lock.is_file() or lock.stat().st_size > 10000:
+            raise PublicationError("Journal de publicacao ausente/invalido")
+        record = _read_local_json(lock, cap=10000)
+        if (not isinstance(record, dict)
+                or record.get("schema") != RECEIPT_SCHEMA
+                or record.get("execution_id") != execution
+                or record.get("digest") != plan["digest"]
+                or record.get("publication_status") not in (
+                    "PENDENTE_PUBLICACAO", "PUBLICADO_VERIFICADO"
+                )):
+            raise PublicationError("Journal divergente; reconciliacao bloqueada")
+        journal_status = record["publication_status"]
+    else:
+        raise PublicationError("Protocolo de reserva desconhecido")
     if reader is None:
         reader = _reconciliation_context
     context = reader(outbox["issue"], plan["approval_comment"])
@@ -483,12 +516,15 @@ def reconcile_pending_publication(
     else:
         status = "COMENTARIO_NAO_OBSERVADO"
         comment_id = None
-    return {
+    receipt = {
         "status": status, "execution_id": execution,
-        "comment_id": comment_id, "journal_status": record["publication_status"],
+        "comment_id": comment_id, "journal_status": journal_status,
         "remote_writes": 0, "retry_allowed": False,
         "requires_po_decision": True,
     }
+    if reservation_sha is not None:
+        receipt["reservation_sha"] = reservation_sha
+    return receipt
 
 
 def apply_publication_plan(
@@ -545,8 +581,15 @@ def apply_publication_plan(
         raise PublicationError("Acao de publicacao fora do escopo")
     if current_plan() != plan:
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
+    _verify_reservation_protection()
     journal = _claim_publication(
         outbox_path, outbox["execution_id"], supplied_digest)
+    try:
+        reservation_sha = _reservation_store().claim(plan)
+    except ReservationError as exc:
+        audit({"event": "PENDENTE_PUBLICACAO", "reason": "RESERVA_REMOTA_INCONCLUSIVA"})
+        raise PublicationPending(
+            "Reserva remota nao confirmada; nenhum POST autorizado") from exc
     # Terceira leitura LIVE imediatamente antes do POST, inclusive revogacao.
     # Se falhar, manter journal pendente para reconciliacao humana.
     try:
@@ -557,6 +600,7 @@ def apply_publication_plan(
             "Revalidacao apos lock inconclusiva; nenhuma repeticao automatica"
         ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
+           "reservation_sha": reservation_sha,
            "issue": outbox["issue"], "digest": supplied_digest})
     try:
         posted = poster(outbox["issue"], plan["body"])
@@ -589,6 +633,7 @@ def apply_publication_plan(
             "Readback OK, mas comprovante local inconclusivo; reconciliar LIVE"
         ) from exc
     return {"status": "PUBLICADO_VERIFICADO", "comment_id": posted["id"],
+            "reservation_sha": reservation_sha,
             "remote_writes": 1}
 
 
