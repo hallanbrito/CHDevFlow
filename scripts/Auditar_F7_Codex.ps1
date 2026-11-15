@@ -10,6 +10,12 @@ if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
     throw "Git SHA invalido; auditoria nao iniciada."
 }
 Get-Command codex -ErrorAction Stop | Out-Null
+Get-Command gh -ErrorAction Stop | Out-Null
+# Prova externa somente leitura: commit exato deve existir no GitHub oficial.
+$remoteSha = @(gh api "repos/hallanbrito/CHDevFlow/commits/$sha" --jq .sha)
+if ($LASTEXITCODE -ne 0 -or $remoteSha.Count -ne 1 -or $remoteSha[0].Trim() -ne $sha) {
+    throw "Commit F7 nao confirmado no GitHub remoto; auditoria bloqueada."
+}
 # Nao aceitar worktree divergente do HEAD sob revisao.
 $gitDirty = @(git -C $RepoRoot status --porcelain --untracked-files=all)
 if ($LASTEXITCODE -ne 0 -or $gitDirty.Count -gt 0) {
