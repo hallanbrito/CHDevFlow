@@ -12,12 +12,14 @@ if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
 Get-Command codex -ErrorAction Stop | Out-Null
 $items = @(
     "src/chdevflow/core/po_escalation_publication.py",
+    "src/chdevflow/core/po_escalation_provenance.py",
     "src/chdevflow/core/po_escalation.py",
     "src/chdevflow/core/intake.py",
     "src/chdevflow/core/generic_cycle.py",
     "scripts/ch_project_sync.py",
     "tests/test_ch_pipe_01_f7_publication.py",
-    "tests/test_ch_pipe_01_f7_po_escalation.py"
+    "tests/test_ch_pipe_01_f7_po_escalation.py",
+    "tests/test_ch_pipe_01_f6_generic_cycle.py"
 )
 $segments = [System.Collections.Generic.List[string]]::new()
 $brief = @"
