@@ -2,7 +2,7 @@
 
 APENAS LEITURA/PLANEJAMENTO. Para escrita, o fluxo oficial
 scripts/ch_project_assist.py exige aprovacao live do PO, digest e readback.
-Nao transforma reprovação de IA em autorizacao de escrita remota.
+Nao transforma reprova��o de IA em autorizacao de escrita remota.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 
@@ -78,7 +79,7 @@ def _assert_no_link_ancestors(path: Path) -> None:
 
 
 def _safe_file_within(root: Path, relative: str) -> Path:
-    """Rejeita symlink/reparse Windows em TODOS os componentes da evidência."""
+    """Rejeita symlink/reparse Windows em TODOS os componentes da evid�ncia."""
     if (not isinstance(relative, str) or Path(relative).is_absolute()
             or ".." in Path(relative).parts):
         raise ValueError("Caminho de evidencia fora do dossie")
@@ -98,16 +99,87 @@ def _safe_file_within(root: Path, relative: str) -> Path:
     return target
 
 
+def _verify_windows_handle(path: Path, handle) -> None:
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    get_final_path = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
+    get_final_path.argtypes = (wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD)
+    get_final_path.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = get_final_path(msvcrt.get_osfhandle(handle.fileno()), buffer, len(buffer), 0)
+    if not 0 < length < len(buffer):
+        raise ValueError("Caminho do descritor Windows indisponivel")
+    actual = buffer.value
+    if actual.startswith("\\\\?\\UNC\\"):
+        actual = "\\\\" + actual[8:]
+    elif actual.startswith("\\\\?\\"):
+        actual = actual[4:]
+    if Path(actual) != path:
+        raise ValueError("Caminho da evidencia mudou antes da leitura")
+
+
+def _open_posix_file(path: Path) -> int:
+    """Anchor each component to its open directory, rejecting symlinks."""
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory = os.open(path.anchor, directory_flags)
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, directory_flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        return os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                       dir_fd=directory)
+    finally:
+        os.close(directory)
+
+
+def _read_evidence_bytes(path: Path, *, cap: int = 100000) -> bytes:
+    """Read bounded bytes from the validated handle, detecting file replacement."""
+    path = path.absolute()
+    _assert_no_link_ancestors(path)
+    try:
+        expected = path.lstat()
+        if not stat.S_ISREG(expected.st_mode) or expected.st_size > cap:
+            raise ValueError("Arquivo local ausente ou excessivo")
+        flags = os.O_RDONLY | os.O_BINARY if os.name == "nt" else None
+        descriptor = os.open(path, flags) if flags is not None else _open_posix_file(path)
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(expected, opened):
+                raise ValueError("Arquivo local substituido antes da leitura")
+            if os.name == "nt":
+                _verify_windows_handle(path, handle)
+            content = handle.read(cap + 1)
+            finished = os.fstat(handle.fileno())
+            _assert_no_link_ancestors(path)
+            current = path.lstat()
+            if (not os.path.samestat(opened, current) or
+                    (opened.st_size, opened.st_mtime_ns, opened.st_ctime_ns) !=
+                    (finished.st_size, finished.st_mtime_ns, finished.st_ctime_ns)):
+                raise ValueError("Arquivo local alterado durante a leitura")
+    except OSError as exc:
+        raise ValueError("O caminho do arquivo local nao pode ser verificado") from exc
+    if len(content) > cap:
+        raise ValueError("Arquivo local excessivo")
+    return content
+
+
+def _evidence_text(content: bytes) -> str:
+    return content.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _safe_outbox(path: Path) -> dict:
     _assert_no_link_ancestors(path)
     if (_is_link(path) or _is_link(path.parent) or not path.is_file()
             or path.stat().st_size > 15000):
         raise ValueError("Outbox local ausente, link ou maior que limite")
-    data = _json_unique(path.read_text(encoding="utf-8"))
+    data = _json_unique(_evidence_text(_read_evidence_bytes(path, cap=15000)))
     if not isinstance(data, dict):
         raise ValueError("Outbox JSON invalido")
     if data.get("status") != "AGUARDANDO_PO":
-        raise ValueError("Somente terceira reprovação gera escalonamento")
+        raise ValueError("Somente terceira reprova��o gera escalonamento")
     if data.get("publication_status") != "PENDENTE_DE_AUTORIZACAO":
         raise ValueError("Outbox ja processado ou estado inconclusivo")
     if data.get("attempts") != 3 or data.get("returns") != 2:
@@ -146,8 +218,8 @@ def _safe_outbox(path: Path) -> dict:
             _safe_file_within(path.parent, relative)
         # Arquivo codigo.py pode usar CRLF no host Windows; read_text()
         # normaliza as quebras para validar o SHA logico do candidato AGY.
-        source_text = _safe_file_within(
-            path.parent, EVIDENCE_FILES[0]).read_text(encoding="utf-8")
+        source_text = _evidence_text(_read_evidence_bytes(
+            _safe_file_within(path.parent, EVIDENCE_FILES[0])))
         if hashlib.sha256(source_text.encode("utf-8")).hexdigest() != code_sha:
             raise ValueError("Evidencia AGY nao confere com code_sha256")
     return {"execution_id": execution, "mission_id": mission,

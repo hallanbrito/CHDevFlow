@@ -17,6 +17,8 @@ name: CHDevFlow CI Integral
   pull_request:
     branches:
       - main
+      - feat/ch-pipe-01-f7-po-escalation
+      - fix/ch-pipe-01-f7-legacy-outbox-20261115
   workflow_dispatch:
 
 permissions:
@@ -26,7 +28,7 @@ jobs:
   python-checks:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout do repositório
+      - name: Checkout do reposit�rio
         uses: actions/checkout@v6
 
       - name: Configurar Python 3.12
@@ -34,7 +36,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Compilação sintática de todos os componentes
+      - name: Compila��o sint�tica de todos os componentes
         run: python -m compileall -q src scripts apps
 
       - name: Parser PowerShell da auditoria F7 (sem executar Codex)
@@ -54,17 +56,17 @@ jobs:
             exit 1
           }
 
-      - name: Prévia offline de governança W1
+      - name: Pr�via offline de governan�a W1
         run: python scripts/w1_github_project.py
 
-      - name: Instalação de dependências e pacotes locais
+      - name: Instala��o de depend�ncias e pacotes locais
         run: |
           python -m pip install --upgrade pip
           pip install -e ./apps/bootstrap/sentinela
           pip install -e ./apps/control-center[dev]
           pip install -e .[dev]
 
-      - name: Testes CLI e Governança Raiz (tests/)
+      - name: Testes CLI e Governan�a Raiz (tests/)
         run: python -m unittest discover -s tests -v
 
       - name: Testes Sentinela (apps/bootstrap/sentinela/tests/)
@@ -72,3 +74,17 @@ jobs:
 
       - name: Testes Control Center (apps/control-center/tests/)
         run: pytest apps/control-center/tests -v
+
+  f7-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Testes de publicacao F7 e caminhos Windows
+        shell: pwsh
+        run: |
+          if (Test-Path tests/test_ch_pipe_01_f7_publication.py) {
+            python -I -m unittest discover -s tests -p test_ch_pipe_01_f7_publication.py -v
+          }

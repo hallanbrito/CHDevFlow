@@ -6,6 +6,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -25,12 +26,12 @@ from chdevflow.core.po_escalation_provenance import create_provenance, verify_pr
 def issue_body():
     return (
         "### Esteira\nAGY\n"
-        "### Nível de autonomia\nCH-0\n"
+        "### N�vel de autonomia\nCH-0\n"
         "### Objetivo e valor\nEntregar uma missao Python auditavel\n"
-        "### Escopo, exclusões e critérios de aceite\n"
+        "### Escopo, exclus�es e crit�rios de aceite\n"
         "Codigo Python com testes independentes e gate humano\n"
         "### Baseline Git (branch e SHA)\nfeat/f6 " + ("a" * 40) + "\n"
-        "### Verificações e evidências exigidas\n"
+        "### Verifica��es e evid�ncias exigidas\n"
         "Docker e Codex devem registrar resultados verificaveis\n"
     )
 
@@ -103,6 +104,7 @@ class PublicationTests(unittest.TestCase):
         self.context = {
             "who": {"login": "hallanbrito"},
             "repository": {"permissions": {"push": True}},
+            "base_commit": {"sha": "a" * 40, "tree": {"sha": "d" * 40}},
             "issue": {
                 "id": "I_id_mock", "number": 85, "state": "OPEN",
                 "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
@@ -253,6 +255,14 @@ class PublicationTests(unittest.TestCase):
         self.context["issue"]["body"] = issue_body().replace("a" * 40, "a" * 12)
         with self.assertRaisesRegex(pub.PublicationError, "Baseline Git"):
             self._plan()
+
+    def test_baseline_exige_objeto_git_correspondente(self):
+        self.assertEqual(self._plan()["base_tree"], "d" * 40)
+        for commit in (None, {"sha": "b" * 40}, {"sha": "a" * 40, "tree": {"sha": "d"}}):
+            with self.subTest(commit=commit):
+                self.context["base_commit"] = commit
+                with self.assertRaisesRegex(pub.PublicationError, "Objeto .* base Git"):
+                    self._plan()
 
     def test_intake_out_of_scope_nao_publica(self):
         self.context["issue"]["labels"] = []
@@ -612,7 +622,7 @@ class PublicationTests(unittest.TestCase):
             "digest": plan["digest"],
             "publication_status": "PENDENTE_PUBLICACAO",
         }), encoding="utf-8")
-        with patch.object(pub, "_live_context", return_value=self.context):
+        with patch.object(pub, "_reconciliation_context", return_value=self.context):
             with patch.object(pub, "_post_comment",
                               side_effect=AssertionError("POST proibido")):
                 with contextlib.redirect_stdout(io.StringIO()) as output:
@@ -671,7 +681,7 @@ class PublicationTests(unittest.TestCase):
             ["gh"], 0, b'{"title":"A\xc3\xa7\xc3\xa3o"}', b"")
         with patch.object(pub.subprocess, "run", return_value=response) as call:
             parsed = pub._gh_json("issue", "view", "85")
-        self.assertEqual(parsed["title"], "Ação")
+        self.assertEqual(parsed["title"], "A��o")
         self.assertNotIn("text", call.call_args.kwargs)
         self.assertNotIn("encoding", call.call_args.kwargs)
 
@@ -867,6 +877,43 @@ class PublicationTests(unittest.TestCase):
         from chdevflow.core import po_escalation as bridge
         with self.assertRaisesRegex(ValueError, "fora do dossie"):
             bridge._safe_file_within(self.root, "../fora.txt")
+
+    def test_leitor_rejeita_substituicao_entre_stat_e_open(self):
+        from chdevflow.core import po_escalation as bridge
+
+        target = self.root / "original.txt"
+        target.write_bytes(b"original")
+        replacement = self.root / "replacement.txt"
+        replacement.write_bytes(b"substituido")
+        real_open = os.open
+
+        def replace_on_open(path, flags, *args, **kwargs):
+            if path in (target, target.name):
+                replacement.replace(target)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(bridge.os, "open", side_effect=replace_on_open):
+            with self.assertRaisesRegex(ValueError, "substituido"):
+                bridge._read_evidence_bytes(target)
+
+    def test_leitor_rejeita_link_real_em_ancestral(self):
+        from chdevflow.core import po_escalation as bridge
+
+        directory = self.root / "evidencia"
+        directory.mkdir()
+        (directory / "log").write_bytes(b"evidencia")
+        link = self.root / "link"
+        if os.name == "nt":
+            result = subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(directory)],
+                capture_output=True, check=False)
+            if result.returncode and os.environ.get("GITHUB_ACTIONS") != "true":
+                self.skipTest("mklink /J indisponivel neste ambiente Windows")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            link.symlink_to(directory, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "Link/reparse"):
+            bridge._read_evidence_bytes(link / "log")
 
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"

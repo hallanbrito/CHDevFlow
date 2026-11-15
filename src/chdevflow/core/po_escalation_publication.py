@@ -19,6 +19,7 @@ from chdevflow.core.intake import validate_issue, _fields, _get
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation import (
+    _evidence_text, _read_evidence_bytes,
     EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
     OWNER, PROJECT, REPO, SCHEMA, _safe_outbox, _assert_no_link_ancestors,
     _json_unique,
@@ -55,7 +56,7 @@ def _read_local_json(path: Path, *, cap: int = 100000) -> Any:
     _assert_no_link_ancestors(path)
     if not path.is_file() or path.stat().st_size > cap:
         raise PublicationError("JSON local ausente ou excessivo")
-    return _json_unique(path.read_text(encoding="utf-8"))
+    return _json_unique(_evidence_text(_read_evidence_bytes(path, cap=cap)))
 
 
 def _gh_json(*args: str, expected_type: type = dict) -> Any:
@@ -94,6 +95,18 @@ def _issue_comments(issue: int) -> list[dict]:
     raise PublicationError("Comentarios nao exaustivos; sem publicar")
 
 
+def _live_issue(issue: int) -> dict:
+    return _gh_json(
+        "issue", "view", str(issue), "-R", REPO,
+        "--json", "id,number,title,body,labels,state,url")
+
+
+def _reconciliation_context(issue: int, _approval_comment: int) -> dict:
+    # A consulta de um efeito existente independe de a aprovacao ainda existir.
+    return {"who": _gh_json("api", "user"), "issue": _live_issue(issue),
+            "comments": _issue_comments(issue)}
+
+
 def _live_context(issue: int, approval_comment: int) -> dict:
     if type(issue) is not int or issue < 1 or type(approval_comment) is not int or approval_comment < 1:
         raise PublicationError("Identificadores de consulta invalidos")
@@ -106,9 +119,8 @@ def _live_context(issue: int, approval_comment: int) -> dict:
         perms.get(k) is True for k in ("push", "maintain", "admin")
     ):
         raise PublicationError("Permissao LIVE de escrita na Issue nao comprovada")
-    target = _gh_json(
-        "issue", "view", str(issue), "-R", REPO,
-        "--json", "id,number,title,body,labels,state,url")
+    target = _live_issue(issue)
+    base_commit = _gh_json("api", f"repos/{REPO}/git/commits/{_issue_baseline_sha(target)}")
     project = _gh_json(
         "project", "item-list", str(PROJECT), "--owner", OWNER,
         "--format", "json", "-L", "500")
@@ -128,7 +140,7 @@ def _live_context(issue: int, approval_comment: int) -> dict:
     approval_history = (comments if approval_thread_number == issue
                         else [*_issue_comments(approval_thread_number), *comments])
     return {
-        "who": who, "repository": repository, "issue": target,
+        "who": who, "repository": repository, "issue": target, "base_commit": base_commit,
         "project": project, "approval": approval,
         "comments": comments, "approval_history": approval_history,
     }
@@ -137,7 +149,7 @@ def _live_context(issue: int, approval_comment: int) -> dict:
 def _expected_comment(outbox: dict, approval_id: int) -> str:
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     return (
-        "CHDevFlow F7 — Escalonamento para decisao do PO\n\n"
+        "CHDevFlow F7 - Escalonamento para decisao do PO\n\n"
         f"Execucao: {outbox['execution_id']}\n"
         f"Missao: {outbox['mission_id']}\n"
         f"Issue de origem: #{outbox['issue']}\n"
@@ -253,16 +265,29 @@ def _eligible_outbox(path: Path) -> dict:
     return outbox
 
 
-def _validate_issue_baseline(issue: dict, expected_sha: str) -> None:
-    """Issue LIVE deve identificar a MESMA base Git completa do manifesto."""
+def _issue_baseline_sha(issue: dict) -> str:
     body = issue.get("body")
-    if not isinstance(body, str) or not re.fullmatch(r"[0-9a-f]{40}", expected_sha):
-        raise PublicationError("Base Git invalida; publicacao bloqueada")
+    if not isinstance(body, str):
+        raise PublicationError("Baseline Git da Issue LIVE ausente")
     baseline = _get(body, _fields(body), ("Baseline Git (branch e SHA)", "Base SHA"))
     hashes = re.findall(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])",
                         baseline)
-    if len(hashes) != 1 or hashes[0].lower() != expected_sha:
+    if len(hashes) != 1:
+        raise PublicationError("Baseline Git da Issue LIVE deve ter um SHA completo")
+    return hashes[0].lower()
+
+
+def _validate_issue_baseline(issue: dict, expected_sha: str, commit: Any) -> str:
+    """Vincula a Issue e o manifesto ao objeto Git consultado no repositorio."""
+    if _issue_baseline_sha(issue) != expected_sha:
         raise PublicationError("Baseline Git da Issue LIVE diverge do manifesto")
+    if not isinstance(commit, dict) or commit.get("sha") != expected_sha:
+        raise PublicationError("Objeto do commit base Git ausente ou divergente")
+    tree = commit.get("tree")
+    tree_sha = tree.get("sha") if isinstance(tree, dict) else None
+    if not isinstance(tree_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", tree_sha):
+        raise PublicationError("Objeto da arvore base Git ausente ou invalido")
+    return tree_sha
 
 
 def build_publication_plan(outbox: dict, context: dict) -> dict:
@@ -288,7 +313,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         raise PublicationError(
             "Intake F1 bloqueou publicacao: " + diagnosis["content_status"]
             + " " + ", ".join(diagnosis["reasons"]))
-    _validate_issue_baseline(issue, outbox["provenance"]["base_sha"])
+    base_tree = _validate_issue_baseline(
+        issue, outbox["provenance"]["base_sha"], context.get("base_commit"))
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
     approval = _approval_fingerprint(
@@ -327,6 +353,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "mission_id": outbox["mission_id"], "code_sha256": outbox["code_sha256"],
         "mission_digest": outbox["provenance"]["mission_digest"],
         "base_sha": outbox["provenance"]["base_sha"],
+        "base_tree": base_tree,
         "approval_comment": approval["id"],
         "project_state": preview["state"],
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
@@ -429,7 +456,7 @@ def reconcile_pending_publication(
             )):
         raise PublicationError("Journal divergente; reconciliacao bloqueada")
     if reader is None:
-        reader = _live_context
+        reader = _reconciliation_context
     context = reader(outbox["issue"], plan["approval_comment"])
     # Readback de publicacao e diferente de NOVA autorizacao. Deve funcionar
     # inclusive apos Issue CLOSED/revogacao, sem consultar permissoes de POST.

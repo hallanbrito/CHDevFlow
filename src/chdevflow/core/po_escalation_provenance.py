@@ -11,7 +11,9 @@ import re
 from pathlib import Path
 
 from chdevflow.core.manual_pipeline_runner import Mission
-from chdevflow.core.po_escalation import _safe_file_within, _json_unique
+from chdevflow.core.po_escalation import (
+    _evidence_text, _json_unique, _read_evidence_bytes, _safe_file_within,
+)
 
 SCHEMA = "CHDEVFLOW-F7-PROVENANCE/1"
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -42,21 +44,13 @@ def _expected_files(run: dict) -> list[str]:
     return paths
 
 
-def _read_text(root: Path, relative: str) -> str:
-    return _safe_file_within(root, relative).read_text(encoding="utf-8")
-
-
-def _artifact_hashes(root: Path, paths: list[str]) -> dict[str, str]:
-    # Limite para dossie pequeno; cap do leitor bloqueia arquivo excessivo.
-    return {relative: hashlib.sha256(
-        _safe_file_within(root, relative).read_bytes()).hexdigest()
-        for relative in paths}
-
-
-def _state(root: Path) -> tuple[Mission, dict]:
-    mission_data = _json_unique(_read_text(root, "manifesto_missao.json"))
+def _snapshot(root: Path) -> tuple[Mission, dict, dict[str, bytes]]:
+    files = {}
+    for relative in ("manifesto_missao.json", "execucao.json"):
+        files[relative] = _read_evidence_bytes(_safe_file_within(root, relative))
+    mission_data = _json_unique(_evidence_text(files["manifesto_missao.json"]))
     mission = Mission.from_dict(mission_data)
-    state = _json_unique(_read_text(root, "execucao.json"))
+    state = _json_unique(_evidence_text(files["execucao.json"]))
     if not isinstance(state, dict):
         raise ValueError("Registro de execucao invalido")
     if (mission.repository != "hallanbrito/CHDevFlow" or
@@ -65,25 +59,32 @@ def _state(root: Path) -> tuple[Mission, dict]:
             state.get("issue") != mission.issue or
             state.get("status") != "AGUARDANDO_PO"):
         raise ValueError("Registro, repositorio e manifesto da missao divergentes")
-    _expected_files(state)  # valida tipos, indices e estados antes de iterar
+    expected = _expected_files(state)
     if not SHA40.fullmatch(mission.base_sha):
         raise ValueError("Base Git da missao invalida")
-    for i, row in enumerate(state.get("attempts", []), 1):
-        code = _read_text(root, f"attempt-{i:02d}/codigo.py")
+    for relative in expected:
+        if relative not in files:
+            files[relative] = _read_evidence_bytes(_safe_file_within(root, relative))
+    for i, row in enumerate(state["attempts"], 1):
+        code = _evidence_text(files[f"attempt-{i:02d}/codigo.py"])
         if hashlib.sha256(code.encode("utf-8")).hexdigest() != row.get("sha256"):
             raise ValueError("SHA do codigo difere do registro da tentativa")
-    return mission, state
+    return mission, state, files
+
+
+def _artifact_hashes(files: dict[str, bytes]) -> dict[str, str]:
+    return {relative: hashlib.sha256(content).hexdigest()
+            for relative, content in files.items()}
 
 
 def create_provenance(root: Path) -> dict:
     """Somente na emissao do terceiro veto; manifesto e estado ja persistidos."""
-    mission, state = _state(root)
-    files = _expected_files(state)
+    mission, _, files = _snapshot(root)
     return {
         "schema": SCHEMA,
         "mission_digest": mission.digest,
         "base_sha": mission.base_sha,
-        "files_sha256": _artifact_hashes(root, files),
+        "files_sha256": _artifact_hashes(files),
     }
 
 
@@ -97,7 +98,7 @@ def verify_provenance(root: Path, outbox: dict, *,
         raise ValueError("Outbox sem prova completa de proveniencia")
     if proof["schema"] != SCHEMA:
         raise ValueError("Schema de proveniencia invalido")
-    mission, state = _state(root)
+    mission, state, files = _snapshot(root)
     # Compatibilidade F6: pode-se verificar hashes de uma execucao host
     # para triagem local. Somente o publicador F7 exige isolamento Docker.
     if require_isolation:
@@ -118,7 +119,7 @@ def verify_provenance(root: Path, outbox: dict, *,
             outbox.get("third_attempt_status") != state["attempts"][2]["status"] or
             outbox.get("code_sha256") != state["attempts"][2]["sha256"]):
         raise ValueError("Outbox, manifesto e execucao nao correspondem")
-    expected = _artifact_hashes(root, _expected_files(state))
+    expected = _artifact_hashes(files)
     hashes = proof["files_sha256"]
     if (not isinstance(hashes, dict) or set(hashes) != set(expected) or
             any(not isinstance(v, str) or not SHA256.fullmatch(v)
