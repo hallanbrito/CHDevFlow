@@ -111,7 +111,8 @@ def _safe_outbox(path: Path) -> dict:
             "issue": issue, "attempts": 3, "returns": 2,
             "status": "AGUARDANDO_PO", "schema": data.get("schema"),
             "code_sha256": code_sha, "evidence_files": evidence_files,
-            "third_attempt_status": data.get("third_attempt_status")}
+            "third_attempt_status": data.get("third_attempt_status"),
+            "provenance": data.get("provenance")}
 
 
 def _project_snapshot() -> dict:
