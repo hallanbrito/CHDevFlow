@@ -308,6 +308,54 @@ class PublicationTests(unittest.TestCase):
                 pub._gh_json("api", "user")
         self.assertNotIn("SENSIVEL_TOKEN", str(ctx.exception))
 
+    def test_default_legado_so_exibe_nao_publicavel(self):
+        self.data.pop("schema")
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with patch.object(pub.subprocess, "run",
+                          side_effect=AssertionError("gh proibido")):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                code = pub.main(["--outbox", str(self.outbox)])
+        self.assertEqual(code, 0)
+        status = json.loads(output.getvalue())
+        self.assertEqual(status["status"], "OUTBOX_LEGADA_NAO_PUBLICAVEL")
+        self.assertEqual(status["writes"], 0)
+
+    def test_cli_apply_sem_digest_ou_auditoria_bloqueia(self):
+        target = self.root / "plan.json"
+        pub._write_json_once(target, self._plan())
+        with patch.object(pub, "apply_publication_plan",
+                          side_effect=AssertionError("nao deve aplicar")):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                code = pub.main([
+                    "--outbox", str(self.outbox),
+                    "--apply-plan", str(target)])
+        self.assertEqual(code, 1)
+        self.assertIn("BLOQUEADA", err.getvalue())
+
+    def test_cli_falha_remota_cria_recibo_local_pendente(self):
+        target = self.root / "plano.json"
+        plan = self._plan()
+        pub._write_json_once(target, plan)
+        audit = self.root / "auditoria.jsonl"
+        with patch.object(pub, "apply_publication_plan",
+                          side_effect=pub.PublicationPending("post inconclusivo")):
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                code = pub.main([
+                    "--outbox", str(self.outbox),
+                    "--apply-plan", str(target),
+                    "--confirm", plan["digest"],
+                    "--audit-file", str(audit)])
+        self.assertEqual(code, 1)
+        self.assertTrue(audit.exists())
+        receipt = audit.with_suffix(".pending.json")
+        self.assertTrue(receipt.exists())
+        record = json.loads(receipt.read_text(encoding="utf-8"))
+        self.assertEqual(record["publication_status"], "PENDENTE_PUBLICACAO")
+        self.assertEqual(record["remote_effect"], "INDETERMINADO")
+        self.assertIs(record["retry_agents"], False)
+        self.assertIs(record["requires_reconciliation"], True)
+        self.assertNotIn("secret", err.getvalue())
+
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"
         pub._write_json_once(target, self._plan())
