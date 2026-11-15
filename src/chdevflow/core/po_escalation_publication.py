@@ -410,7 +410,14 @@ def main(argv=None) -> int:
         if args.approval_comment is None:
             if args.plan_file:
                 raise PublicationError("Plano exige autorizacao PO autenticada")
-            print("F7 AGUARDANDO_AUTORIZACAO_PO; writes=0")
+            outbox = _safe_outbox(args.outbox)
+            state = ("AGUARDANDO_AUTORIZACAO_PO" if outbox.get("schema") == SCHEMA
+                     else "OUTBOX_LEGADA_NAO_PUBLICAVEL")
+            print(json.dumps({
+                "status": state, "issue": outbox["issue"],
+                "execution_id": outbox["execution_id"], "writes": 0,
+                "requires_po_approval": True,
+            }, ensure_ascii=False, indent=2))
             return 0
         outbox = _eligible_outbox(args.outbox)
         plan = build_publication_plan(
