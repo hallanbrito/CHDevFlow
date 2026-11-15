@@ -245,6 +245,24 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "legada"):
             self._outbox()
 
+    def test_outbox_legacy_cli_bloqueia_sem_gh_ou_proveniencia(self):
+        self.data.pop("schema")
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        stderr = io.StringIO()
+        with patch.object(pub, "verify_provenance",
+                          side_effect=AssertionError("proveniencia indevida")):
+            with patch.object(pub.subprocess, "run",
+                              side_effect=AssertionError("gh indevido")):
+                with contextlib.redirect_stderr(stderr):
+                    result = pub.main([
+                        "--outbox", str(self.outbox),
+                        "--approval-comment", str(self.approval_id),
+                    ])
+        self.assertEqual(result, 1)
+        self.assertIn("legada", stderr.getvalue())
+        self.assertNotIn("proveniencia indevida", stderr.getvalue())
+        self.assertNotIn("gh indevido", stderr.getvalue())
+
     def test_colisao_marcador_de_outro_autor_bloqueia(self):
         marker = pub.MARKER_PREFIX + self.data["execution_id"] + " -->"
         self.context["comments"].append({
