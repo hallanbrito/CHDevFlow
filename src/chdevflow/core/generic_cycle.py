@@ -55,6 +55,10 @@ def _git(root: Path, *args: str) -> str:
         errors="replace", timeout=15, check=False)
     if proc.returncode:
         raise ValueError("Falha na verificacao Git da worktree")
+    # Status porcelain tem colunas XY posicionais: o espaco inicial de " M"
+    # faz parte do protocolo e NAO pode ser removido com strip().
+    if args and args[0] == "status":
+        return proc.stdout.rstrip("\r\n")
     return proc.stdout.strip()
 
 
