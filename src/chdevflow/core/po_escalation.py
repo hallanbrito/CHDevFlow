@@ -18,7 +18,16 @@ OWNER = "hallanbrito"
 REPO = "hallanbrito/CHDevFlow"
 PROJECT = 2
 MAX_ITEMS = 500
+SCHEMA = "CHDEVFLOW-F7-OUTBOX/1"
+EVIDENCE_FILES = (
+    "attempt-03/codigo.py",
+    "attempt-03/alteracoes.patch",
+    "attempt-03/testes.log",
+    "attempt-03/auditoria_codex.md",
+    "RELATORIO_COMPLETO_CH1.md",
+)
 _HEX = re.compile(r"^[0-9a-f]{32}$")
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MISSION = re.compile(r"^[A-Za-z0-9_.-]{3,80}$")
 _ISSUE_URL = re.compile(
     r"^https://github\.com/hallanbrito/CHDevFlow/issues/([1-9][0-9]*)$")
@@ -48,9 +57,21 @@ def _safe_outbox(path: Path) -> dict:
         issue = int(match.group(1)) if match else None
     if type(issue) is not int or issue < 1:
         raise ValueError("Issue de escalonamento invalida")
+    code_sha = None
+    evidence_files = []
+    if "schema" in data:
+        if data["schema"] != SCHEMA:
+            raise ValueError("Schema da outbox F7 desconhecido")
+        code_sha = data.get("code_sha256")
+        if not isinstance(code_sha, str) or not _SHA256.fullmatch(code_sha):
+            raise ValueError("SHA256 da implementacao invalido")
+        evidence_files = data.get("evidence_files")
+        if evidence_files != list(EVIDENCE_FILES):
+            raise ValueError("Evidencias da outbox nao foram sanitizadas")
     return {"execution_id": execution, "mission_id": mission,
             "issue": issue, "attempts": 3, "returns": 2,
-            "status": "AGUARDANDO_PO"}
+            "status": "AGUARDANDO_PO", "schema": data.get("schema"),
+            "code_sha256": code_sha, "evidence_files": evidence_files}
 
 
 def _project_snapshot() -> dict:
@@ -109,6 +130,8 @@ def build_escalation_preview(outbox: dict, project: dict) -> dict:
         "mission_id": outbox["mission_id"],
         "issue": issue,
         "status": "AGUARDANDO_PO",
+        "code_sha256": outbox.get("code_sha256"),
+        "evidence_files": outbox.get("evidence_files", []),
         "project_owner": OWNER, "project_number": PROJECT,
         "project_item_id": items[0] if items else None,
         "state": state, "writes": 0,
