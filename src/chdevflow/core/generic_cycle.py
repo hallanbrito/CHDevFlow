@@ -222,6 +222,9 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     if not agy or not codex:
         raise ValueError("CLIs locais AGY e Codex ausentes")
     evidence.mkdir(mode=0o700)
+    # Copia canonica do manifesto fica SOMENTE no dossie local (nao publica
+    # paths privados); vincula cada tentativa ao plano Git pinado.
+    (evidence / "manifesto_missao.json").write_bytes(mission.canonical())
     result = GenericResult(
         "INICIADO", uuid4().hex, mission.mission_id, mission.issue, mission.digest)
     if isolated_tests:
@@ -367,6 +370,11 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                     "third_attempt_status": row["status"],
                     "evidence_files": list(files),
                 }
+                # Concluir/flush o registro primeiro para vincular a
+                # outbox aos hashes dos artefatos de todas as tres tentativas.
+                _persist(evidence, result)
+                from chdevflow.core.po_escalation_provenance import create_provenance
+                outbox["provenance"] = create_provenance(evidence)
                 receipt = evidence / "escalonamento_po.json"
                 temporary = evidence / "escalonamento_po.json.tmp"
                 with temporary.open("x", encoding="utf-8") as handle:
