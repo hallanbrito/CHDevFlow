@@ -224,8 +224,9 @@ def safe_resolve_executable(bin_name: str, sanitized_path: str, project_root: Pa
     if not re.match(r"^[a-zA-Z0-9_\-]+$", bin_name):
         raise VerificationSecurityError(f"Nome de executável inválido: '{bin_name}'.")
 
-    # Resolução do ch e exit via interpretador atual
-    if bin_name in ("ch", "exit"):
+    # Entradas internas/interpretador atual: nao depender de python3.exe
+    # no Windows nem de executavel Python localizado em PATH nao confiavel.
+    if bin_name in ("ch", "exit", "python", "python3"):
         return sys.executable
 
     resolved_str = shutil.which(bin_name, path=sanitized_path)
@@ -278,6 +279,12 @@ def parse_and_validate_command(cmd_str: str, project_root: Path, sanitized_path:
             f"Executável não autorizado em 'ch verify': '{bin_name}'. "
             f"Permitidos: {', '.join(sorted(ALLOWED_VERIFICATION_BINARIES))}"
         )
+
+    # echo e builtin do cmd.exe no Windows; nunca abrir shell=True.
+    # O substituto usa Python confiavel, flags constantes e argv separado.
+    if bin_name == "echo":
+        return [sys.executable, "-I", "-B", "-c",
+                "import sys; print(' '.join(sys.argv[1:]))", *tokens[1:]]
 
     # 1. Validação física do executável
     resolved_bin = safe_resolve_executable(bin_name, sanitized_path, project_root)
