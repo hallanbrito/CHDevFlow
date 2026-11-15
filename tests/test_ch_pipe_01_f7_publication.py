@@ -47,6 +47,7 @@ class PublicationTests(unittest.TestCase):
             "publication_status": "PENDENTE_DE_AUTORIZACAO",
             "attempts": 3, "returns": 2,
             "code_sha256": hashlib.sha256(self.code.encode()).hexdigest(),
+            "third_attempt_status": "CODEX_REPROVOU",
             "evidence_files": list(pub.EVIDENCE_FILES),
         }
         self.outbox.write_text(
@@ -243,6 +244,40 @@ class PublicationTests(unittest.TestCase):
             self._apply(answer=lambda _: "sim")
         self.assertEqual(self.audit, [])
 
+    def test_recibo_duravel_pendente_gravado_antes_do_post(self):
+        plan = self._plan()
+        def poster(*_):
+            lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+            payload = json.loads(lock.read_text(encoding="utf-8"))
+            self.assertEqual(payload["publication_status"], "PENDENTE_PUBLICACAO")
+            self.assertEqual(payload["remote_effect"], "INDETERMINADO")
+            self.assertTrue(payload["requires_reconciliation"])
+            self.assertFalse(payload["retry_agents"])
+            return {"id": 8080}
+        with self.assertRaises(pub.PublicationPending):
+            self._apply(plan, poster=poster)
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        self.assertEqual(
+            json.loads(lock.read_text(encoding="utf-8"))["publication_status"],
+            "PENDENTE_PUBLICACAO")
+
+    def test_outbox_reprovada_nos_testes_sem_codex_eh_valida(self):
+        self.data["third_attempt_status"] = "TESTES_REPROVADOS"
+        self.data["evidence_files"] = list(pub.EVIDENCE_FILES_TESTS_REPROVADOS)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        (self.root / "attempt-03" / "auditoria_codex.md").unlink()
+        validated = self._outbox()
+        self.assertEqual(validated["third_attempt_status"], "TESTES_REPROVADOS")
+        self.assertEqual(validated["evidence_files"],
+                         list(pub.EVIDENCE_FILES_TESTS_REPROVADOS))
+        self.assertEqual(self._plan()["action"], "POST_COMMENT")
+
+    def test_outbox_v1_sem_causa_terceira_reprovacao_nao_publica(self):
+        self.data.pop("third_attempt_status")
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(pub.PublicationError, "causa"):
+            self._outbox()
+
     def test_post_unico_e_readback_verificado(self):
         calls = []
         def poster(issue, body):
@@ -257,6 +292,10 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual([event["event"] for event in self.audit],
                          ["ATTEMPT_POST", "PUBLICADO_VERIFICADO"])
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        verified = json.loads(lock.read_text(encoding="utf-8"))
+        self.assertEqual(verified["publication_status"], "PUBLICADO_VERIFICADO")
+        self.assertEqual(verified["comment_id"], 1234)
 
     def test_lock_local_bloqueia_publicacao_concorrente(self):
         lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
