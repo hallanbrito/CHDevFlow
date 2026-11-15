@@ -699,8 +699,11 @@ class PublicationTests(unittest.TestCase):
         plan = self._plan()
         pub._write_json_once(target, plan)
         audit = self.root / "auditoria.jsonl"
-        with patch.object(pub, "apply_publication_plan",
-                          side_effect=pub.PublicationPending("post inconclusivo")):
+        # Simula unicamente o caminho de escrita autorizado em laboratorio:
+        # o gate de producao continua desativado por default.
+        with (patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True),
+              patch.object(pub, "apply_publication_plan",
+                           side_effect=pub.PublicationPending("post inconclusivo"))):
             with contextlib.redirect_stderr(io.StringIO()) as err:
                 code = pub.main([
                     "--outbox", str(self.outbox),
