@@ -41,6 +41,26 @@ Se a consulta falhar, o recibo será emitido somente se o caminho não
 existir. A consulta `gh project item-list` é read-only; para executar
 em host real, revisar autenticação e ACL de leitura antes.
 
+## Incidente real Intake F1 / Issue #85 (15/11/2026)
+
+Em Windows 11, a consulta somente leitura `ch_project_assist.py admit --issue 85
+--dry-run --autonomy CH-0` falhou inicialmente por leitura cp1252 em subprocess
+GitHub CLI. Corrigido em `scripts/ch_project_sync.py` com captura de bytes e
+decode UTF-8 estrito; regressões incluem caracteres Unicode, resposta inválida
+e não divulgação de tokens no stderr.
+
+Após fix de codificação, o Intake F1 respondeu
+`OUT_OF_SCOPE NOT_ENROLLED`: **a Issue #85 não está matriculada na esteira**.
+Isso não é permissão para adicionar `ch:workflow` automaticamente, alterar
+o corpo da Issue ou pular critérios do KSYNC-03. O corpo atual de #85 descreve
+um contrato de implementação, não os campos específicos de intake necessários
+para admissão. A revisão da F7 passou a consultar LIVE o Intake somente quando
+não há cartão no Project #2, e retorna `EXIGE_TRIAGEM_INTAKE` mais
+`intake_status` e `intake_reasons` em vez de recomendar admissão inelegível.
+Se a Issue for elegível, `EXIGE_ADMISSAO_PO` continua exigindo histórico
+CLEAR, autorização individual do PO, plano pinado e readback. A consulta
+`gh issue view` é estritamente leitura e não altera rótulos/campos.
+
 ## Fluxo atual implementado
 
 1. CCC-01/F5 ou F6 persiste um arquivo escalonamento_po.json local após 3 rejeições e 2 devoluções.
