@@ -47,14 +47,26 @@ def _safe_error(output: str) -> str:
 
 
 def gh(*args: str) -> str:
+    """Ler stdout do GitHub CLI como UTF-8, independentemente do locale Windows.
+
+    Capturar bytes evita erros de decode nas threads internas de subprocess
+    quando o host usa cp1252. Falhar fechado se a saida nao for UTF-8 valido.
+    """
     done = subprocess.run(
-        ["gh", *args], capture_output=True, text=True, check=False, timeout=45
+        ["gh", *args], capture_output=True, check=False, timeout=45
     )
     if done.returncode:
+        diagnostic = (done.stderr or done.stdout or b"").decode(
+            "utf-8", errors="replace")
         raise RuntimeError(
-            "GitHub CLI falhou: " + _safe_error(done.stderr or done.stdout)
+            "GitHub CLI falhou: " + _safe_error(diagnostic)
         )
-    return done.stdout
+    try:
+        return done.stdout.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(
+            "GitHub CLI retornou texto que nao e UTF-8 valido."
+        ) from exc
 
 
 def gh_json(*args: str) -> dict:
