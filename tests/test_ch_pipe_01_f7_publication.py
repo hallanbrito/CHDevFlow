@@ -692,7 +692,7 @@ class PublicationTests(unittest.TestCase):
         from chdevflow.core.po_escalation import _json_unique
         for invalid in ("NaN", "Infinity", "-Infinity", "1e999", "-1e999"):
             with self.subTest(invalid=invalid):
-                with self.assertRaisesRegex(ValueError, "nao finita"):
+                with self.assertRaisesRegex(ValueError, "nao finit"):
                     _json_unique('{"nested":{"value":' + invalid + '}}')
 
     def test_outbox_json_nao_finito_falha_antes_da_publicacao(self):
