@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -51,9 +52,15 @@ def _json_unique(payload: str | bytes):
     def reject_nonfinite(value: str):
         raise ValueError("JSON contem constante nao finita: " + value)
 
+    def finite_float(value: str) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("JSON contem numero nao finito")
+        return number
+
     return json.loads(
         payload, object_pairs_hook=unique_pairs,
-        parse_constant=reject_nonfinite,
+        parse_constant=reject_nonfinite, parse_float=finite_float,
     )
 
 
