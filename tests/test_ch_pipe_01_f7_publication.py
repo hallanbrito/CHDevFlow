@@ -224,6 +224,43 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual([event["event"] for event in self.audit],
                          ["ATTEMPT_POST", "PUBLICADO_VERIFICADO"])
 
+    def test_lock_local_bloqueia_publicacao_concorrente(self):
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text("outra tentativa em andamento", encoding="utf-8")
+        with self.assertRaisesRegex(pub.PublicationError, "anterior"):
+            self._apply(poster=lambda *_: self.fail("POST concorrente"))
+        self.assertTrue(lock.exists())
+
+    def test_lock_permanece_apos_post_inconclusivo(self):
+        plan = self._plan()
+        with self.assertRaises(pub.PublicationPending):
+            self._apply(
+                plan, poster=lambda *_: (_ for _ in ()).throw(TimeoutError()))
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        self.assertTrue(lock.exists())
+        with self.assertRaises(pub.PublicationError):
+            self._apply(
+                plan, poster=lambda *_: self.fail("retry duplicado"))
+        self.assertEqual(self.audit[-1]["event"], "PENDENTE_PUBLICACAO")
+
+    def test_project_existente_preserva_campos_manuais(self):
+        project = {
+            "items": [{
+                "id": "PVTI_123", "Status": "In Progress",
+                "Etapa CH": "AGUARDANDO_PO",
+                "content": {
+                    "type": "Issue", "repository": pub.REPO, "number": 85,
+                    "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
+                },
+            }], "totalCount": 1,
+        }
+        self.context["project"] = project
+        old = copy.deepcopy(project)
+        plan = self._plan()
+        self.assertEqual(plan["project_state"], "JA_EXISTE_NO_PROJECT")
+        self.assertEqual(plan["remote_project_writes"], 0)
+        self.assertEqual(project, old)
+
     def test_post_inconclusivo_nao_reexecuta_agentes_nem_retry(self):
         calls = []
         def fail(issue, body):
