@@ -43,21 +43,27 @@ class GitReservationStore:
     Consultar um recibo existente serve para reconciliar, jamais para publicar.
     """
 
-    def __init__(self, remote: str):
+    def __init__(self, remote: str, *, github_cli_credentials: bool = False):
         self.remote = remote
+        self.github_cli_credentials = github_cli_credentials
 
-    @staticmethod
-    def _git(directory: Path, *args: str, data: bytes = b"") -> bytes:
+    def _git(self, directory: Path, *args: str, data: bytes = b"") -> bytes:
         env = os.environ.copy()
         for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                      "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"):
             env.pop(name, None)
         env["GIT_TERMINAL_PROMPT"] = "0"
+        auth = []
+        if self.github_cli_credentials:
+            # Usa a mesma conta de gh api e descarta helpers de credencial anteriores.
+            auth = ["-c", "credential.helper=", "-c",
+                    "credential.https://github.com.helper=!gh auth git-credential"]
+            env["GH_HOST"] = "github.com"
         try:
             completed = subprocess.run(
                 ["git", "-c", "user.name=CHDevFlow F7",
                  "-c", "user.email=f7@users.noreply.github.com",
-                 "-c", "commit.gpgSign=false", *args],
+                 "-c", "commit.gpgSign=false", *auth, *args],
                 cwd=directory, env=env, input=data, capture_output=True,
                 check=False, timeout=25,
             )

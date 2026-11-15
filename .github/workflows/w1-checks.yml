@@ -88,3 +88,42 @@ jobs:
           if (Test-Path tests/test_ch_pipe_01_f7_publication.py) {
             python -I -m unittest discover -s tests -p test_ch_pipe_01_f7_publication.py -v
           }
+
+  f7-custody-producer:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 91
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Executar sonda F7 com testes Docker reais
+        run: |
+          docker pull python:3.12-slim
+          python scripts/f7_custody_probe.py produce "$RUNNER_TEMP/f7-evidence"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f7-probe-evidence
+          path: ${{ runner.temp }}/f7-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+  f7-custody-attestor:
+    needs: f7-custody-producer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: f7-probe-evidence
+          path: ${{ runner.temp }}/f7-evidence
+      - name: Assinar e verificar o dossie em runner independente
+        run: |
+          python scripts/f7_custody_probe.py sign "$RUNNER_TEMP/f7-evidence" "$RUNNER_TEMP/f7-receipt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f7-probe-public-receipt
+          path: ${{ runner.temp }}/f7-receipt
+          if-no-files-found: error
+          retention-days: 7

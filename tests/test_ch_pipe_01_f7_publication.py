@@ -681,6 +681,13 @@ class PublicationTests(unittest.TestCase):
             self.assertRegex(store.read(another), r"^[0-9a-f]{40}$")
             with self.assertRaisesRegex(ReservationError, "nao confirmada"):
                 store.claim(another)
+            replacement = store.read(another)
+            mutation = subprocess.run(
+                ["git", "--git-dir", str(remote), "push", "--force", str(remote),
+                 replacement + ":" + ref], capture_output=True, check=False)
+            self.assertIn(b"pre-receive hook declined", mutation.stdout + mutation.stderr)
+            self.assertNotEqual(mutation.returncode, 0)
+            self.assertEqual(receipt["reservation_sha"], store.read(plan))
 
     def test_project_existente_preserva_campos_manuais(self):
         project = {

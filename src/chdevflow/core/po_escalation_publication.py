@@ -65,6 +65,8 @@ def _read_local_json(path: Path, *, cap: int = 100000) -> Any:
 
 def _gh_json(*args: str, expected_type: type = dict) -> Any:
     """Comunicacao GH por bytes UTF-8, sem locale cp1252 e sem expor stderr."""
+    if args and args[0] == "api":
+        args = ("api", "--hostname", "github.com", *args[1:])
     try:
         done = subprocess.run(
             ["gh", *args], capture_output=True, stdin=subprocess.DEVNULL,
@@ -112,7 +114,7 @@ def _reconciliation_context(issue: int, _approval_comment: int) -> dict:
 
 
 def _reservation_store() -> GitReservationStore:
-    return GitReservationStore(f"https://github.com/{REPO}.git")
+    return GitReservationStore(f"https://github.com/{REPO}.git", github_cli_credentials=True)
 
 
 def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
@@ -123,25 +125,32 @@ def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
     )
 
 
-def _verify_reservation_protection() -> None:
-    """Fail closed unless the reservation tags cannot be changed or removed."""
-    summaries = _gh_json("api", f"repos/{REPO}/rulesets?targets=tag&per_page=100",
-                         expected_type=list)
-    for summary in summaries:
-        if not isinstance(summary, dict) or type(summary.get("id")) is not int:
-            continue
-        if summary.get("target") != "tag" or summary.get("enforcement") != "active":
-            continue
-        rule = _gh_json("api", f"repos/{REPO}/rulesets/{summary['id']}")
-        if (rule.get("target") == "tag" and rule.get("enforcement") == "active"
-                and rule.get("bypass_actors") == []
-                and rule.get("conditions") == {
-                    "ref_name": {"include": [NAMESPACE + "*"], "exclude": []}}
-                and {"update", "deletion"} <= {
-                    entry.get("type") for entry in rule.get("rules", [])
-                    if isinstance(entry, dict)}):
-            return
-    raise PublicationError("Namespace de reservas Git sem regra ativa de imutabilidade")
+RESERVATION_RULESET_ID = 27322425
+PO_GITHUB_ID = 113695320
+
+
+def _verify_reservation_protection() -> dict:
+    """Confirma a politica imutavel e a identidade do mesmo cliente Git/REST."""
+    rule = _gh_json("api", f"repos/{REPO}/rulesets/{RESERVATION_RULESET_ID}")
+    if (not isinstance(rule, dict) or rule.get("id") != RESERVATION_RULESET_ID
+            or rule.get("source_type") != "Repository" or rule.get("source") != REPO
+            or rule.get("target") != "tag" or rule.get("enforcement") != "active"
+            or rule.get("bypass_actors") != [] or rule.get("current_user_can_bypass") != "never"
+            or rule.get("conditions") != {
+                "ref_name": {"include": [NAMESPACE + "*"], "exclude": []}}
+            or not isinstance(rule.get("rules"), list)
+            or {item.get("type") for item in rule["rules"] if isinstance(item, dict)}
+            != {"update", "deletion"}):
+        raise PublicationError("Namespace de reservas Git sem regra ativa de imutabilidade")
+    who = _gh_json("api", "user")
+    repo = _gh_json("api", f"repos/{REPO}")
+    perms = repo.get("permissions")
+    if (who.get("id") != PO_GITHUB_ID or who.get("login") != OWNER
+            or repo.get("full_name") != REPO
+            or not isinstance(perms, dict) or perms.get("push") is not True):
+        raise PublicationError("Identidade/permissao Git LIVE para reserva nao comprovada")
+    return {"ruleset_id": RESERVATION_RULESET_ID, "actor_id": PO_GITHUB_ID,
+            "namespace": NAMESPACE, "can_bypass": False}
 
 
 def _live_context(issue: int, approval_comment: int) -> dict:
@@ -591,6 +600,9 @@ def apply_publication_plan(
     if current_plan() != plan:
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
     custody = _verify_attestation(outbox_path, outbox)
+    if (outbox["mission_id"] == "F7-CUSTODY-PROBE"
+            or custody["producer_run"].startswith("github-actions:probe:")):
+        raise PublicationError("Atestacao de sonda F7 somente para verificacao")
     _verify_reservation_protection()
     journal = _claim_publication(
         outbox_path, outbox["execution_id"], supplied_digest)
@@ -603,6 +615,7 @@ def apply_publication_plan(
     # Terceira leitura LIVE imediatamente antes do POST, inclusive revogacao.
     # Se falhar, manter journal pendente para reconciliacao humana.
     try:
+        _verify_reservation_protection()
         if current_plan() != plan:
             raise PublicationError("Estado LIVE alterado depois do lock")
     except Exception as exc:
@@ -678,7 +691,8 @@ def _audit_writer(path: Path):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="F7 publicacao por comentario: preview por padrao, sem escrita")
-    parser.add_argument("--outbox", type=Path, required=True)
+    parser.add_argument("--outbox", type=Path)
+    parser.add_argument("--verify-reservation-policy", action="store_true")
     parser.add_argument("--approval-comment", type=int)
     parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--apply-plan", type=Path)
@@ -688,6 +702,15 @@ def main(argv=None) -> int:
     parser.add_argument("--audit-file", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.verify_reservation_policy:
+            if any(value is not None and value is not False
+                   for name, value in vars(args).items() if name != "verify_reservation_policy"):
+                raise PublicationError("Preflight Git aceita somente --verify-reservation-policy")
+            policy = _verify_reservation_protection()
+            print(json.dumps({"status": "POLITICA_DE_RESERVA_VERIFICADA", **policy}))
+            return 0
+        if args.outbox is None:
+            raise PublicationError("Outbox obrigatoria")
         if args.verify_attestation:
             if (args.apply_plan or args.reconcile_plan or args.plan_file or args.approval_comment
                     or args.confirm or args.audit_file):
