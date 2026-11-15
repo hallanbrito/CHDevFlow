@@ -411,6 +411,15 @@ def apply_publication_plan(
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
     journal = _claim_publication(
         outbox_path, outbox["execution_id"], supplied_digest)
+    # Terceira leitura LIVE imediatamente antes do POST, inclusive revogacao.
+    # Se falhar, manter journal pendente para reconciliacao humana.
+    try:
+        if current_plan() != plan:
+            raise PublicationError("Estado LIVE alterado depois do lock")
+    except Exception as exc:
+        raise PublicationPending(
+            "Revalidacao apos lock inconclusiva; nenhuma repeticao automatica"
+        ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
            "issue": outbox["issue"], "digest": supplied_digest})
     try:
