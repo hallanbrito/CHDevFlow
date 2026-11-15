@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -19,6 +20,7 @@ from chdevflow.core.po_escalation_attestation import (
     SSH_NAMESPACE, execution_statement, statement_bytes, verify_external_attestation,
 )
 from chdevflow.core.po_escalation_publication import _eligible_outbox
+from chdevflow.core.po_escalation_provenance import create_provenance
 
 
 def run(*command: str, cwd: Path | None = None, data: bytes | None = None) -> bytes:
@@ -88,6 +90,9 @@ def seal(outbox_path: Path, private_key: Path, public_key: str, producer_sha: st
 
 
 def sign_probe(evidence: Path, public_outputs: Path) -> None:
+    outbox = evidence / "escalonamento_po.json"
+    if _eligible_outbox(outbox)["mission_id"] != "F7-CUSTODY-PROBE":
+        raise ValueError("O emissor da CI aceita somente o dossie da sonda controlada")
     # Esta chave nasce APENAS no job de atestacao, fora do diretorio de artefatos.
     with TemporaryDirectory(prefix="f7-probe-key-") as folder:
         key = Path(folder) / "key"
@@ -95,11 +100,28 @@ def sign_probe(evidence: Path, public_outputs: Path) -> None:
         public_key = " ".join(key.with_suffix(".pub").read_text(encoding="ascii").split()[:2])
         public_outputs.mkdir()
         (public_outputs / "f7-probe.pub").write_text(public_key + "\n", encoding="ascii")
-        outbox = evidence / "escalonamento_po.json"
         origin = f"github-actions:probe:{os.environ['GITHUB_RUN_ID']}:{os.environ['GITHUB_RUN_ATTEMPT']}"
-        proof = seal(outbox, key, public_key, os.environ["GITHUB_SHA"], origin,
-                     public_outputs / "f7-attestation.json")
-        print(json.dumps({"status": "PROBE_ATTESTATION_VERIFIED", **proof}, sort_keys=True))
+        receipt = public_outputs / "f7-attestation.json"
+        proof = seal(outbox, key, public_key, os.environ["GITHUB_SHA"], origin, receipt)
+
+    with TemporaryDirectory(prefix="f7-probe-tamper-") as folder:
+        altered = shutil.copytree(evidence, Path(folder) / "evidence")
+        (altered / "attempt-02" / "testes.log").write_text("log adulterado", encoding="ascii")
+        altered_outbox = altered / outbox.name
+        rewritten = json.loads(altered_outbox.read_text(encoding="utf-8"))
+        rewritten["provenance"] = create_provenance(altered)
+        altered_outbox.write_text(json.dumps(rewritten), encoding="utf-8")
+        try:
+            verify_external_attestation(
+                receipt, _eligible_outbox(altered_outbox), trusted_key=public_key,
+                trusted_producer_sha=os.environ["GITHUB_SHA"])
+        except ValueError as exc:
+            if str(exc) != "Recibo externo diverge do dossie ou do produtor confiavel":
+                raise
+        else:
+            raise RuntimeError("Dossie adulterado passou apos recalcular hashes locais")
+    print("PROBE_REHASHED_TAMPERING_REJECTED")
+    print(json.dumps({"status": "PROBE_ATTESTATION_VERIFIED", **proof}, sort_keys=True))
 
 
 def main() -> None:

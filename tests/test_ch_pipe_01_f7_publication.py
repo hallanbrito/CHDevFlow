@@ -538,6 +538,31 @@ class PublicationTests(unittest.TestCase):
                 self._apply(poster=lambda *_: self.fail("POST sem ruleset"))
         self.reservations.assert_not_called()
 
+    def test_preflight_exige_ruleset_pinado_e_autor_sem_bypass(self):
+        self.gate.side_effect = self.guard_reservation
+        rule = {
+            "id": pub.RESERVATION_RULESET_ID, "source_type": "Repository",
+            "source": pub.REPO, "target": "tag", "enforcement": "active",
+            "bypass_actors": [], "current_user_can_bypass": "never",
+            "conditions": {"ref_name": {"include": [NAMESPACE + "*"], "exclude": []}},
+            "rules": [{"type": "update"}, {"type": "deletion"}],
+        }
+        po = {"id": pub.PO_GITHUB_ID, "login": pub.OWNER}
+        repo = {"full_name": pub.REPO, "permissions": {"push": True}}
+        with patch.object(pub, "_gh_json", side_effect=[rule, po, repo]):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(pub.main(["--verify-reservation-policy"]), 0)
+            self.assertEqual(json.loads(output.getvalue())["ruleset_id"], pub.RESERVATION_RULESET_ID)
+        for changed in ({"current_user_can_bypass": "always"}, {"bypass_actors": None},
+                        {"id": 123}, {"rules": [{"type": "deletion"}]}):
+            with self.subTest(changed=changed):
+                with patch.object(pub, "_gh_json", return_value={**rule, **changed}):
+                    with self.assertRaisesRegex(pub.PublicationError, "imutabilidade"):
+                        self.guard_reservation()
+        with patch.object(pub, "_gh_json", side_effect=[rule, {**po, "id": 123}, repo]):
+            with self.assertRaisesRegex(pub.PublicationError, "Identidade"):
+                self.guard_reservation()
+
     def test_sem_atestacao_bloqueia_reserva_e_post(self):
         self.attestation.side_effect = self.verify_attestation
         with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": ""}):
