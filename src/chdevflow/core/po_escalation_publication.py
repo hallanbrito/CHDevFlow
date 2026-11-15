@@ -386,6 +386,61 @@ def _mark_verified(lock: Path, *, comment_id: int) -> None:
     os.replace(temp, lock)
 
 
+def reconcile_pending_publication(
+    outbox_path: Path, plan: dict, *,
+    reader: Callable[[int, int], dict] | None = None,
+) -> dict:
+    """Reconciliacao LIVE somente leitura; NUNCA libera repeticao de POST."""
+    if (not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA
+            or plan.get("digest") != _digest({
+                k: v for k, v in plan.items() if k != "digest"
+            })):
+        raise PublicationError("Plano de reconciliacao invalido")
+    outbox = _eligible_outbox(outbox_path)
+    execution = outbox["execution_id"]
+    if (plan.get("execution_id") != execution
+            or plan.get("issue") != outbox["issue"]
+            or plan.get("code_sha256") != outbox["code_sha256"]
+            or plan.get("mission_digest") != outbox["provenance"]["mission_digest"]
+            or type(plan.get("approval_comment")) is not int):
+        raise PublicationError("Plano de reconciliacao nao pertence a outbox")
+    lock = outbox_path.parent / ("f7-publicacao-" + execution + ".lock")
+    _assert_no_link_ancestors(lock)
+    if not lock.is_file() or lock.stat().st_size > 10000:
+        raise PublicationError("Journal de publicacao ausente/invalido")
+    record = json.loads(lock.read_text(encoding="utf-8"))
+    if (not isinstance(record, dict)
+            or record.get("schema") != RECEIPT_SCHEMA
+            or record.get("execution_id") != execution
+            or record.get("digest") != plan["digest"]
+            or record.get("publication_status") not in (
+                "PENDENTE_PUBLICACAO", "PUBLICADO_VERIFICADO"
+            )):
+        raise PublicationError("Journal divergente; reconciliacao bloqueada")
+    if reader is None:
+        reader = _live_context
+    context = reader(outbox["issue"], plan["approval_comment"])
+    observed = build_publication_plan(outbox, context)
+    if (observed["body"] != plan.get("body")
+            or observed["issue"] != plan["issue"]
+            or observed["execution_id"] != execution):
+        raise PublicationError("Identidade de publicacao remota divergente")
+    if observed["action"] == "ALREADY_PUBLISHED":
+        status = "COMENTARIO_REMOTO_ENCONTRADO"
+        comment_id = observed["published_comment_id"]
+    elif observed["action"] == "POST_COMMENT":
+        status = "COMENTARIO_NAO_OBSERVADO"
+        comment_id = None
+    else:
+        raise PublicationError("Estado remoto de reconciliacao inesperado")
+    return {
+        "status": status, "execution_id": execution,
+        "comment_id": comment_id, "journal_status": record["publication_status"],
+        "remote_writes": 0, "retry_allowed": False,
+        "requires_po_decision": True,
+    }
+
+
 def apply_publication_plan(
     outbox_path: Path, plan: dict, confirmation: str, *,
     reader: Callable[[int, int], dict] | None = None,
@@ -515,10 +570,20 @@ def main(argv=None) -> int:
     parser.add_argument("--approval-comment", type=int)
     parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--apply-plan", type=Path)
+    parser.add_argument("--reconcile-plan", type=Path)
     parser.add_argument("--confirm")
     parser.add_argument("--audit-file", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.reconcile_plan:
+            if (args.apply_plan or args.plan_file or args.approval_comment
+                    or args.confirm or args.audit_file):
+                raise PublicationError("Reconciliacao aceita somente --reconcile-plan")
+            _assert_no_link_ancestors(args.reconcile_plan)
+            plan = json.loads(args.reconcile_plan.read_text(encoding="utf-8"))
+            result = reconcile_pending_publication(args.outbox, plan)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.apply_plan:
             if (args.plan_file or args.approval_comment or
                     not args.confirm or args.audit_file is None):
