@@ -95,6 +95,14 @@ def verify_provenance(root: Path, outbox: dict) -> dict:
     if proof["schema"] != SCHEMA:
         raise ValueError("Schema de proveniencia invalido")
     mission, state = _state(root)
+    # A emissao da outbox continua possivel em host para triagem local,
+    # mas apenas execucao isolada pode passar pelo gate de publicacao.
+    isolated = state.get("test_execution")
+    if (not isinstance(isolated, str)
+            or not re.fullmatch(
+                r"docker-readonly-no-network:sha256:[0-9a-f]{64}", isolated)
+            or state.get("os_isolation_verified") is not True):
+        raise ValueError("Evidencia F7 sem execucao de testes Docker isolada comprovada")
     if (proof["mission_digest"] != mission.digest or
             proof["base_sha"] != mission.base_sha or
             outbox.get("mission_id") != mission.mission_id or
