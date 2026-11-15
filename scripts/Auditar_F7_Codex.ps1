@@ -20,7 +20,7 @@ $items = @(
     "tests/test_ch_pipe_01_f7_po_escalation.py"
 )
 $segments = [System.Collections.Generic.List[string]]::new()
-$segments.Add(@"
+$brief = @"
 MISSAO: AUDITORIA INDEPENDENTE DE SEGURANCA F7/CHDevFlow.
 SHA Git sob revisao: $sha.
 Voce e um auditor externo (Codex). NAO altere arquivos, NAO use ferramentas,
@@ -46,7 +46,8 @@ Depois liste achados com severidade CRITICO/ALTO/MEDIO/BAIXO,
 arquivo, funcao, trecho/padrao, explorabilidade, risco e correcao objetiva.
 Conclua com GATES FALTANTES para homologar com uma outbox V1 elegivel.
 Um teste offline com mock GH nao equivale a publicacao real.
-"@)
+"@
+$segments.Add($brief)
 
 foreach ($relative in $items) {
     $file = Join-Path $RepoRoot ($relative -replace '/', [IO.Path]::DirectorySeparatorChar)
