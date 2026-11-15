@@ -64,6 +64,8 @@ class GenericCycleTests(unittest.TestCase):
         self.fail_tests = set()
         self.calls_agy = 0
         self.calls_codex = 0
+        self.agy_infra_error = False
+        self.agy_changes_test = False
 
     def _write_manifest(self):
         self.manifest.write_text(
@@ -88,6 +90,11 @@ class GenericCycleTests(unittest.TestCase):
         if command[0] == "agy.exe":
             self.calls_agy += 1
             self.assertIn("F6-TEST-001", command[-1])
+            if self.agy_infra_error:
+                return ProcessResult(1, "", "quota/credentials invalid")
+            if self.agy_changes_test:
+                (cwd / "tests" / "test_resposta.py").write_text(
+                    "adulterado", encoding="utf-8")
             if self.calls_agy > 1:
                 self.assertIn("Correcao obrigatoria:", command[-1])
             code = GOOD if self.calls_agy == 3 or self.verdicts == ["APROVAR_LAB"] else BAD
@@ -151,6 +158,22 @@ class GenericCycleTests(unittest.TestCase):
         self.assertEqual(self.calls_agy, 2)
         self.assertEqual(self.calls_codex, 1)
         self.assertEqual(report.returns_used, 1)
+
+    def test_falha_de_autenticacao_nao_repete(self):
+        self.agy_infra_error = True
+        report = self.run_fake()
+        self.assertEqual(report.status, "BLOQUEADO_INFRA_OU_ESCOPO")
+        self.assertEqual(self.calls_agy, 1)
+        self.assertEqual(self.calls_codex, 0)
+        self.assertEqual(report.returns_used, 0)
+
+    def test_agy_altera_teste_independente_bloqueia(self):
+        self.agy_changes_test = True
+        report = self.run_fake()
+        self.assertEqual(report.status, "BLOQUEADO_INFRA_OU_ESCOPO")
+        self.assertEqual(self.calls_agy, 1)
+        self.assertEqual(self.calls_codex, 0)
+        self.assertEqual(report.returns_used, 0)
 
     def test_sem_optin_sem_executar(self):
         with patch.object(f6, "_executables", side_effect=AssertionError("Nao iniciar")):
