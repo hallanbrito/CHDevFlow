@@ -104,7 +104,7 @@ class GenericCycleTests(unittest.TestCase):
             response = chr(96) * 3 + "python\n" + code.rstrip() + "\n" + chr(96) * 3
             return ProcessResult(
                 0, json.dumps({"status": "SUCCESS", "response": response}), "")
-        if command[0] == sys.executable:
+        if command[0] in (sys.executable, "docker"):
             if self.tests_infra_error:
                 return ProcessResult(
                     1, "", "Ran 2 tests\nFAILED (errors=1)\nModuleNotFoundError")
@@ -125,6 +125,35 @@ class GenericCycleTests(unittest.TestCase):
                 manifest_path=self.manifest,
                 evidence=self.evidence,
                 accepted=True, timeout=480)
+
+    def test_isolamento_docker_bloqueia_antes_do_agy_se_indisponivel(self):
+        with patch.object(f6, "_git", side_effect=self.fake_git), \
+             patch.object(f6.docker_acceptance, "preflight",
+                          side_effect=ValueError("Docker nao disponivel")), \
+             patch.object(f6, "_executables",
+                          side_effect=AssertionError("Nunca chamar agentes")):
+            with self.assertRaisesRegex(ValueError, "Docker"):
+                f6.run_generic_cycle(
+                    manifest_path=self.manifest, evidence=self.evidence,
+                    accepted=True, isolated_tests=True)
+        self.assertFalse(self.evidence.exists())
+
+    def test_isolamento_docker_invoca_runner_antes_do_codex(self):
+        with patch.object(f6, "_git", side_effect=self.fake_git), \
+             patch.object(f6, "_executables",
+                          return_value=(["agy.exe"], ["codex.exe"])), \
+             patch.object(f6, "_run_command", side_effect=self.fake_command), \
+             patch.object(f6.docker_acceptance, "preflight",
+                          return_value="sha256:" + "d"*64), \
+             patch.object(f6.docker_acceptance, "build_command",
+                          return_value=["docker", "run", "--network=none"]):
+            result = f6.run_generic_cycle(
+                manifest_path=self.manifest, evidence=self.evidence,
+                accepted=True, isolated_tests=True)
+        self.assertEqual(result.status, "APROVADO_AGUARDANDO_CH1")
+        self.assertEqual(result.test_execution,
+                         "docker-readonly-no-network:sha256:" + "d"*64)
+        self.assertEqual(self.commands, ["agy.exe", "docker", "codex.exe"])
 
     def test_aprova_primeira_e_nao_repete_modelos(self):
         report = self.run_fake()
