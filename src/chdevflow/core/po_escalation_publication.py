@@ -109,8 +109,10 @@ def _live_context(issue: int, approval_comment: int) -> dict:
         raise PublicationError("Comentario PO vinculado a Issue inesperada")
     approval_thread_number = int(issue_url.rsplit("/", 1)[1])
     comments = _issue_comments(issue)
+    # Revogacoes podem ser feitas tanto na Issue de origem como na Issue
+    # de governanca. Somar ambos os historicos para nao ignorar retirada.
     approval_history = (comments if approval_thread_number == issue
-                        else _issue_comments(approval_thread_number))
+                        else [*_issue_comments(approval_thread_number), *comments])
     return {
         "who": who, "repository": repository, "issue": target,
         "project": project, "approval": approval,
