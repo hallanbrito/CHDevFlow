@@ -65,6 +65,7 @@ class GenericCycleTests(unittest.TestCase):
         self.fail_tests = set()
         self.calls_agy = 0
         self.calls_codex = 0
+        self.codex_prompts = []
         self.agy_infra_error = False
         self.agy_changes_test = False
         self.tests_infra_error = False
@@ -114,6 +115,7 @@ class GenericCycleTests(unittest.TestCase):
             return ProcessResult(0, "", "Ran 2 tests\nOK")
         if command[0] == "codex.exe":
             self.calls_codex += 1
+            self.codex_prompts.append(stdin)
             return ProcessResult(0, events(self.verdicts[self.calls_codex - 1]), "")
         raise AssertionError("Comando nao permitido: " + repr(command))
 
@@ -150,6 +152,37 @@ class GenericCycleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fora do escopo"):
                 f6._guard(self.worktree, "src/resposta.py", snapshot,
                           allow_target=True)
+
+    def test_patch_sem_lf_final_mantem_docstring_em_linha_propria(self):
+        # Causa raiz F6-FRETE: difflib colava linha sem LF com adicao.
+        old = "def resposta():\r\n    raise NotImplementedError('stub')"
+        new = 'def resposta():\n    """Calcula frete.\n    Args: numero inteiro.\n    """\n    return 42\n'
+        evidence = f6._audit_patch(old, new, "src/resposta.py")
+        self.assertIn("\n-    raise NotImplementedError('stub')\n", evidence)
+        self.assertIn('\n+    """Calcula frete.\n', evidence)
+        self.assertIn('\n+    Args: numero inteiro.\n', evidence)
+        self.assertTrue(evidence.endswith("\n"))
+        self.assertNotIn("NotImplementedError('stub')+    ", evidence)
+
+    def test_codex_ve_codigo_completo_e_diff_baseline_em_retentativa(self):
+        # AGY devolve mesmo SHA na rodada 2: prompt Codex ainda tem patch.
+        self.verdicts = ["BLOQUEADO", "APROVAR_LAB"]
+        result = self.run_fake()
+        self.assertEqual(result.status, "APROVADO_AGUARDANDO_CH1")
+        self.assertEqual(self.calls_agy, 2)
+        self.assertEqual(self.calls_codex, 2)
+        self.assertEqual(len(self.codex_prompts), 2)
+        for request in self.codex_prompts:
+            self.assertIn("Codigo completo gerado, SHA256=", request)
+            self.assertIn(BAD, request)
+            self.assertIn(" M src/resposta.py", request)
+            self.assertIn("Patch textual (baseline original", request)
+            self.assertIn("\n-    return 0\n", request)
+            self.assertIn("\n+    return 13\n", request)
+            self.assertIn("Ran 2 tests", request)
+        self.assertEqual(
+            hashlib.sha256(BAD.encode("utf-8")).hexdigest(),
+            result.attempts[1]["sha256"])
 
     def test_aprova_primeira_e_nao_repete_modelos(self):
         report = self.run_fake()
