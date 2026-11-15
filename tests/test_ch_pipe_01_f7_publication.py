@@ -504,6 +504,74 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "Plano/digest"):
             self._apply(plan, reader=lambda *_: self.fail("GH chamado"))
 
+    def test_reconciliacao_pendente_read_only_nao_reexecuta_post(self):
+        plan = self._plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        original = lock.read_bytes()
+        result = pub.reconcile_pending_publication(
+            self.outbox, plan, reader=lambda *_: self.context)
+        self.assertEqual(result["status"], "COMENTARIO_NAO_OBSERVADO")
+        self.assertFalse(result["retry_allowed"])
+        self.assertTrue(result["requires_po_decision"])
+        self.assertEqual(result["remote_writes"], 0)
+        self.assertEqual(lock.read_bytes(), original)
+
+        self.context["comments"].append({
+            "id": 7711, "body": plan["body"],
+            "user": {"login": "hallanbrito"},
+            "updated_at": "2026-11-15T15:00:00Z",
+        })
+        found = pub.reconcile_pending_publication(
+            self.outbox, plan, reader=lambda *_: self.context)
+        self.assertEqual(found["status"], "COMENTARIO_REMOTO_ENCONTRADO")
+        self.assertEqual(found["comment_id"], 7711)
+        self.assertEqual(found["remote_writes"], 0)
+        self.assertEqual(lock.read_bytes(), original)
+
+    def test_reconciliacao_journal_divergente_bloqueia(self):
+        plan = self._plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": "f" * 64,
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(pub.PublicationError, "Journal divergente"):
+            pub.reconcile_pending_publication(
+                self.outbox, plan, reader=lambda *_: self.fail("GH acionado"))
+
+    def test_reconciliacao_cli_mock_sem_post_e_sem_escrita_local(self):
+        plan = self._plan()
+        plan_path = self.root / "recon-plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        with patch.object(pub, "_live_context", return_value=self.context):
+            with patch.object(pub, "_post_comment",
+                              side_effect=AssertionError("POST proibido")):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    exit_code = pub.main([
+                        "--outbox", str(self.outbox),
+                        "--reconcile-plan", str(plan_path),
+                    ])
+        self.assertEqual(exit_code, 0)
+        status = json.loads(output.getvalue())
+        self.assertEqual(status["status"], "COMENTARIO_NAO_OBSERVADO")
+        self.assertEqual(status["remote_writes"], 0)
+        self.assertFalse(status["retry_allowed"])
+
     def test_post_real_permanece_desativado_sem_gh(self):
         with patch.object(pub, "_gh_json",
                           side_effect=AssertionError("POST real proibido")):
