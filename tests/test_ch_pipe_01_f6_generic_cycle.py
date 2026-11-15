@@ -257,6 +257,17 @@ class GenericCycleTests(unittest.TestCase):
         self.assertEqual(payload["status"], "AGUARDANDO_PO")
         self.assertEqual(payload["issue"], 85)
         self.assertEqual(payload["publication_status"], "PENDENTE_DE_AUTORIZACAO")
+        self.assertEqual(payload["schema"], "CHDEVFLOW-F7-OUTBOX/1")
+        self.assertEqual(
+            payload["code_sha256"],
+            hashlib.sha256(GOOD.encode("utf-8")).hexdigest())
+        self.assertEqual(
+            payload["evidence_files"],
+            ["attempt-03/codigo.py", "attempt-03/alteracoes.patch",
+             "attempt-03/testes.log", "attempt-03/auditoria_codex.md",
+             "RELATORIO_COMPLETO_CH1.md"])
+        self.assertNotIn(str(self.worktree), json.dumps(payload))
+        self.assertNotIn(str(self.evidence), json.dumps(payload))
 
     def test_falha_de_teste_nao_gasta_codex_na_primeira(self):
         self.fail_tests = {1}
