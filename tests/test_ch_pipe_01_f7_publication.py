@@ -93,7 +93,10 @@ class PublicationTests(unittest.TestCase):
         statement = (
             "CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
             "EXECUTION#" + self.data["execution_id"] + " "
-            "SHA256=" + self.data["code_sha256"] + " ACTION=COMMENT_ONLY"
+            "CODE_SHA256=" + self.data["code_sha256"] + " " +
+            "BASE_SHA=" + self.data["provenance"]["base_sha"] + " " +
+            "MISSION_DIGEST=" + self.data["provenance"]["mission_digest"] +
+            " ACTION=COMMENT_ONLY"
         )
         self.context = {
             "who": {"login": "hallanbrito"},
@@ -165,7 +168,10 @@ class PublicationTests(unittest.TestCase):
                 "issue_url": "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
                 "body": ("CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
                          "EXECUTION#" + self.data["execution_id"] + " "
-                         "SHA256=" + self.data["code_sha256"] + " ACTION=COMMENT_ONLY"),
+                         "CODE_SHA256=" + self.data["code_sha256"] + " " +
+            "BASE_SHA=" + self.data["provenance"]["base_sha"] + " " +
+            "MISSION_DIGEST=" + self.data["provenance"]["mission_digest"] +
+            " ACTION=COMMENT_ONLY"),
             })
 
     def test_revogacao_posterior_do_po_bloqueia_antes_do_post(self):
