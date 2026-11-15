@@ -295,13 +295,38 @@ class PublicationTests(unittest.TestCase):
     def test_outbox_reprovada_nos_testes_sem_codex_eh_valida(self):
         self.data["third_attempt_status"] = "TESTES_REPROVADOS"
         self.data["evidence_files"] = list(pub.EVIDENCE_FILES_TESTS_REPROVADOS)
-        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
         (self.root / "attempt-03" / "auditoria_codex.md").unlink()
+        (self.root / "attempt-03" / "codex.log").unlink()
+        state = json.loads((self.root / "execucao.json").read_text(encoding="utf-8"))
+        state["attempts"][2]["status"] = "TESTES_REPROVADOS"
+        state["attempts"][2]["codex_verdict"] = "NAO_EXECUTADO"
+        (self.root / "execucao.json").write_text(
+            json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
         validated = self._outbox()
         self.assertEqual(validated["third_attempt_status"], "TESTES_REPROVADOS")
         self.assertEqual(validated["evidence_files"],
                          list(pub.EVIDENCE_FILES_TESTS_REPROVADOS))
         self.assertEqual(self._plan()["action"], "POST_COMMENT")
+
+    def test_prova_de_proveniencia_detecta_log_adulterado(self):
+        (self.root / "attempt-01" / "testes.log").write_text(
+            "log falsificado", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Hashes"):
+            self._outbox()
+
+    def test_prova_de_proveniencia_detecta_historico_adulterado(self):
+        state = json.loads((self.root / "execucao.json").read_text(encoding="utf-8"))
+        state["returns_used"] = 0
+        (self.root / "execucao.json").write_text(json.dumps(state), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "tres tentativas"):
+            self._outbox()
+
+    def test_prova_de_proveniencia_exige_manifesto(self):
+        (self.root / "manifesto_missao.json").unlink()
+        with self.assertRaises(ValueError):
+            self._outbox()
 
     def test_outbox_v1_sem_causa_terceira_reprovacao_nao_publica(self):
         self.data.pop("third_attempt_status")
