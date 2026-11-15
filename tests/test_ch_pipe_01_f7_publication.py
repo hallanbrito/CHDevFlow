@@ -18,6 +18,8 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from chdevflow.core import po_escalation_publication as pub
+from chdevflow.core.manual_pipeline_runner import Mission, SCHEMA as MISSION_SCHEMA
+from chdevflow.core.po_escalation_provenance import create_provenance
 
 
 def issue_body():
@@ -52,12 +54,41 @@ class PublicationTests(unittest.TestCase):
         }
         self.outbox.write_text(
             json.dumps(self.data, ensure_ascii=False), encoding="utf-8")
-        for rel in pub.EVIDENCE_FILES:
-            f = self.root / rel
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(
-                self.code if rel == "attempt-03/codigo.py" else "Evidencia do piloto",
-                encoding="utf-8")
+        for index in range(1, 4):
+            folder = self.root / f"attempt-{index:02d}"
+            folder.mkdir(parents=True, exist_ok=True)
+            for rel in ("agy.log", "codigo.py", "alteracoes.patch",
+                        "testes.log", "codex.log", "auditoria_codex.md"):
+                (folder / rel).write_text(
+                    self.code if rel == "codigo.py" else
+                    "Evidencia de laboratorio sem rede",
+                    encoding="utf-8")
+        (self.root / "RELATORIO_COMPLETO_CH1.md").write_text(
+            "Tres vetos em laboratorio\n", encoding="utf-8")
+        manifest = Mission.from_dict({
+            "schema": MISSION_SCHEMA,
+            "mission_id": self.data["mission_id"],
+            "repository": pub.REPO, "issue": 85,
+            "base_sha": "a" * 40,
+            "worktree": str(self.root / "CH-Lab-F6-lab"),
+            "allowed_paths": ["src/frete.py"],
+            "prompt_ref": "prompt.txt", "timeout_seconds": 480,
+        })
+        (self.root / "manifesto_missao.json").write_bytes(manifest.canonical())
+        record = {
+            "status": "AGUARDANDO_PO", "execution_id": self.data["execution_id"],
+            "mission_id": self.data["mission_id"], "issue": 85,
+            "mission_digest": manifest.digest, "returns_used": 2,
+            "attempts": [{
+                "number": num, "status": "CODEX_REPROVOU",
+                "sha256": self.data["code_sha256"],
+                "codex_verdict": "BLOQUEADO",
+            } for num in (1, 2, 3)],
+        }
+        (self.root / "execucao.json").write_text(
+            json.dumps(record, ensure_ascii=False), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
         self.approval_id = 448200
         statement = (
             "CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
