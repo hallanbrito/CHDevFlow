@@ -256,6 +256,29 @@ def _post_comment(issue: int, body: str) -> dict:
         "-f", "body=" + body)
 
 
+def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> None:
+    """Lock local permanente: evita POST concorrente/repetido no mesmo dossie.
+
+    Em erro inconclusivo NAO remover o lock automaticamente. Reconciliacao
+    externa e aprovacao humana novas sao obrigatorias para uma segunda tentativa.
+    """
+    if not HEX32.fullmatch(execution_id):
+        raise PublicationError("Execution ID do lock invalido")
+    lock = outbox_path.parent / ("f7-publicacao-" + execution_id + ".lock")
+    if lock.is_symlink() or lock.exists():
+        raise PublicationError("Publicacao anterior existe; reconciliar antes de repetir")
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError as exc:
+        raise PublicationError("Outro executor possui o lock de publicacao") from exc
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump({"execution_id": execution_id, "digest": digest,
+                   "state": "PUBLICATION_ATTEMPT_CLAIMED"}, handle)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
 def apply_publication_plan(
     outbox_path: Path, plan: dict, confirmation: str, *,
     reader: Callable[[int, int], dict] = _live_context,
@@ -293,6 +316,7 @@ def apply_publication_plan(
         raise PublicationError("Acao de publicacao fora do escopo")
     if current_plan() != plan:
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
+    _claim_publication(outbox_path, outbox["execution_id"], supplied_digest)
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
            "issue": outbox["issue"], "digest": supplied_digest})
     try:
