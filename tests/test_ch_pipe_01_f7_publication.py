@@ -1,0 +1,283 @@
+"""F7 publication: testes offline sem qualquer gh real nem comentario remoto."""
+from __future__ import annotations
+
+import contextlib
+import copy
+import hashlib
+import io
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
+
+from chdevflow.core import po_escalation_publication as pub
+
+
+def issue_body():
+    return (
+        "### Esteira\nAGY\n"
+        "### Nível de autonomia\nCH-0\n"
+        "### Objetivo e valor\nEntregar uma missao Python auditavel\n"
+        "### Escopo, exclusões e critérios de aceite\n"
+        "Codigo Python com testes independentes e gate humano\n"
+        "### Baseline Git (branch e SHA)\nfeat/f6 abcdef0123456\n"
+        "### Verificações e evidências exigidas\n"
+        "Docker e Codex devem registrar resultados verificaveis\n"
+    )
+
+
+class PublicationTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.outbox = self.root / "escalonamento_po.json"
+        self.code = "def cotar_frete():\n    return 500\n"
+        self.data = {
+            "schema": pub.SCHEMA, "execution_id": "a" * 32,
+            "mission_id": "F6-FRETE-TEST-001", "issue": 85,
+            "status": "AGUARDANDO_PO",
+            "publication_status": "PENDENTE_DE_AUTORIZACAO",
+            "attempts": 3, "returns": 2,
+            "code_sha256": hashlib.sha256(self.code.encode()).hexdigest(),
+            "evidence_files": list(pub.EVIDENCE_FILES),
+        }
+        self.outbox.write_text(
+            json.dumps(self.data, ensure_ascii=False), encoding="utf-8")
+        for rel in pub.EVIDENCE_FILES:
+            f = self.root / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(
+                self.code if rel == "attempt-03/codigo.py" else "Evidencia do piloto",
+                encoding="utf-8")
+        self.approval_id = 448200
+        statement = (
+            "CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
+            "EXECUTION#" + self.data["execution_id"] + " "
+            "SHA256=" + self.data["code_sha256"] + " ACTION=COMMENT_ONLY"
+        )
+        self.context = {
+            "who": {"login": "hallanbrito"},
+            "repository": {"permissions": {"push": True}},
+            "issue": {
+                "id": "I_id_mock", "number": 85, "state": "OPEN",
+                "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
+                "title": "Missao F6", "body": issue_body(),
+                "labels": [{"name": "ch:workflow"}, {"name": "ch:agy"}],
+            },
+            "project": {"items": [], "totalCount": 0},
+            "approval": {
+                "id": self.approval_id, "issue_url":
+                    "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
+                "body": statement, "updated_at": "2026-11-15T12:00:00Z",
+                "user": {"login": "hallanbrito"},
+            },
+            "comments": [],
+        }
+        self.audit = []
+
+    def _outbox(self):
+        return pub._eligible_outbox(self.outbox)
+
+    def _plan(self):
+        return pub.build_publication_plan(self._outbox(), self.context)
+
+    def _apply(self, plan=None, reader=None, poster=None, answer=None):
+        plan = plan or self._plan()
+        return pub.apply_publication_plan(
+            self.outbox, plan, plan["digest"],
+            reader=reader or (lambda *_: self.context),
+            poster=poster or (lambda *_: self.fail("POST proibido")),
+            human_prompt=answer or (
+                lambda _: "APROVO F7 PUBLICAR " + plan["digest"][:12]),
+            audit=self.audit.append)
+
+    def test_plano_seguro_sem_segredos_e_sem_project_write(self):
+        plan = self._plan()
+        self.assertEqual(plan["action"], "POST_COMMENT")
+        self.assertEqual(plan["project_state"], "EXIGE_ADMISSAO_PO")
+        self.assertEqual(plan["remote_project_writes"], 0)
+        self.assertNotIn(str(self.root), json.dumps(plan))
+        self.assertEqual(plan["approval_comment"], self.approval_id)
+        self.assertIn("CHDEVFLOW-F7-EXECUTION", plan["body"])
+        self.assertEqual(plan["digest"], pub._digest({
+            k: v for k, v in plan.items() if k != "digest"}))
+
+    def test_sem_aprovacao_default_nao_consulta_gh(self):
+        with patch.object(pub.subprocess, "run",
+                          side_effect=AssertionError("gh foi acionado")):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                result = pub.main(["--outbox", str(self.outbox)])
+        self.assertEqual(result, 0)
+        self.assertIn("AGUARDANDO_AUTORIZACAO_PO", output.getvalue())
+
+    def test_approval_nao_pode_vir_de_outro_usuario_ou_issue(self):
+        for altered in (
+            {"user": {"login": "outro"}},
+            {"issue_url": "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/1"},
+            {"body": "aprovo tudo"},
+        ):
+            self.context["approval"].update(altered)
+            with self.subTest(altered=altered), self.assertRaises(pub.PublicationError):
+                self._plan()
+            self.context["approval"].update({
+                "user": {"login": "hallanbrito"},
+                "issue_url": "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
+                "body": ("CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
+                         "EXECUTION#" + self.data["execution_id"] + " "
+                         "SHA256=" + self.data["code_sha256"] + " ACTION=COMMENT_ONLY"),
+            })
+
+    def test_intake_out_of_scope_nao_publica(self):
+        self.context["issue"]["labels"] = []
+        with self.assertRaisesRegex(pub.PublicationError, "Intake F1"):
+            self._plan()
+
+    def test_sem_acesso_live_negado(self):
+        self.context["repository"]["permissions"] = {"pull": True}
+        with self.assertRaisesRegex(pub.PublicationError, "ACL"):
+            self._plan()
+
+    def test_outbox_legacy_nao_pode_publicar(self):
+        self.data.pop("schema")
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(pub.PublicationError, "legada"):
+            self._outbox()
+
+    def test_colisao_marcador_de_outro_autor_bloqueia(self):
+        marker = pub.MARKER_PREFIX + self.data["execution_id"] + " -->"
+        self.context["comments"].append({
+            "id": 12, "body": "FALSO\n" + marker,
+            "user": {"login": "outro"}, "updated_at": "2026-11-15",
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "sem autenticidade"):
+            self._plan()
+
+    def test_comment_existente_eh_idempotente(self):
+        plan = self._plan()
+        self.context["comments"].append({
+            "id": 99, "body": plan["body"], "user": {"login": "hallanbrito"},
+            "updated_at": "2026-11-15",
+        })
+        existing = self._plan()
+        self.assertEqual(existing["action"], "ALREADY_PUBLISHED")
+        self.assertEqual(existing["published_comment_id"], 99)
+        result = self._apply(existing)
+        self.assertEqual(result["status"], "JA_PUBLICADO")
+        self.assertEqual(result["remote_writes"], 0)
+
+    def test_duplicado_remoto_bloqueia(self):
+        plan = self._plan()
+        for index in (30, 31):
+            self.context["comments"].append({
+                "id": index, "body": plan["body"],
+                "user": {"login": "hallanbrito"},
+            })
+        with self.assertRaisesRegex(pub.PublicationError, "Colisao"):
+            self._plan()
+
+    def test_race_between_live_snapshots_bloqueia_sem_post(self):
+        calls = []
+        def reader(*_):
+            calls.append("READ")
+            if len(calls) == 2:
+                self.context["comments"].append({
+                    "id": 200, "body": "Alterado externamente",
+                    "user": {"login": "hallanbrito"},
+                })
+            return self.context
+        with self.assertRaisesRegex(pub.PublicationError, "Corrida"):
+            self._apply(reader=reader)
+        self.assertEqual(calls, ["READ", "READ"])
+        self.assertFalse(any(x["event"] == "ATTEMPT_POST" for x in self.audit))
+
+    def test_alteracao_da_aprovacao_bloqueia_antes_de_write(self):
+        plan = self._plan()
+        self.context["approval"]["updated_at"] = "2026-11-16T12:00:00Z"
+        with self.assertRaisesRegex(pub.PublicationError, "Snapshot LIVE mudou"):
+            self._apply(plan)
+
+    def test_frase_humana_incorreta_bloqueia(self):
+        with self.assertRaisesRegex(pub.PublicationError, "humana"):
+            self._apply(answer=lambda _: "sim")
+        self.assertEqual(self.audit, [])
+
+    def test_post_unico_e_readback_verificado(self):
+        calls = []
+        def poster(issue, body):
+            calls.append((issue, body))
+            self.context["comments"].append({
+                "id": 1234, "body": body, "user": {"login": "hallanbrito"},
+            })
+            return {"id": 1234}
+        result = self._apply(poster=poster)
+        self.assertEqual(result["status"], "PUBLICADO_VERIFICADO")
+        self.assertEqual(result["comment_id"], 1234)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([event["event"] for event in self.audit],
+                         ["ATTEMPT_POST", "PUBLICADO_VERIFICADO"])
+
+    def test_post_inconclusivo_nao_reexecuta_agentes_nem_retry(self):
+        calls = []
+        def fail(issue, body):
+            calls.append("POST")
+            raise TimeoutError("quota, segredo-o-que-for")
+        with self.assertRaisesRegex(pub.PublicationPending, "reconciliar"):
+            self._apply(poster=fail)
+        self.assertEqual(calls, ["POST"])
+        self.assertEqual(self.audit[-1]["event"], "PENDENTE_PUBLICACAO")
+        self.assertNotIn("segredo-o-que-for", json.dumps(self.audit))
+
+    def test_readback_inconclusivo_sinaliza_pendente(self):
+        def poster(*_):
+            return {"id": 1234}  # Remoto nao apareceu no snapshot
+        with self.assertRaisesRegex(pub.PublicationPending, "reconciliar"):
+            self._apply(poster=poster)
+        self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
+
+    def test_digest_divergente_bloqueia_antes_de_consultar(self):
+        plan = self._plan()
+        plan["issue"] = 123
+        with self.assertRaisesRegex(pub.PublicationError, "Plano/digest"):
+            self._apply(plan, reader=lambda *_: self.fail("GH chamado"))
+
+    def test_gh_bytes_windows_unicode_sem_locale(self):
+        response = subprocess.CompletedProcess(
+            ["gh"], 0, b'{"title":"A\xc3\xa7\xc3\xa3o"}', b"")
+        with patch.object(pub.subprocess, "run", return_value=response) as call:
+            parsed = pub._gh_json("issue", "view", "85")
+        self.assertEqual(parsed["title"], "Ação")
+        self.assertNotIn("text", call.call_args.kwargs)
+        self.assertNotIn("encoding", call.call_args.kwargs)
+
+    def test_gh_bytes_invalidos_falha_fechado(self):
+        response = subprocess.CompletedProcess(["gh"], 0, b'{"x":"' + bytes([0x9d]) + b'"}', b"")
+        with patch.object(pub.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(pub.PublicationError, "UTF-8"):
+                pub._gh_json("api", "user")
+
+    def test_gh_erro_remoto_nao_exibe_token(self):
+        response = subprocess.CompletedProcess(
+            ["gh"], 1, b"", b"github_pat_SENSIVEL_TOKEN")
+        with patch.object(pub.subprocess, "run", return_value=response):
+            with self.assertRaises(pub.PublicationError) as ctx:
+                pub._gh_json("api", "user")
+        self.assertNotIn("SENSIVEL_TOKEN", str(ctx.exception))
+
+    def test_plan_file_exclusivo(self):
+        target = self.root / "plano.json"
+        pub._write_json_once(target, self._plan())
+        self.assertTrue(target.exists())
+        with self.assertRaisesRegex(pub.PublicationError, "ja existe"):
+            pub._write_json_once(target, self._plan())
+
+
+if __name__ == "__main__":
+    unittest.main()
