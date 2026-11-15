@@ -16,6 +16,8 @@ from chdevflow.core.manual_lab_pipeline import inspect_lab_dossier, render_inspe
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
 from chdevflow.core.pilot_gate import check_gate_live
 from chdevflow.core.pilot_readiness import inspect_readiness, plan_fake_sandbox
+from chdevflow.core.experimental_pilot import run_local_pilot, diagnose_existing_lab
+from chdevflow.core.local_executor import main as local_executor_main
 from chdevflow.core.intake import main as run_intake_check
 from chdevflow.core.project import PRESETS, VALID_BACKENDS, VALID_DATABASES, VALID_FRONTENDS, create_project
 from chdevflow.core.ruc import generate_ruc
@@ -382,6 +384,36 @@ def build_parser() -> argparse.ArgumentParser:
     pipeline_sandbox.add_argument("--runtime", choices=["docker", "podman"], required=True)
     pipeline_sandbox.add_argument("--image", required=True)
     pipeline_sandbox.add_argument("--json", action="store_true")
+    pipeline_doctor = pipeline_subs.add_parser(
+        "local-doctor", help="Verifica CLIs AGY/Codex na sessao local sem chamar modelos."
+    )
+    pipeline_once = pipeline_subs.add_parser(
+        "local-once", help="Executa AGY → testes → Codex em workspace novo do host."
+    )
+    pipeline_once.add_argument("--root", type=Path)
+    pipeline_once.add_argument("--timeout", type=int, default=480)
+    pipeline_once.add_argument("--i-accept-local-risk", action="store_true")
+
+    pipeline_cycle = pipeline_subs.add_parser(
+        "local-cycle", help="CCC-01: AGY, testes, Codex, ate 2 devolucoes (3 tentativas)."
+    )
+    pipeline_cycle.add_argument("--root", type=Path)
+    pipeline_cycle.add_argument("--timeout", type=int, default=480)
+    pipeline_cycle.add_argument("--i-accept-local-risk", action="store_true")
+
+    pipeline_lab = pipeline_subs.add_parser(
+        "lab-pilot", help="Piloto descartável manual AGY→testes→Codex; exige aceite explícito."
+    )
+    pipeline_lab.add_argument("--workspace", type=Path, required=True)
+    pipeline_lab.add_argument("--evidence-dir", type=Path, required=True)
+    pipeline_lab.add_argument("--timeout", type=int, default=480)
+    pipeline_lab.add_argument("--i-accept-local-risk", action="store_true")
+    pipeline_diagnose = pipeline_subs.add_parser(
+        "lab-diagnose", help="Inspeciona dois laboratórios já existentes sem acionar modelos."
+    )
+    pipeline_diagnose.add_argument("--workspace", type=Path, required=True)
+    pipeline_diagnose.add_argument("--evidence-dir", type=Path, required=True)
+    pipeline_diagnose.add_argument("--json", action="store_true")
     pipeline_run = pipeline_subs.add_parser(
         "run", help="Inerte nesta fatia: execução real exige gate #69."
     )
@@ -616,6 +648,51 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(list(blueprint.command), ensure_ascii=False))
             # Blueprint não é atestado nem execução: nunca retornar 'apto'.
             return 2 if blueprint.status == "PLANO_FAKE_APENAS" else 1
+        if args.pipeline_action == "lab-diagnose":
+            try:
+                diagnosis = diagnose_existing_lab(
+                    workspace=args.workspace, evidence=args.evidence_dir,
+                )
+                if args.json:
+                    print(json.dumps(diagnosis, indent=2, ensure_ascii=False))
+                else:
+                    print(f"Arquivos ausentes: {diagnosis['missing_files']}")
+                    print(f"Arquivos extras: {diagnosis['extra_files']}")
+                    print(f"Pastas extras: {diagnosis['extra_directories']}")
+                    print(f"Log AGY presente: {diagnosis['agy_log_exists']}")
+                return 0
+            except (ValueError, OSError) as exc:
+                print(f"LAB_DIAGNOSE_BLOQUEADO: {type(exc).__name__}: {exc}", file=sys.stderr)
+                return 1
+        if args.pipeline_action == "local-doctor":
+            return local_executor_main(["doctor"])
+        if args.pipeline_action == "local-once":
+            forwarded = ["run", "--timeout", str(args.timeout)]
+            if args.root is not None:
+                forwarded.extend(["--root", str(args.root)])
+            if args.i_accept_local_risk:
+                forwarded.append("--i-accept-local-risk")
+            return local_executor_main(forwarded)
+
+        if args.pipeline_action == "local-cycle":
+            forwarded = ["cycle", "--timeout", str(args.timeout)]
+            if args.root is not None:
+                forwarded.extend(["--root", str(args.root)])
+            if args.i_accept_local_risk:
+                forwarded.append("--i-accept-local-risk")
+            return local_executor_main(forwarded)
+
+        if args.pipeline_action == "lab-pilot":
+            try:
+                outcome = run_local_pilot(
+                    workspace=args.workspace, evidence=args.evidence_dir,
+                    timeout=args.timeout, accepted=args.i_accept_local_risk,
+                )
+                print(json.dumps(outcome.to_dict(), indent=2, ensure_ascii=False))
+                return 0 if outcome.status == "LAB_APROVADO_AGUARDANDO_CH1" else 1
+            except (ValueError, PermissionError, OSError) as exc:
+                print(f"LAB_BLOQUEADO: {type(exc).__name__}: {exc}", file=sys.stderr)
+                return 2
         if args.pipeline_action == "run":
             print("BLOQUEADO_ATIVACAO: nenhum agente real pode ser iniciado; "
                   "exige gate específico PO/custo #69.", file=sys.stderr)
@@ -678,7 +755,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"BLOQUEADO: pré-validação falhou ({type(exc).__name__})",
                       file=sys.stderr)
                 return 1
-        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|run", file=sys.stderr)
+        print("Uso: ch pipeline inspect|plan|gate-check|readiness|sandbox-plan|lab-diagnose|lab-pilot|local-doctor|local-once|run", file=sys.stderr)
         return 1
 
     if args.command == "tree":
