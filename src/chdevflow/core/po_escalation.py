@@ -15,6 +15,8 @@ import re
 import subprocess
 import sys
 
+from chdevflow.core.experimental_pilot import _is_link
+
 OWNER = "hallanbrito"
 REPO = "hallanbrito/CHDevFlow"
 PROJECT = 2
@@ -34,8 +36,26 @@ _ISSUE_URL = re.compile(
     r"^https://github\.com/hallanbrito/CHDevFlow/issues/([1-9][0-9]*)$")
 
 
+def _safe_file_within(root: Path, relative: str) -> Path:
+    """Rejeita symlink/reparse Windows em TODOS os componentes da evidência."""
+    target = root / relative
+    if not target.is_relative_to(root):
+        raise ValueError("Evidencia fora do dossie")
+    node = target
+    while True:
+        if _is_link(node):
+            raise ValueError("Link/reparse point no caminho de evidencias")
+        if node == root:
+            break
+        node = node.parent
+    if not target.is_file() or target.stat().st_size > 100000:
+        raise ValueError("Evidencia ausente ou excessiva")
+    return target
+
+
 def _safe_outbox(path: Path) -> dict:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > 15000:
+    if (_is_link(path) or _is_link(path.parent) or not path.is_file()
+            or path.stat().st_size > 15000):
         raise ValueError("Outbox local ausente, link ou maior que limite")
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -70,13 +90,11 @@ def _safe_outbox(path: Path) -> dict:
         if evidence_files != list(EVIDENCE_FILES):
             raise ValueError("Evidencias da outbox nao foram sanitizadas")
         for relative in EVIDENCE_FILES:
-            source = path.parent / relative
-            if (source.is_symlink() or not source.is_file() or
-                    source.stat().st_size > 100000):
-                raise ValueError("Evidencia ausente, link ou excessiva")
+            _safe_file_within(path.parent, relative)
         # Arquivo codigo.py pode usar CRLF no host Windows; read_text()
         # normaliza as quebras para validar o SHA logico do candidato AGY.
-        source_text = (path.parent / EVIDENCE_FILES[0]).read_text(encoding="utf-8")
+        source_text = _safe_file_within(
+            path.parent, EVIDENCE_FILES[0]).read_text(encoding="utf-8")
         if hashlib.sha256(source_text.encode("utf-8")).hexdigest() != code_sha:
             raise ValueError("Evidencia AGY nao confere com code_sha256")
     return {"execution_id": execution, "mission_id": mission,
@@ -237,8 +255,8 @@ def pending_publication_receipt(outbox_path: Path, *, reason: str) -> dict:
 
 def write_receipt_once(path: Path, payload: dict) -> None:
     """Grava um unico recibo local; nao apaga arquivos existentes."""
-    if (path.exists() or path.is_symlink() or not path.parent.is_dir() or
-            path.parent.is_symlink()):
+    if (path.exists() or _is_link(path) or not path.parent.is_dir() or
+            _is_link(path.parent)):
         raise ValueError("Recibo ja existe ou destino invalido")
     with path.open("x", encoding="utf-8") as handle:
         json.dump(payload, handle, ensure_ascii=False, indent=2)
