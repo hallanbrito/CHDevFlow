@@ -29,7 +29,7 @@ def issue_body():
         "### Objetivo e valor\nEntregar uma missao Python auditavel\n"
         "### Escopo, exclusões e critérios de aceite\n"
         "Codigo Python com testes independentes e gate humano\n"
-        "### Baseline Git (branch e SHA)\nfeat/f6 abcdef0123456\n"
+        "### Baseline Git (branch e SHA)\nfeat/f6 " + ("a" * 40) + "\n"
         "### Verificações e evidências exigidas\n"
         "Docker e Codex devem registrar resultados verificaveis\n"
     )
@@ -238,6 +238,16 @@ class PublicationTests(unittest.TestCase):
             "updated_at": "2026-11-15T14:00:00Z",
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
+            self._plan()
+
+    def test_baseline_issue_divergente_bloqueia(self):
+        self.context["issue"]["body"] = issue_body().replace("a" * 40, "b" * 40)
+        with self.assertRaisesRegex(pub.PublicationError, "Baseline Git"):
+            self._plan()
+
+    def test_baseline_truncado_nao_e_aprovacao_suficiente(self):
+        self.context["issue"]["body"] = issue_body().replace("a" * 40, "a" * 12)
+        with self.assertRaisesRegex(pub.PublicationError, "Baseline Git"):
             self._plan()
 
     def test_intake_out_of_scope_nao_publica(self):
