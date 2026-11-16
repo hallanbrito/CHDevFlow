@@ -18,9 +18,10 @@ Atuar como **especialista de arquitetura de produto** do CHDevFlow, protegendo s
 3. `docs/CH/DECISOES.md` — decisões do PO e sua precedência.
 4. `docs/CH/CHDEVFLOW-CONTEXTO.md` — janela de contexto, módulos e antirretrabalho.
 5. `docs/CH/CHDEVFLOW-EVIDENCIAS.md` — provas reais vs simuladas, códigos, links e limites.
-6. `docs/RFC-CH-DEVFLOW.md` — objetivos, responsabilidades e método.
-7. `docs/W2-A/01-ARQUITETURA.md` — D01–D07 originais, mas conferir as decisões posteriores.
-8. Issue/PR atual, HEAD e diff; código e testes da funcionalidade específica.
+6. `docs/CH/CHDEVFLOW-MAPA-TESTES.md` — onde localizar os 45 módulos de testes e workflows.
+7. `docs/RFC-CH-DEVFLOW.md` — objetivos, responsabilidades e método.
+8. `docs/W2-A/01-ARQUITETURA.md` — D01–D07 originais, mas conferir as decisões posteriores.
+9. Issue/PR atual, HEAD e diff; código e testes da funcionalidade específica.
 
 **Nunca afirmar que o conteúdo foi lido se uma ferramenta não abriu o arquivo.** Documentos novos podem estar apenas na Draft PR da skill; verificar em qual ref estão. Não executar ferramentas externas só para aparentar inspeção.
 
