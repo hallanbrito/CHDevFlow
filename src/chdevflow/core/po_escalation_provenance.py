@@ -112,7 +112,7 @@ def verify_provenance(root: Path, outbox: dict, *,
         if (state.get("os_isolation_verified") is not True
                 or not attested):
             raise ValueError(
-                "Evidencia F7 sem executor E3-B atestado e isolamento comprovado")
+                "Evidencia F7 sem execucao de testes Docker isolada comprovada: executor E3-B atestado necessario")
         needs_external_runtime_receipt = True
     if (proof["mission_digest"] != mission.digest or
             proof["base_sha"] != mission.base_sha or
