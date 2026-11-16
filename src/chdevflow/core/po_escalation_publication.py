@@ -517,9 +517,19 @@ def _post_comment(issue: int, body: str) -> dict:
     """Nenhum POST real ate reauditoria de autenticidade e serializacao."""
     if not REMOTE_PUBLICATION_ENABLED:
         raise PublicationError("POST F7 desativado: custodia e executor unico pendentes")
-    return _gh_json(
+    posted = _gh_json(
         "api", "-X", "POST", f"repos/{REPO}/issues/{issue}/comments",
         "-f", "body=" + body)
+    if (not isinstance(posted, dict)
+            or type(posted.get("id")) is not int
+            or not isinstance(posted.get("user"), dict)
+            or posted["user"].get("login") != OWNER
+            or type(posted["user"].get("id")) is not int
+            or posted["user"]["id"] != PO_GITHUB_ID):
+        # O POST pode ter ocorrido mesmo com resposta inesperada.
+        # O chamador mantem PENDENTE_PUBLICACAO, nunca retry automatico.
+        raise PublicationError("Resposta POST sem autoria numerica PO confiavel")
+    return posted
 
 
 def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Path:
