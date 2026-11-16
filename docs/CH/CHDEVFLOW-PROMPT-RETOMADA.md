@@ -20,9 +20,10 @@ Abra/inspecione na revisão correta, nesta ordem:
 3. `docs/CH/DECISOES.md` — decisões do PO, custo, autorização e limite de tentativas;
 4. `docs/CH/CHDEVFLOW-CONTEXTO.md` — arquitetura e protocolo antirretrabalho;
 5. `docs/CH/CHDEVFLOW-EVIDENCIAS.md` — inventário de testes REAIS, LOCAIS, MOCK e LIVE com links;
-6. `docs/RFC-CH-DEVFLOW.md` e `docs/W2-A/01-ARQUITETURA.md` — visão original e D01–D07;
-7. `.agents/skills/chdevflow/SKILL.md` — skill especialista e checklist;
-8. Issue/PR/HEAD atual da tarefa, código e testes concretos envolvidos.
+6. `docs/CH/CHDEVFLOW-MAPA-TESTES.md` — todos os módulos de testes e workflows do baseline;
+7. `docs/RFC-CH-DEVFLOW.md` e `docs/W2-A/01-ARQUITETURA.md` — visão original e D01–D07;
+8. `.agents/skills/chdevflow/SKILL.md` — skill especialista e checklist;
+9. Issue/PR/HEAD atual da tarefa, código e testes concretos envolvidos.
 
 **Não afirme que leu algo sem abrir.** Caso a skill/documentos estejam apenas em uma Draft PR, leia explicitamente essa branch; não presuma que já estão na `main`. Se não puder ler um arquivo, registre isso e prossiga com as fontes verificáveis disponíveis.
 
