@@ -402,6 +402,20 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(result["status"], "JA_PUBLICADO")
         self.assertEqual(result["remote_writes"], 0)
 
+    def test_comentario_existente_exige_id_numerico_do_po(self):
+        plan = self._plan()
+        for identity in (
+                {"login": pub.OWNER},
+                {"login": pub.OWNER, "id": 12345},
+                {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(identity=identity):
+                self.context["comments"] = [{
+                    "id": 888, "body": plan["body"], "user": identity,
+                }]
+                with self.assertRaisesRegex(pub.PublicationError, "sem autenticidade"):
+                    self._plan()
+        self.context["comments"] = []
+
     def test_duplicado_remoto_bloqueia(self):
         plan = self._plan()
         for index in (30, 31):
@@ -841,6 +855,51 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(found["comment_id"], 7711)
         self.assertEqual(found["remote_writes"], 0)
         self.assertEqual(lock.read_bytes(), original)
+
+    def test_reconciliacao_readback_exige_id_numerico_do_po(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        for identity in (
+                {"login": pub.OWNER},
+                {"login": pub.OWNER, "id": 12345},
+                {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(identity=identity):
+                self.context["comments"] = [{
+                    "id": 992, "body": plan["body"], "user": identity
+                }]
+                with self.assertRaisesRegex(pub.PublicationError, "nao autentico"):
+                    pub.reconcile_pending_publication(
+                        self.outbox, plan, reader=lambda *_: self.context)
+        self.context["comments"] = []
+
+    def test_reconciliacao_exige_sessao_com_id_numerico_po(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        original = self.context["who"]
+        try:
+            for identity in (
+                    {"login": pub.OWNER},
+                    {"login": pub.OWNER, "id": 12345},
+                    {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+                with self.subTest(identity=identity):
+                    self.context["who"] = identity
+                    with self.assertRaisesRegex(pub.PublicationError, "Identidade LIVE"):
+                        pub.reconcile_pending_publication(
+                            self.outbox, plan, reader=lambda *_: self.context)
+        finally:
+            self.context["who"] = original
 
     def test_reconciliacao_apos_revogacao_e_issue_closed(self):
         plan = self._legacy_plan()
