@@ -1,0 +1,53 @@
+name: F7 E3-C4 - Signed mission runtime receipt fail-closed
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3c4-runtime-receipt-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3c4-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prove-external-receipt-required:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3c4-runtime-receipt-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 18
+    steps:
+      - name: Checkout exact SHA with no persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Unit-test local and external signature rejection
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_runtime_receipt.py -v
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_ch_pipe_01_f7_publication.py -v
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_runtime_identity.py -v
+          echo E3C4_EXTERNAL_MISSION_ATTESTATION_REQUIRED
+      - name: Confirm production pins default to fail-closed
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -I - <<'PY'
+          import sys
+          sys.path.insert(0, 'src')
+          from chdevflow.core import po_escalation_runtime_receipt as r
+          from chdevflow.core import po_escalation_publication as p
+          assert r.ATTESTOR_SHA_PIN == ""
+          assert r.ATTESTOR_WORKFLOW_ID_PIN == 0
+          assert p.REMOTE_PUBLICATION_ENABLED is False
+          print("E3C4_ATTESTOR_NOT_PROVISIONED_NO_F7_POST")
+          PY

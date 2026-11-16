@@ -11,6 +11,8 @@ import re
 from pathlib import Path
 
 from chdevflow.core.manual_pipeline_runner import Mission
+from chdevflow.core.attested_executor import IMAGE_ID as ATTESTED_IMAGE_ID
+from chdevflow.core.po_escalation_runtime_receipt import verify_runtime_receipt
 from chdevflow.core.po_escalation import (
     _evidence_text, _json_unique, _read_evidence_bytes, _safe_file_within,
 )
@@ -99,16 +101,21 @@ def verify_provenance(root: Path, outbox: dict, *,
     if proof["schema"] != SCHEMA:
         raise ValueError("Schema de proveniencia invalido")
     mission, state, files = _snapshot(root)
-    # Compatibilidade F6: pode-se verificar hashes de uma execucao host
-    # para triagem local. Somente o publicador F7 exige isolamento Docker.
+    # O E3-B de build atestado so e admissivel para F7 mediante
+    # comprovante de CONSUMO de missao assinado por atestador independente.
+    # Um bool e a string local do estado nunca autorizam esse modo.
+    needs_external_runtime_receipt = False
     if require_isolation:
         isolated = state.get("test_execution")
-        if (not isinstance(isolated, str)
-                or not re.fullmatch(
-                    r"docker-readonly-no-network:sha256:[0-9a-f]{64}", isolated)
-                or state.get("os_isolation_verified") is not True):
+        legacy = (isinstance(isolated, str) and bool(re.fullmatch(
+            r"docker-readonly-no-network:sha256:[0-9a-f]{64}", isolated)))
+        attested = (isolated ==
+                    "docker-attested-e3b-sigstore:" + ATTESTED_IMAGE_ID)
+        if (state.get("os_isolation_verified") is not True
+                or not (legacy or attested)):
             raise ValueError(
                 "Evidencia F7 sem execucao de testes Docker isolada comprovada")
+        needs_external_runtime_receipt = attested
     if (proof["mission_digest"] != mission.digest or
             proof["base_sha"] != mission.base_sha or
             outbox.get("mission_id") != mission.mission_id or
@@ -125,4 +132,8 @@ def verify_provenance(root: Path, outbox: dict, *,
             any(not isinstance(v, str) or not SHA256.fullmatch(v)
                 for v in hashes.values()) or hashes != expected):
         raise ValueError("Hashes de evidencias do dossie divergentes")
+    if needs_external_runtime_receipt:
+        # Fica DEPOIS de validar todos os hashes locais. Na ausencia do
+        # atestador V1, pins ainda vazios impedem validacao remota.
+        verify_runtime_receipt(root, outbox, proof)
     return proof

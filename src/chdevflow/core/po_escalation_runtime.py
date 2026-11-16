@@ -23,6 +23,7 @@ CORE_MODULES = (
     "chdevflow.core.po_escalation_publication",
     "chdevflow.core.po_escalation_attestation",
     "chdevflow.core.po_escalation_provenance",
+    "chdevflow.core.po_escalation_runtime_receipt",
     "chdevflow.core.po_escalation_reservation",
     "chdevflow.core.po_escalation",
     "chdevflow.core.po_escalation_runtime",
