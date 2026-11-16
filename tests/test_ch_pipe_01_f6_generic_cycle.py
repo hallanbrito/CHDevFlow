@@ -161,6 +161,82 @@ class GenericCycleTests(unittest.TestCase):
                          "docker-readonly-no-network:sha256:" + "d"*64)
         self.assertEqual(self.commands, ["agy.exe", "docker", "codex.exe"])
 
+    def test_executor_e3b_adulterado_bloqueia_antes_do_agy(self):
+        from chdevflow.core import attested_executor as trusted
+        fake_tar = self.manifest.parent / "executor-e3b.tar"
+        fake_tar.write_bytes(b"nao-assinado")
+        with patch.object(f6, "_git", side_effect=self.fake_git), \
+             patch.object(trusted, "preflight",
+                          side_effect=trusted.AttestedExecutorError("Sigstore recusado")), \
+             patch.object(f6, "_executables",
+                          side_effect=AssertionError("AGY nao deve ser chamado")):
+            with self.assertRaisesRegex(ValueError, "Sigstore"):
+                f6.run_generic_cycle(
+                    manifest_path=self.manifest, evidence=self.evidence,
+                    accepted=True, attested_executor_tar=fake_tar)
+        self.assertFalse(self.evidence.exists())
+
+    def test_executor_e3b_real_resultado_json_antes_do_codex(self):
+        from chdevflow.core import attested_executor as trusted
+        fake_tar = self.manifest.parent / "executor-e3b.tar"
+        payload = json.dumps({
+            "schema": trusted.SCHEMA, "status": "TESTS_PASS",
+            "tests_exit_code": 0, "log_sha256": "c"*64,
+            "log_excerpt": "Ran 2 tests in 0.001s\n\nOK\n",
+        })
+        def execute(command, *, cwd, stdin, timeout):
+            if command[0] == "docker":
+                self.commands.append("docker")
+                self.assertIn(trusted.IMAGE_ID, command)
+                return ProcessResult(0, payload, "")
+            return self.fake_command(command, cwd=cwd, stdin=stdin, timeout=timeout)
+        with patch.object(f6, "_git", side_effect=self.fake_git), \
+             patch.object(f6, "_executables",
+                          return_value=(["agy.exe"], ["codex.exe"])), \
+             patch.object(f6, "_run_command", side_effect=execute), \
+             patch.object(trusted, "preflight", return_value=trusted.IMAGE_ID) as pf:
+            result = f6.run_generic_cycle(
+                manifest_path=self.manifest, evidence=self.evidence,
+                accepted=True, attested_executor_tar=fake_tar)
+        pf.assert_called_once_with(fake_tar)
+        self.assertEqual(result.status, "APROVADO_AGUARDANDO_CH1")
+        self.assertTrue(result.os_isolation_verified)
+        self.assertIn("docker-attested-e3b-sigstore:", result.test_execution)
+        self.assertEqual(self.commands, ["agy.exe", "docker", "codex.exe"])
+
+    def test_executor_e3b_saida_inconclusiva_nao_autoriza_codex(self):
+        from chdevflow.core import attested_executor as trusted
+        fake_tar = self.manifest.parent / "executor-e3b.tar"
+        def execute(command, *, cwd, stdin, timeout):
+            if command[0] == "docker":
+                self.commands.append("docker")
+                return ProcessResult(0, "Ran 2 tests\nOK\n", "")
+            return self.fake_command(command, cwd=cwd, stdin=stdin, timeout=timeout)
+        with patch.object(f6, "_git", side_effect=self.fake_git), \
+             patch.object(f6, "_executables",
+                          return_value=(["agy.exe"], ["codex.exe"])), \
+             patch.object(f6, "_run_command", side_effect=execute), \
+             patch.object(trusted, "preflight", return_value=trusted.IMAGE_ID):
+            result = f6.run_generic_cycle(
+                manifest_path=self.manifest, evidence=self.evidence,
+                accepted=True, attested_executor_tar=fake_tar)
+        self.assertEqual(result.status, "BLOQUEADO_INFRA_OU_ESCOPO")
+        self.assertFalse(result.os_isolation_verified)
+        self.assertEqual(self.calls_codex, 0)
+
+    def test_dois_modos_docker_mutuamente_exclusivos(self):
+        from chdevflow.core import attested_executor as trusted
+        with patch.object(f6, "_git", side_effect=self.fake_git), \
+             patch.object(trusted, "preflight",
+                          side_effect=AssertionError("Nao deve verificar TAR")), \
+             patch.object(f6, "_executables",
+                          side_effect=AssertionError("Nao deve chamar agentes")):
+            with self.assertRaisesRegex(ValueError, "apenas um executor"):
+                f6.run_generic_cycle(
+                    manifest_path=self.manifest, evidence=self.evidence,
+                    accepted=True, isolated_tests=True,
+                    attested_executor_tar=self.manifest.parent / "e3b.tar")
+
     def test_git_porcelain_preserva_espaco_xy_e_autoriza_alvo(self):
         # Regressao real do incidente Windows F6-FRETE: strip() quebrava XY.
         payload = subprocess.CompletedProcess(
