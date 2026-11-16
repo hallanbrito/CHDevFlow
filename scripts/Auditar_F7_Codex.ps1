@@ -29,6 +29,8 @@ $items = @(
     "src/chdevflow/core/po_escalation_attestation.py",
     "src/chdevflow/core/po_escalation_reservation.py",
     "src/chdevflow/core/po_escalation_provenance.py",
+    "src/chdevflow/core/po_escalation_runtime_receipt.py",
+    "tests/test_f7_runtime_receipt.py",
     "src/chdevflow/core/po_escalation.py",
     "scripts/f7_custody_live.py",
     "scripts/f7_custody_probe.py",
