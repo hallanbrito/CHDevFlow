@@ -92,8 +92,8 @@ def _verify_module_code(module: Any, filename: Path) -> str:
     # Decorators podem manter o simbolo exportado como wrapper nao FunctionType.
     # A ausencia da exportacao falha fechado; o bytecode Python direto ainda
     # deve coincidir quando a funcao estiver acessivel como FunctionType.
-    missing = [name for name in expected if "<locals>" not in name
-               and name not in vars(module) and "." not in name]
+    missing = [name for name in expected if name.isidentifier()
+               and name not in vars(module)]
     if missing:
         raise RuntimeIdentityError("Funcao Python F7 ausente no runtime")
     for name, code in runtime.items():
