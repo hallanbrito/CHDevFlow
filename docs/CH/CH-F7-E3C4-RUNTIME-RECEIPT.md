@@ -47,10 +47,16 @@ O publicador recusa arquivos simbólicos, JSON com chaves duplicadas,
 campos extras ou ausentes, divergência de digest ou outbox alterada.
 Depois da validação local, exige:
 
-1. Pins de SHA e ID do workflow atestador (ainda **não configurados**).
-2. GitHub REST LIVE confirmando run do atestador concluído com sucesso
-   na `main`, workflow correto, commit, tentativa e repo ID.
-3. `gh attestation verify` de uma **cópia privada dos mesmos bytes do
+1. Pins versionados de SHA e ID de **ambos** os workflows de produção:
+   `ATTESTOR_SHA_PIN`, `ATTESTOR_WORKFLOW_ID_PIN`,
+   `PRODUCER_SHA_PIN` e `PRODUCER_WORKFLOW_ID_PIN`, todos ainda
+   **não configurados**. Sem os quatro valores, rejeita antes da API.
+2. GitHub REST LIVE confirmando o run **produtor V1** concluído com
+   sucesso na `main`, por `workflow_dispatch`, com workflow, SHA,
+   repo ID e tentativa iguais ao recibo e aos pins.
+3. GitHub REST LIVE confirmando o run **atestador V1** concluído com
+   sucesso na `main`, workflow correto, SHA, tentativa e repo ID.
+4. `gh attestation verify` de uma **cópia privada dos mesmos bytes do
    recibo**, exigindo `--signer-workflow` do futuro
    `f7-v1-attestor.yml`, `--source-digest` pinado, `--source-ref
    refs/heads/main` e `--deny-self-hosted-runners`.
