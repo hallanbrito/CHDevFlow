@@ -20,6 +20,7 @@ from chdevflow.core.po_escalation_attestation import (verify_external_attestatio
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules, RuntimeIdentityError
+from chdevflow.core.po_escalation_origin import verify_v1_producer_origin, ProducerOriginError
 from chdevflow.core.po_escalation_reservation import (
     GitReservationStore, NAMESPACE, SCHEMA as RESERVATION_SCHEMA, ReservationError,
 )
@@ -48,6 +49,7 @@ F7_TRUST_VARIABLES = (
     "CH_F7_TRUSTED_RUNNER_SHA",
     "CH_F7_REVOKED_RUNNER_FINGERPRINTS",
     "CH_F7_PRODUCER_WORKFLOW_ID",
+    "CH_F7_V1_PRODUCER_WORKFLOW_ID",
 )
 
 
@@ -155,13 +157,16 @@ def _f7_remote_trust_policy() -> dict:
         fingerprint = validate_trusted_key(key, revocations)
         sha = values["CH_F7_TRUSTED_RUNNER_SHA"]
         workflow = values["CH_F7_PRODUCER_WORKFLOW_ID"]
+        v1_workflow = values["CH_F7_V1_PRODUCER_WORKFLOW_ID"]
         if (not HEX40.fullmatch(sha)
-                or not re.fullmatch(r"[1-9][0-9]{0,19}", workflow)):
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", workflow)
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", v1_workflow)):
             raise ValueError("SHA/workflow do produtor invalidos")
     except (ValueError, KeyError) as exc:
         raise PublicationError("Politica F7 remota invalida ou revogada") from exc
     return {
         "producer_sha": sha, "producer_workflow_id": int(workflow),
+        "v1_workflow_id": int(v1_workflow),
         "trusted_key": key, "revocations": revocations,
         "key_fingerprint": fingerprint,
         "source_repo_id": F7_REPOSITORY_ID,
@@ -176,11 +181,21 @@ def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
         trusted_producer_sha=policy["producer_sha"],
         revoked_fingerprints=policy["revocations"],
     )
+    try:
+        origin = verify_v1_producer_origin(
+            proof["producer_run"],
+            producer_sha=policy["producer_sha"],
+            workflow_id=policy["v1_workflow_id"],
+            api=lambda endpoint: _gh_json("api", endpoint),
+        )
+    except (ProducerOriginError, KeyError) as exc:
+        raise PublicationError("Atestacao V1 nao vinculada ao run/artefato GH LIVE") from exc
     return {
-        **proof,
+        **proof, "v1_origin": origin,
         "trust_policy": {
             "source_repo_id": policy["source_repo_id"],
             "producer_workflow_id": policy["producer_workflow_id"],
+            "v1_workflow_id": policy["v1_workflow_id"],
             "producer_sha": policy["producer_sha"],
             "key_fingerprint": policy["key_fingerprint"],
         },
