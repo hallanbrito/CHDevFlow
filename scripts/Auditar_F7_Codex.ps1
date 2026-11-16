@@ -31,6 +31,12 @@ $items = @(
     "src/chdevflow/core/po_escalation_provenance.py",
     "src/chdevflow/core/po_escalation_runtime_receipt.py",
     "tests/test_f7_runtime_receipt.py",
+    "scripts/f7_v1_attestor_preflight.py",
+    "tests/test_f7_v1_attestor_preflight.py",
+    ".github/workflows/f7-v1-attestor.yml",
+    ".github/workflows/f7-v1-producer.yml",
+    "src/chdevflow/core/attested_executor.py",
+    "tests/test_f7_attested_executor.py",
     "src/chdevflow/core/po_escalation.py",
     "scripts/f7_custody_live.py",
     "scripts/f7_custody_probe.py",
@@ -63,6 +69,11 @@ Verifique criticamente:
 9. Identidade do runtime F7: blobs SHA do commit, importacao de modulos,\n   bytecode carregado, origem dos executaveis e dependencias externas.\n   Verificar se o mecanismo e apenas verificacao in-process ou representa\n   artefato executor independente e imutavel; marcar o risco residual.
 7. Acoplamento com Intake F1, Project #2 e KSYNC-03; default sem escrita.
 8. Testes ausentes e falsos positivos, compatibilidade Windows e Linux.
+10. E3-C5: modo Docker legado deve estar PROIBIDO para publicacao F7;
+    o atestador V1 so verifica origem LIVE e NAO pode assinar mensagem
+    sem prova independente de AGY/Codex e manifesto completo da missao.
+    Verificar se os testes mocks criam falsas premissas de seguranca.
+    Verificar permissoes workflow_run e protecoes Environment nao provisionadas.
 
 Obrigatorio responder primeiro:
 VEREDITO: APROVAR_LAB

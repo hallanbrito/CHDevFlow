@@ -101,21 +101,19 @@ def verify_provenance(root: Path, outbox: dict, *,
     if proof["schema"] != SCHEMA:
         raise ValueError("Schema de proveniencia invalido")
     mission, state, files = _snapshot(root)
-    # O E3-B de build atestado so e admissivel para F7 mediante
-    # comprovante de CONSUMO de missao assinado por atestador independente.
-    # Um bool e a string local do estado nunca autorizam esse modo.
+    # F7 nao pode aceitar a string LEGADA como prova: ela e forjavel
+    # sem identidade de build/consumo. F6 local continua admitindo
+    # proveniencia por hash quando require_isolation=False.
     needs_external_runtime_receipt = False
     if require_isolation:
         isolated = state.get("test_execution")
-        legacy = (isinstance(isolated, str) and bool(re.fullmatch(
-            r"docker-readonly-no-network:sha256:[0-9a-f]{64}", isolated)))
         attested = (isolated ==
                     "docker-attested-e3b-sigstore:" + ATTESTED_IMAGE_ID)
         if (state.get("os_isolation_verified") is not True
-                or not (legacy or attested)):
+                or not attested):
             raise ValueError(
-                "Evidencia F7 sem execucao de testes Docker isolada comprovada")
-        needs_external_runtime_receipt = attested
+                "Evidencia F7 sem execucao de testes Docker isolada comprovada: executor E3-B atestado necessario")
+        needs_external_runtime_receipt = True
     if (proof["mission_digest"] != mission.digest or
             proof["base_sha"] != mission.base_sha or
             outbox.get("mission_id") != mission.mission_id or

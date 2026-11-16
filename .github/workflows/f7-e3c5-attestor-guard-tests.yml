@@ -1,0 +1,91 @@
+name: F7 E3-C5 - No legacy publication and no unsigned V1 attestations
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3c5-attestor-legacy-lock-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3c5-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  linux:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3c5-attestor-legacy-lock-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline fail-closed and regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_v1_attestor_preflight.py -v
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_runtime_receipt.py -v
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_ch_pipe_01_f7_publication.py -v
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_ch_pipe_01_f6_generic_cycle.py -v
+          echo E3C5_LEGACY_DOCKER_PUBLICATION_REJECTED
+      - name: GitHub LIVE push run cannot become protected V1 producer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -I - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, 'scripts')
+          import f7_v1_attestor_preflight as guard
+          run_id = int(os.environ['GITHUB_RUN_ID'])
+          run = guard._gh_run(run_id)
+          assert run['id'] == run_id
+          assert run['event'] == 'push'
+          try:
+              guard.check_origin(
+                  {'workflow_run': run, 'repository': {'id': guard.REPO_ID}},
+                  run, pinned_sha=run['head_sha'],
+                  pinned_workflow_id=run['workflow_id'])
+          except guard.AttestorAdmissionError:
+              print('E3C5_LIVE_PUSH_RUN_NOT_A_PRODUCER')
+          else:
+              raise AssertionError('Run comum foi aceito como produtor V1')
+          assert guard.ATTESTOR_SIGNING_ENABLED is False
+          PY
+
+  windows:
+    if: github.repository == 'hallanbrito/CHDevFlow'
+    runs-on: windows-2025
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Cross-platform negative validation
+        shell: pwsh
+        run: |
+          python -I -m unittest discover -s tests -p test_f7_v1_attestor_preflight.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I -m unittest discover -s tests -p test_f7_runtime_receipt.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -I -m unittest discover -s tests -p test_ch_pipe_01_f7_publication.py -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Output "E3C5_WINDOWS_V1_ATTESTOR_FAIL_CLOSED"
