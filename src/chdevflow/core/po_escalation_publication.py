@@ -469,8 +469,11 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
     found_id = None
     if matches:
         only = matches[0]
-        if (only.get("body") != comment_text or
-                only.get("user", {}).get("login") != OWNER):
+        if (only.get("body") != comment_text
+                or not isinstance(only.get("user"), dict)
+                or only["user"].get("login") != OWNER
+                or type(only["user"].get("id")) is not int
+                or only["user"]["id"] != PO_GITHUB_ID):
             raise PublicationError("Marcador de execucao reutilizado sem autenticidade")
         found_id = only["id"]
     snapshot = {
@@ -611,7 +614,10 @@ def reconcile_pending_publication(
     # Readback de publicacao e diferente de NOVA autorizacao. Deve funcionar
     # inclusive apos Issue CLOSED/revogacao, sem consultar permissoes de POST.
     if (not isinstance(context, dict)
-            or context.get("who", {}).get("login") != OWNER
+            or not isinstance(context.get("who"), dict)
+            or context["who"].get("login") != OWNER
+            or type(context["who"].get("id")) is not int
+            or context["who"]["id"] != PO_GITHUB_ID
             or not isinstance(context.get("issue"), dict)
             or context["issue"].get("number") != outbox["issue"]
             or context["issue"].get("url") !=
@@ -626,7 +632,10 @@ def reconcile_pending_publication(
     if matches:
         item = matches[0]
         if (item.get("body") != plan.get("body")
-                or item["user"].get("login") != OWNER):
+                or not isinstance(item.get("user"), dict)
+                or item["user"].get("login") != OWNER
+                or type(item["user"].get("id")) is not int
+                or item["user"]["id"] != PO_GITHUB_ID):
             raise PublicationError("Marcador remoto nao autentico; bloquear retry")
         status = "COMENTARIO_REMOTO_ENCONTRADO"
         comment_id = item["id"]
