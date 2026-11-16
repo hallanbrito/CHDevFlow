@@ -100,18 +100,24 @@ class PublicationTests(unittest.TestCase):
         self.data["provenance"] = create_provenance(self.root)
         self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
         self.approval_id = 448200
+        self.f7_sha = "b" * 40
         statement = (
             "CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
             "EXECUTION#" + self.data["execution_id"] + " "
             "CODE_SHA256=" + self.data["code_sha256"] + " " +
             "BASE_SHA=" + self.data["provenance"]["base_sha"] + " " +
             "MISSION_DIGEST=" + self.data["provenance"]["mission_digest"] +
+            " F7_AUDITED_SHA=" + self.f7_sha +
             " ACTION=COMMENT_ONLY"
         )
         self.context = {
             "who": {"login": "hallanbrito"},
             "repository": {"permissions": {"push": True}},
             "base_commit": {"sha": "a" * 40, "tree": {"sha": "d" * 40}},
+            "f7_commit": {
+                "policy_sha": self.f7_sha, "local_sha": self.f7_sha,
+                "git_commit": {"sha": self.f7_sha, "tree": {"sha": "c" * 40}},
+            },
             "issue": {
                 "id": "I_id_mock", "number": 85, "state": "OPEN",
                 "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
@@ -203,6 +209,7 @@ class PublicationTests(unittest.TestCase):
                          "CODE_SHA256=" + self.data["code_sha256"] + " " +
             "BASE_SHA=" + self.data["provenance"]["base_sha"] + " " +
             "MISSION_DIGEST=" + self.data["provenance"]["mission_digest"] +
+            " F7_AUDITED_SHA=" + self.f7_sha +
             " ACTION=COMMENT_ONLY"),
             })
 
@@ -1131,6 +1138,87 @@ class PublicationTests(unittest.TestCase):
         target.write_bytes(b"evidencia")
         extended = Path("\\\\?\\" + str(target))
         self.assertEqual(bridge._read_evidence_bytes(extended), b"evidencia")
+
+    def test_gate3_vincula_sha_exato_ao_plano_aprovacao_e_comentario(self):
+        plan = self._plan()
+        self.assertEqual(plan["f7_audited_sha"], self.f7_sha)
+        self.assertEqual(plan["f7_audited_tree"], "c" * 40)
+        self.assertIn("F7_AUDITED_SHA=" + self.f7_sha, self.context["approval"]["body"])
+        self.assertIn("SHA Git F7 auditado/autorizado: " + self.f7_sha, plan["body"])
+        self.assertEqual(plan["digest"], pub._digest({
+            key: value for key, value in plan.items() if key != "digest"}))
+
+    def test_gate3_rejeita_pin_ausente_local_remote_ou_arvore_divergente(self):
+        good = copy.deepcopy(self.context["f7_commit"])
+        cases = [
+            None,
+            {},
+            {**good, "policy_sha": "b" * 39},
+            {**good, "policy_sha": "f" * 40},
+            {**good, "local_sha": "f" * 40},
+            {**good, "git_commit": {"sha": "f" * 40, "tree": {"sha": "c" * 40}}},
+            {**good, "git_commit": {"sha": good["policy_sha"], "tree": {"sha": "c"}}},
+        ]
+        for changed in cases:
+            with self.subTest(changed=changed):
+                self.context["f7_commit"] = changed
+                with self.assertRaisesRegex(pub.PublicationError, "commit F7 auditado|Arvore"):
+                    self._plan()
+        self.context["f7_commit"] = good
+
+    def test_gate3_aprovacao_antiga_ou_sha_diferente_eh_negada(self):
+        body = self.context["approval"]["body"]
+        for bad in (body.replace(" F7_AUDITED_SHA=" + self.f7_sha, ""),
+                    body.replace(self.f7_sha, "f" * 40)):
+            with self.subTest(bad=bad):
+                self.context["approval"]["body"] = bad
+                with self.assertRaisesRegex(pub.PublicationError, "Autorizacao"):
+                    self._plan()
+        self.context["approval"]["body"] = body
+
+    def test_gate3_pin_muda_entre_snapshots_bloqueia_antes_do_post(self):
+        calls = []
+        plan = self._plan()
+        def reader(*_):
+            calls.append("GET")
+            if len(calls) == 2:
+                self.context["f7_commit"]["policy_sha"] = "f" * 40
+                self.context["f7_commit"]["local_sha"] = "f" * 40
+                self.context["f7_commit"]["git_commit"]["sha"] = "f" * 40
+            return self.context
+        with self.assertRaisesRegex(pub.PublicationError, "Autorizacao"):
+            self._apply(plan=plan, reader=reader,
+                        poster=lambda *_: self.fail("POST antes do gate3"))
+        self.assertEqual(calls, ["GET", "GET"])
+        self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
+
+    def test_gate3_plano_antigo_rejeitado_antes_de_reserva_ou_post(self):
+        plan = self._plan()
+        plan.pop("f7_audited_sha")
+        plan["digest"] = pub._digest({key: value for key, value in plan.items()
+                                      if key != "digest"})
+        with self.assertRaisesRegex(pub.PublicationError, "nao pertence"):
+            self._apply(plan=plan, poster=lambda *_: self.fail("POST indevido"))
+        self.reservations.assert_not_called()
+
+    def test_gate3_pin_externo_invalido_falha_antes_de_consulta_commit(self):
+        with patch.object(pub, "_gh_json", return_value={
+                "name": pub.F7_AUDIT_VARIABLE, "value": "curto"}) as gh:
+            with self.assertRaisesRegex(pub.PublicationError, "Pin"):
+                pub._f7_audit_context()
+        gh.assert_called_once()
+
+    def test_gate3_checkout_sujo_ou_git_ausente_falha_fechado(self):
+        def completed(result):
+            return subprocess.CompletedProcess(["git"], 0, result, b"")
+        with patch.object(pub.subprocess, "run",
+                          side_effect=[completed(b"b" * 40 + b"\n"),
+                                       completed(b" M codigo.py\n")]):
+            with self.assertRaisesRegex(pub.PublicationError, "Worktree"):
+                pub._local_f7_checkout_sha()
+        with patch.object(pub.subprocess, "run", side_effect=OSError("sem git")):
+            with self.assertRaisesRegex(pub.PublicationError, "local nao verificavel"):
+                pub._local_f7_checkout_sha()
 
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"
