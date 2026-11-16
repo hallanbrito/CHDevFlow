@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import threading
 import time
 from unittest.mock import patch
 
@@ -571,11 +572,13 @@ def test_registro_decisao_po_local(custom_client, lab_env):
     }, headers=headers)
     assert decisao_resp.status_code == 200
     dados_decisao = decisao_resp.json()
+    assert dados_decisao["decisao_po"]["tipo"] == "decisao_local_declarada"
     assert dados_decisao["decisao_po"]["decisao"] == "APROVADO"
     assert "100% de cobertura" in dados_decisao["decisao_po"]["justificativa"]
 
     # 3. Consulta de detalhes confirma a persistência
     detalhes_resp = client.get(f"/api/missoes/execucoes/{exec_id}", headers={"Host": "127.0.0.1:8000"})
+    assert detalhes_resp.json()["decisao_po"]["tipo"] == "decisao_local_declarada"
     assert detalhes_resp.json()["decisao_po"]["decisao"] == "APROVADO"
 
 
@@ -584,3 +587,253 @@ def test_detalhes_execucao_404_para_id_inexistente(custom_client):
     client, _ = custom_client
     resp = client.get("/api/missoes/execucoes/id_inexistente_12345", headers={"Host": "127.0.0.1:8000"})
     assert resp.status_code == 404
+
+
+def test_sem_deadlock_consulta_ativa_durante_execucao(lab_env):
+    """Comprova ausência de deadlock ao consultar execução ativa durante o ciclo."""
+    reset_services()
+    em_andamento_event = threading.Event()
+    liberar_event = threading.Event()
+
+    def runner_lento(**kwargs):
+        em_andamento_event.set()
+        liberar_event.wait(timeout=5)
+        return GenericResult(
+            status="APROVADO_AGUARDANDO_CH1",
+            execution_id="lento-1",
+            mission_id="M",
+            issue=121,
+            mission_digest="d",
+        )
+
+    exec_svc = ExecutionService(
+        data_dir=lab_env["data_dir"],
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_lento,
+    )
+    app = create_app()
+    app.dependency_overrides[get_execution_service] = lambda: exec_svc
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
+    token = obter_csrf_token()
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+        "X-CSRF-Token": token,
+    }
+    resp = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp.status_code == 202
+    exec_id = resp.json()["execution_id"]
+
+    # Aguarda o runner iniciar
+    assert em_andamento_event.wait(timeout=3)
+
+    # Consulta execução ativa via API e HTML sem travar
+    resp_ativa = client.get("/api/missoes/execucoes/ativa", headers={"Host": "127.0.0.1:8000"})
+    assert resp_ativa.status_code == 200
+    assert resp_ativa.json()["execution_id"] == exec_id
+    assert resp_ativa.json()["status"] in ("INICIADO", "EM_EXECUCAO")
+
+    resp_page = client.get("/missoes", headers={"Host": "127.0.0.1:8000"})
+    assert resp_page.status_code == 200
+
+    # Libera e aguarda término
+    liberar_event.set()
+    time.sleep(0.1)
+    reset_services()
+
+
+def test_cancelamento_espera_thread_e_nao_deleta_lock_de_outra_missao(lab_env):
+    """Comprova que cancelamento de missão A aguarda término da thread e não deleta lock de missão B subsequente."""
+    reset_services()
+    thread_a_iniciou = threading.Event()
+    thread_a_finalizou = threading.Event()
+
+    def runner_a(**kwargs):
+        thread_a_iniciou.set()
+        cancel_check = kwargs.get("cancel_check")
+        while not (cancel_check and cancel_check()):
+            time.sleep(0.01)
+        time.sleep(0.05)
+        thread_a_finalizou.set()
+        return GenericResult(
+            status="CANCELADO",
+            execution_id="a",
+            mission_id="M",
+            issue=121,
+            mission_digest="d",
+        )
+
+    exec_svc = ExecutionService(
+        data_dir=lab_env["data_dir"],
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_a,
+    )
+
+    res_a = exec_svc.executar_missao(
+        manifest_path=lab_env["manifest_path"],
+        confirmacao_po=True,
+    )
+    exec_id_a = res_a["execution_id"]
+    assert thread_a_iniciou.wait(timeout=3)
+
+    # Cancela missão A
+    cancel_res = exec_svc.cancelar_execucao(exec_id_a)
+    assert cancel_res["status"] == "CANCELADO"
+    assert thread_a_finalizou.is_set()
+
+    # Inicia missão B imediatamente
+    def runner_b(**kwargs):
+        return GenericResult(
+            status="APROVADO_AGUARDANDO_CH1",
+            execution_id="b",
+            mission_id="M",
+            issue=121,
+            mission_digest="d",
+        )
+    exec_svc.cycle_runner = runner_b
+    res_b = exec_svc.executar_missao(
+        manifest_path=lab_env["manifest_path"],
+        confirmacao_po=True,
+    )
+    exec_id_b = res_b["execution_id"]
+
+    # Lock deve ser estritamente de B
+    assert exec_svc.lock_file.exists()
+    lock_data = json.loads(exec_svc.lock_file.read_text(encoding="utf-8"))
+    assert lock_data["execution_id"] == exec_id_b
+
+    time.sleep(0.1)
+    reset_services()
+
+
+def test_crash_recovery_preserva_lock_se_pid_vivo_ou_corrompido(lab_env):
+    """Comprova fail-closed na recuperação: preserva lock se PID estiver ativo ou arquivo corrompido."""
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    lock_file = data_dir / "active_execution.lock"
+
+    # Caso 1: Lock com JSON corrompido
+    lock_file.write_text("{conteudo corrompido e invalido", encoding="utf-8")
+    svc_corrupt = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=fake_cycle_runner_success,
+    )
+    # Lock NÃO deve ser apagado cegamente (fail-closed)
+    assert lock_file.exists()
+
+    # Tentativa de executar com lock existente deve falhar com ExecutionConflictError
+    with pytest.raises(ExecutionConflictError):
+        svc_corrupt.executar_missao(
+            manifest_path=lab_env["manifest_path"],
+            confirmacao_po=True,
+        )
+
+    # Caso 2: Lock com PID vivo mockado
+    with patch("ch_control_center.services.execution_service.is_pid_alive", return_value=True):
+        lock_file.write_text(json.dumps({
+            "execution_id": "exec-vivo",
+            "pid": 11111,
+        }), encoding="utf-8")
+        svc_alive = ExecutionService(
+            data_dir=data_dir,
+            labs_root=lab_env["labs_root"],
+            cycle_runner=fake_cycle_runner_success,
+        )
+        assert lock_file.exists()
+        with pytest.raises(ExecutionConflictError):
+            svc_alive.executar_missao(
+                manifest_path=lab_env["manifest_path"],
+                confirmacao_po=True,
+            )
+
+    # Caso 3: Lock com PID inativo/morto
+    with patch("ch_control_center.services.execution_service.is_pid_alive", return_value=False):
+        lock_file.write_text(json.dumps({
+            "execution_id": "exec-morto",
+            "pid": 99999999,
+        }), encoding="utf-8")
+        svc_dead = ExecutionService(
+            data_dir=data_dir,
+            labs_root=lab_env["labs_root"],
+            cycle_runner=fake_cycle_runner_success,
+        )
+        assert not lock_file.exists()
+
+
+def test_rejeicao_confirmacao_po_string_ou_inteiro(custom_client, lab_env):
+    """Garante que confirmacao_po em JSON rejeite qualquer valor que não seja estritamente o booleano True."""
+    client, _ = custom_client
+    token = obter_csrf_token()
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+        "X-CSRF-Token": token,
+    }
+
+    valores_invalidos = ["false", "False", "true", "True", "0", "1", 0, 1, None, [], {}]
+    for val in valores_invalidos:
+        resp = client.post("/api/missoes/executar", json={
+            "manifest_path": str(lab_env["manifest_path"]),
+            "confirmacao_po": val,
+            "csrf_token": token,
+        }, headers=headers)
+        assert resp.status_code == 400, f"Falha para valor: {val!r}"
+        assert "booleano True" in resp.json()["detail"]
+
+
+def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(custom_client, lab_env):
+    """Comprova que decisões não são aceitas em execução ativa e APROVADO é rejeitado em estados não elegíveis."""
+    client, exec_svc = custom_client
+    token = obter_csrf_token()
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+        "X-CSRF-Token": token,
+    }
+
+    # 1. Cria execução e simula status EM_EXECUCAO
+    res = exec_svc.executar_missao(
+        manifest_path=lab_env["manifest_path"],
+        confirmacao_po=True,
+    )
+    exec_id = res["execution_id"]
+    exec_svc._memory_records[exec_id].status = "EM_EXECUCAO"
+
+    # Tentativa de registrar decisão durante EM_EXECUCAO deve retornar HTTP 400
+    resp_ativa = client.post(f"/api/missoes/execucoes/{exec_id}/decisao", json={
+        "decisao": "APROVADO",
+        "justificativa": "Tentativa indevida",
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_ativa.status_code == 400
+    assert "ainda em andamento" in resp_ativa.json()["detail"]
+
+    # 2. Cancela a execução
+    exec_svc.cancelar_execucao(exec_id)
+    assert exec_svc.obter_execucao(exec_id)["status"] == "CANCELADO"
+
+    # Tentativa de APROVAR execução cancelada deve retornar HTTP 400
+    resp_cancelada = client.post(f"/api/missoes/execucoes/{exec_id}/decisao", json={
+        "decisao": "APROVADO",
+        "justificativa": "Tentativa de aprovar cancelado",
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_cancelada.status_code == 400
+    assert "Não é permitido aprovar execução com status 'CANCELADO'" in resp_cancelada.json()["detail"]
+
+    # Mas registrar REPROVADO em execução cancelada é permitido para arquivamento
+    resp_reprovada = client.post(f"/api/missoes/execucoes/{exec_id}/decisao", json={
+        "decisao": "REPROVADO",
+        "justificativa": "Cancelada e reprovada formalmente",
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_reprovada.status_code == 200
+    assert resp_reprovada.json()["decisao_po"]["tipo"] == "decisao_local_declarada"
+    assert resp_reprovada.json()["decisao_po"]["decisao"] == "REPROVADO"
+

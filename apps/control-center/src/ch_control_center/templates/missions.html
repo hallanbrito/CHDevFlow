@@ -48,7 +48,7 @@
     <div>
       <h2 style="font-size: 1.1rem; font-weight: 700; margin: 0; color: var(--text-primary);">Execução Local Autorizada de Missão (CC-DESPACHO-01)</h2>
       <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">
-        Ponte direta com o motor <code>run_generic_cycle</code> (AGY &rarr; Testes &rarr; Codex). Host local (127.0.0.1) &bull; Worktree descartável &bull; Custo R$0 comprovado.
+        Ponte direta com o motor <code>run_generic_cycle</code> (AGY &rarr; Testes &rarr; Codex). Host local (127.0.0.1) &bull; Worktree descartável <code>CH-Lab-*</code> &bull; <strong>Custo não verificado pelo painel; operador deve comprovar antes da execução</strong>.
       </p>
     </div>
     <span class="badge-status" style="background: rgba(37, 99, 235, 0.1); color: #2563eb; font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px;">
@@ -85,7 +85,7 @@
     <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
       <input type="checkbox" id="confirmacao-po-input" name="confirmacao_po" required style="cursor: pointer;">
       <label for="confirmacao-po-input" style="font-size: 0.8rem; color: var(--text-primary); cursor: pointer;">
-        <strong>Confirmo explicitamente a autorização de execução</strong> em worktree descartável <code>CH-Lab-*</code> com custo R$0 comprovado e sem publicação automática.
+        <strong>Declaro ter verificado a ausência de custos e autorizo a execução local individual em worktree descartável CH-Lab-*.</strong> (Aviso: <code>--mode plan</code> não comprova autenticação ou custo R$0; operador deve comprovar previamente).
       </label>
     </div>
   </form>
@@ -139,7 +139,8 @@
 
       <!-- Seção de Registro de Decisão do PO -->
       <div id="secao-decisao-po" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px;">
-        <strong style="display: block; margin-bottom: 0.4rem; color: var(--text-primary);">Decisão Humana do PO (Aceite Local):</strong>
+        <strong style="display: block; margin-bottom: 0.2rem; color: var(--text-primary);">Decisão Declarada do PO (Aceite Local Preliminar):</strong>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0 0 0.5rem 0;">Decisão local declarada pelo operador. Não substitui a homologação formal do PO nem dispensa a auditoria independente do Codex.</p>
         <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 0.5rem;">
           <label style="cursor: pointer; font-size: 0.85rem;"><input type="radio" name="radio_decisao_po" value="APROVADO"> Aprovar</label>
           <label style="cursor: pointer; font-size: 0.85rem;"><input type="radio" name="radio_decisao_po" value="AJUSTES"> Ajustes</label>

@@ -118,7 +118,13 @@ async def dispatch_mission_execution_api(
         if not isinstance(body, dict):
             raise HTTPException(status_code=400, detail="Corpo da requisição deve ser um objeto JSON.")
         manifest_path = body.get("manifest_path") or body.get("caminho_manifesto")
-        confirmacao_po = bool(body.get("confirmacao_po") or body.get("confirmation"))
+        raw_conf = body.get("confirmacao_po") if "confirmacao_po" in body else body.get("confirmation")
+        if raw_conf is not True:
+            raise HTTPException(
+                status_code=400,
+                detail="Confirmação explícita de execução pelo PO é obrigatória e deve ser o booleano True.",
+            )
+        confirmacao_po = True
         raw_timeout = body.get("timeout_segundos") or body.get("timeout")
         try:
             timeout = int(raw_timeout) if raw_timeout is not None else 480

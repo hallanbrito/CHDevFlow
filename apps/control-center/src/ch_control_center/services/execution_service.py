@@ -53,6 +53,37 @@ def sanitizar_log(texto: str) -> str:
     return _PADRAO_SEGREDO.sub("[REDACTED]", texto)
 
 
+def is_pid_alive(pid: int) -> bool:
+    """Verifica de forma segura e fail-closed se um processo com o PID informado está ativo no host."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        SYNCHRONIZE = 0x00100000
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return exit_code.value == 259  # STILL_ACTIVE
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return False
+
+
 @dataclass
 class ExecutionRecord:
     execution_id: str
@@ -95,7 +126,7 @@ class ExecutionService:
         self.labs_root = (labs_root or (Path.home() / "CHDevFlow-Labs")).resolve()
         self.cycle_runner = cycle_runner or run_generic_cycle
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._active_execution_id: str | None = None
         self._cancel_events: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
@@ -111,9 +142,25 @@ class ExecutionService:
                 return
             try:
                 dados = json.loads(self.lock_file.read_text(encoding="utf-8"))
-                exec_id = dados.get("execution_id")
+            except Exception:
+                # Fail-closed: se o lock estiver corrompido ou ilegível, não o removemos cegamente
+                return
+
+            if not isinstance(dados, dict):
+                return
+
+            pid = dados.get("pid")
+            exec_id = dados.get("execution_id")
+
+            # Verifica se o processo dono do lock ainda está vivo no host
+            if pid and pid != os.getpid() and is_pid_alive(pid):
                 if exec_id:
-                    # Carrega o registro persistido
+                    self._active_execution_id = exec_id
+                return
+
+            # O processo não está vivo: atualiza registro e remove lock stale
+            if exec_id:
+                try:
                     registro_path = self.executions_dir / f"{exec_id}.json"
                     if registro_path.exists():
                         registro_dict = json.loads(registro_path.read_text(encoding="utf-8"))
@@ -121,26 +168,38 @@ class ExecutionService:
                             registro_dict["status"] = "INTERROMPIDO_CRASH"
                             registro_dict["finished_at"] = datetime.now(timezone.utc).isoformat()
                             registro_dict["findings"] = registro_dict.get("findings", []) + [
-                                "Servidor reiniciado ou interrompido abruptamente durante a execução."
+                                f"Servidor reiniciado ou processo interrompido abruptamente (PID {pid or 'desconhecido'} inativo)."
                             ]
                             registro_path.write_text(
                                 json.dumps(registro_dict, ensure_ascii=False, indent=2),
                                 encoding="utf-8",
                             )
-            except Exception:
-                pass
-            finally:
-                try:
-                    self.lock_file.unlink(missing_ok=True)
-                except OSError:
+                except Exception:
                     pass
+
+            try:
+                self.lock_file.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _clean_lock_file_if_owned(self, execution_id: str) -> None:
+        """Remove o arquivo de lock apenas se ele pertencer à execução especificada."""
+        if not self.lock_file.exists():
+            return
+        try:
+            dados = json.loads(self.lock_file.read_text(encoding="utf-8"))
+            if dados.get("execution_id") == execution_id:
+                self.lock_file.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     def obter_execucao_ativa(self) -> dict[str, Any] | None:
         """Retorna os dados da execução atualmente ativa, se houver."""
         with self._lock:
-            if not self._active_execution_id:
-                return None
-            return self.obter_execucao(self._active_execution_id)
+            active_id = self._active_execution_id
+        if not active_id:
+            return None
+        return self.obter_execucao(active_id)
 
     def obter_execucao(self, execution_id: str) -> dict[str, Any] | None:
         """Localiza e retorna os detalhes atualizados de uma execução."""
@@ -226,8 +285,8 @@ class ExecutionService:
     ) -> dict[str, Any]:
         """Dispara uma nova execução local a partir de manifesto pré-preparado e validado."""
         # 1. Validação mandatória de confirmação explícita
-        if not confirmacao_po:
-            raise ManifestValidationError("Confirmação explícita de execução pelo PO é obrigatória.")
+        if confirmacao_po is not True:
+            raise ManifestValidationError("Confirmação explícita de execução pelo PO é obrigatória e deve ser estritamente True.")
 
         # 2. Validação do timeout dentro dos limites do produto (120..900s)
         if not isinstance(timeout_segundos, int) or not MIN_TIMEOUT_TOTAL <= timeout_segundos <= MAX_TIMEOUT_TOTAL:
@@ -371,10 +430,7 @@ class ExecutionService:
             with self._lock:
                 if self._active_execution_id == record.execution_id:
                     self._active_execution_id = None
-                try:
-                    self.lock_file.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                self._clean_lock_file_if_owned(record.execution_id)
                 self._persist_record(record)
 
     def cancelar_execucao(self, execution_id: str) -> dict[str, Any]:
@@ -395,20 +451,25 @@ class ExecutionService:
             if cancel_event:
                 cancel_event.set()
 
-            # Interrompe efetivamente todos os subprocessos e processos filhos
-            terminate_all_active_processes()
+            worker_thread = self._threads.get(execution_id)
 
+        # Interrompe efetivamente todos os subprocessos e processos filhos fora do lock
+        terminate_all_active_processes()
+
+        # Aguarda o término efetivo da thread do worker para evitar condição de corrida
+        if worker_thread and worker_thread.is_alive() and worker_thread != threading.current_thread():
+            worker_thread.join(timeout=5.0)
+
+        with self._lock:
             record.status = "CANCELADO"
-            record.finished_at = datetime.now(timezone.utc).isoformat()
-            record.findings.append("Execução cancelada a pedido do operador.")
+            if not record.finished_at:
+                record.finished_at = datetime.now(timezone.utc).isoformat()
+            if "Execução cancelada a pedido do operador." not in record.findings:
+                record.findings.append("Execução cancelada a pedido do operador.")
 
             if self._active_execution_id == execution_id:
                 self._active_execution_id = None
-            try:
-                self.lock_file.unlink(missing_ok=True)
-            except OSError:
-                pass
-
+            self._clean_lock_file_if_owned(execution_id)
             self._persist_record(record)
             return record.para_dicionario()
 
@@ -433,10 +494,25 @@ class ExecutionService:
                     raise ExecutionNotFoundError(f"Execução '{execution_id}' não encontrada.")
                 record = ExecutionRecord(**json.loads(registro_path.read_text(encoding="utf-8")))
 
+            # Validação do status atual da execução
+            if record.status in ("INICIADO", "EM_EXECUCAO"):
+                raise ValueError(
+                    f"Não é permitido registrar decisão em execução ainda em andamento (status: '{record.status}'). "
+                    "Aguarde o término do ciclo ou cancele a execução."
+                )
+
+            if decisao_normalizada == "APROVADO" and record.status not in ("APROVADO_AGUARDANDO_CH1", "AGUARDANDO_PO"):
+                raise ValueError(
+                    f"Não é permitido aprovar execução com status '{record.status}'. "
+                    "Apenas execuções concluídas com sucesso (APROVADO_AGUARDANDO_CH1 ou AGUARDANDO_PO) são elegíveis para aprovação."
+                )
+
             dados_decisao = {
+                "tipo": "decisao_local_declarada",
                 "decisao": decisao_normalizada,
                 "justificativa": sanitizar_log(justificativa or "").strip(),
                 "registrado_em": datetime.now(timezone.utc).isoformat(),
+                "aviso": "Decisão local declarada pelo operador. Não substitui homologação formal do PO nem auditoria independente do Codex.",
             }
             record.decisao_po = dados_decisao
             self._persist_record(record)
@@ -457,9 +533,11 @@ class ExecutionService:
                 try:
                     conteudo = relatorio_md.read_text(encoding="utf-8")
                     novo_bloco = (
-                        f"\n## Decisão do PO\n- Decisão: **{decisao_normalizada}**\n"
+                        f"\n## Decisão Local Declarada pelo PO\n- Tipo: **decisao_local_declarada**\n"
+                        f"- Decisão: **{decisao_normalizada}**\n"
                         f"- Justificativa: {dados_decisao['justificativa'] or 'Nenhuma'}\n"
                         f"- Registrado em: {dados_decisao['registrado_em']}\n"
+                        f"- Aviso: {dados_decisao['aviso']}\n"
                     )
                     relatorio_md.write_text(conteudo + novo_bloco, encoding="utf-8")
                 except Exception:
