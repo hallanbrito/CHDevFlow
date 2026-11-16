@@ -91,6 +91,9 @@ jobs:
           if (Test-Path tests/test_f7_runtime_identity.py) {
             python -I -m unittest discover -s tests -p test_f7_runtime_identity.py -v
           }
+          if (Test-Path tests/test_f7_v1_origin.py) {
+            python -I -m unittest discover -s tests -p test_f7_v1_origin.py -v
+          }
 
   f7-custody-producer:
     if: github.event_name == 'pull_request' && github.event.pull_request.number == 91
