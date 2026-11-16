@@ -18,6 +18,7 @@ import warnings
 from zipfile import ZipFile, ZipInfo
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import f7_custody_live as custody
