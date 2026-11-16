@@ -19,6 +19,7 @@ from chdevflow.core.intake import validate_issue, _fields, _get
 from chdevflow.core.po_escalation_attestation import verify_external_attestation
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
+from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules, RuntimeIdentityError
 from chdevflow.core.po_escalation_reservation import (
     GitReservationStore, NAMESPACE, SCHEMA as RESERVATION_SCHEMA, ReservationError,
 )
@@ -193,10 +194,19 @@ def _f7_audit_context() -> dict:
     sha = variable.get("value")
     if not isinstance(sha, str) or not HEX40.fullmatch(sha):
         raise PublicationError("Pin do commit F7 auditado ausente ou invalido")
+    local = _local_f7_checkout_sha()
+    if local != sha:
+        raise PublicationError("Checkout F7 nao corresponde ao commit auditado")
+    try:
+        runtime_digest = verify_loaded_f7_modules(
+            Path(__file__).resolve().parents[3], sha)
+    except RuntimeIdentityError as exc:
+        raise PublicationError("Codigo carregado F7 diverge do commit auditado") from exc
     return {
         "policy_sha": sha,
-        "local_sha": _local_f7_checkout_sha(),
+        "local_sha": local,
         "git_commit": _gh_json("api", f"repos/{REPO}/git/commits/{sha}"),
+        "runtime_digest": runtime_digest,
     }
 
 
@@ -215,7 +225,10 @@ def _validated_f7_audited_commit(context: dict) -> tuple[str, str]:
     tree_sha = tree.get("sha") if isinstance(tree, dict) else None
     if not isinstance(tree_sha, str) or not HEX40.fullmatch(tree_sha):
         raise PublicationError("Arvore do commit F7 auditado nao verificavel")
-    return pinned, tree_sha
+    runtime_digest = audited.get("runtime_digest")
+    if not isinstance(runtime_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", runtime_digest):
+        raise PublicationError("Comprovante de codigo executado F7 ausente")
+    return pinned, tree_sha, runtime_digest
 
 
 def _live_context(issue: int, approval_comment: int) -> dict:
@@ -442,7 +455,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
             + " " + ", ".join(diagnosis["reasons"]))
     base_tree = _validate_issue_baseline(
         issue, outbox["provenance"]["base_sha"], context.get("base_commit"))
-    f7_sha, f7_tree = _validated_f7_audited_commit(context)
+    f7_sha, f7_tree, f7_runtime = _validated_f7_audited_commit(context)
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
     approval = _approval_fingerprint(
@@ -470,7 +483,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "comments": _digest(normalized),
         "approval": _digest(approval),
         "approval_history": _digest(_comment_snapshot(context["approval_history"])),
-        "f7_audited_commit": _digest({"sha": f7_sha, "tree": f7_tree}),
+        "f7_audited_commit": _digest({"sha": f7_sha, "tree": f7_tree,
+                                       "runtime": f7_runtime}),
         "identity": _digest({
             "who": context["who"].get("login"), "user_id": context["who"].get("id"),
             "permissions": context["repository"].get("permissions"),
@@ -484,6 +498,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "base_sha": outbox["provenance"]["base_sha"],
         "base_tree": base_tree,
         "f7_audited_sha": f7_sha, "f7_audited_tree": f7_tree,
+        "f7_runtime_digest": f7_runtime,
         "approval_comment": approval["id"],
         "project_state": preview["state"],
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
@@ -669,6 +684,8 @@ def apply_publication_plan(
             or not HEX40.fullmatch(plan["f7_audited_sha"])
             or not isinstance(plan.get("f7_audited_tree"), str)
             or not HEX40.fullmatch(plan["f7_audited_tree"])
+            or not isinstance(plan.get("f7_runtime_digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", plan["f7_runtime_digest"])
             or type(plan.get("approval_comment")) is not int):
         raise PublicationError("Plano nao pertence a outbox")
     def current_plan() -> dict:
@@ -712,6 +729,7 @@ def apply_publication_plan(
         ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
            "f7_audited_sha": plan["f7_audited_sha"],
+           "f7_runtime_digest": plan["f7_runtime_digest"],
            "reservation_sha": reservation_sha,
            "producer": custody,
            "issue": outbox["issue"], "digest": supplied_digest})
@@ -734,6 +752,7 @@ def apply_publication_plan(
                 or observed["snapshot"]["approval"] != plan["snapshot"]["approval"]
                 or observed["f7_audited_sha"] != plan["f7_audited_sha"]
                 or observed["f7_audited_tree"] != plan["f7_audited_tree"]
+                or observed["f7_runtime_digest"] != plan["f7_runtime_digest"]
                 or observed["snapshot"]["f7_audited_commit"] !=
                    plan["snapshot"]["f7_audited_commit"]):
             raise PublicationError("Readback nao confirmou comentario unico")
