@@ -1254,6 +1254,33 @@ class PublicationTests(unittest.TestCase):
             self._apply(plan=plan, poster=poster)
         self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
 
+    def test_gate3_contexto_real_exige_comprovante_runtime(self):
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint.endswith("/CH_F7_AUDITED_COMMIT_SHA"):
+                return {"name": pub.F7_AUDIT_VARIABLE, "value": self.f7_sha}
+            return {"sha": self.f7_sha, "tree": {"sha": "c" * 40}}
+        with (patch.object(pub, "_gh_json", side_effect=api),
+              patch.object(pub, "_local_f7_checkout_sha", return_value=self.f7_sha),
+              patch.object(pub, "verify_loaded_f7_modules",
+                           return_value="e" * 64) as verify):
+            result = pub._f7_audit_context()
+        self.assertEqual(result["runtime_digest"], "e" * 64)
+        verify.assert_called_once()
+
+    def test_gate3_contexto_real_bloqueia_runtime_adulterado(self):
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint.endswith("/CH_F7_AUDITED_COMMIT_SHA"):
+                return {"name": pub.F7_AUDIT_VARIABLE, "value": self.f7_sha}
+            return {"sha": self.f7_sha, "tree": {"sha": "c" * 40}}
+        with (patch.object(pub, "_gh_json", side_effect=api),
+              patch.object(pub, "_local_f7_checkout_sha", return_value=self.f7_sha),
+              patch.object(pub, "verify_loaded_f7_modules",
+                           side_effect=pub.RuntimeIdentityError("adulteracao"))):
+            with self.assertRaisesRegex(pub.PublicationError, "Codigo carregado"):
+                pub._f7_audit_context()
+
     def test_gate3_runtime_digest_exigido_e_pinado_no_plano(self):
         plan = self._plan()
         self.assertEqual(plan["f7_runtime_digest"], "e" * 64)
