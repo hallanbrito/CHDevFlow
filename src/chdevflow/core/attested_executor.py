@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from tempfile import TemporaryDirectory
 
 REPO = "hallanbrito/CHDevFlow"
 SOURCE_SHA = "389bcc61342cbcdd3183e291a18eef42ad78f488"
@@ -73,15 +74,22 @@ def preflight(tar: Path) -> str:
     if not shutil.which("gh") or not shutil.which("docker"):
         raise AttestedExecutorError("gh e Docker exigidos antes do AGY")
     verify_tar(tar)
-    _command([
-        "gh", "attestation", "verify", str(tar),
-        "-R", REPO, "--signer-workflow", SIGNER,
-        "--source-digest", SOURCE_SHA,
-        "--source-ref", SOURCE_REF, "--deny-self-hosted-runners",
-    ], timeout=45)
-    if _command(["docker", "info", "--format", "{{.OSType}}"], 15) != "linux":
-        raise AttestedExecutorError("Docker Linux nao disponivel")
-    _command(["docker", "load", "-i", str(tar)], 120)
+    # O produtor da evidencia original nao pode trocar o TAR entre hash,
+    # Sigstore e docker load. Copia verificada em diretorio privado (0700).
+    with TemporaryDirectory(prefix="ch-f7-e3b-verify-") as temporary:
+        frozen = Path(temporary) / "executor.tar"
+        shutil.copyfile(tar, frozen)
+        verify_tar(frozen)
+        _command([
+            "gh", "attestation", "verify", str(frozen),
+            "-R", REPO, "--signer-workflow", SIGNER,
+            "--source-digest", SOURCE_SHA,
+            "--source-ref", SOURCE_REF, "--deny-self-hosted-runners",
+        ], timeout=45)
+        if _command(["docker", "info", "--format", "{{.OSType}}"], 15) != "linux":
+            raise AttestedExecutorError("Docker Linux nao disponivel")
+        # Exatamente os bytes autenticados, nao o caminho original mutavel.
+        _command(["docker", "load", "-i", str(frozen)], 120)
     if _command(["docker", "image", "inspect", IMAGE_ID,
                  "--format", "{{.Id}}"], 15) != IMAGE_ID:
         raise AttestedExecutorError("Docker image ID nao e o build atestado")
