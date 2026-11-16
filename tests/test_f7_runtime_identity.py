@@ -41,7 +41,8 @@ class RuntimeIdentityTests(unittest.TestCase):
         self.commit = git("rev-parse", "HEAD")
         self.module = types.ModuleType(self.name)
         self.module.__file__ = str(self.path)
-        exec(compile(self.path.read_text(encoding="utf-8"), str(self.path), "exec"),
+        exec(compile(self.path.read_text(encoding="utf-8"), str(self.path),
+                     "exec", dont_inherit=True),
              self.module.__dict__)
 
     @contextmanager
