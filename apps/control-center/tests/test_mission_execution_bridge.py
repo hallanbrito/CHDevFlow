@@ -1114,4 +1114,160 @@ def test_adversarial_p1_lock_exclusivo_atomico_e_limpeza_por_proprietario(lab_en
     reset_services()
 
 
+def test_adversarial_p1_cancelamento_isolado_nao_mata_subprocessos_de_b():
+    """P1: Comprova que o cancelamento de uma missão A não mata os subprocessos da missão B."""
+    import sys
+    from chdevflow.core.local_executor import (
+        get_active_processes,
+        register_active_process,
+        terminate_all_active_processes,
+    )
+
+    # Inicia dois subprocessos reais independentes
+    proc_a = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(15)"])
+    proc_b = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(15)"])
+
+    try:
+        register_active_process(proc_a, execution_id="exec-MISSAO-A")
+        register_active_process(proc_b, execution_id="exec-MISSAO-B")
+
+        # Verifica rastreamento isolado de processos
+        procs_a = get_active_processes("exec-MISSAO-A")
+        procs_b = get_active_processes("exec-MISSAO-B")
+        assert proc_a in procs_a
+        assert proc_b not in procs_a
+        assert proc_b in procs_b
+        assert proc_a not in procs_b
+
+        # Cancela SOMENTE a execução A
+        terminated_count = terminate_all_active_processes(execution_id="exec-MISSAO-A")
+        assert terminated_count >= 1
+
+        # Processo de A deve estar encerrado
+        proc_a.poll()
+        assert proc_a.returncode is not None, "Subprocesso de A deveria ter sido terminado"
+        assert proc_a not in get_active_processes("exec-MISSAO-A")
+
+        # Subprocesso de B DEVE PERMANECER VIVO e intacto
+        assert proc_b.poll() is None, "Subprocesso de B NÃO PODE ser encerrado pelo cancelamento de A"
+        assert proc_b in get_active_processes("exec-MISSAO-B")
+    finally:
+        # Limpeza segura do subprocesso B
+        terminate_all_active_processes(execution_id="exec-MISSAO-B")
+        if proc_b.poll() is None:
+            proc_b.kill()
+            proc_b.wait()
+        if proc_a.poll() is None:
+            proc_a.kill()
+            proc_a.wait()
+
+
+def test_adversarial_p2_ui_comportamento_cancelamento_pendente_e_polling(lab_env):
+    """P2: Comprova o fluxo adversarial de CANCELAMENTO_PENDENTE na API e no template missions.html."""
+    reset_services()
+    data_dir = lab_env["data_dir"]
+
+    cancelamento_recebido = threading.Event()
+    segurar_encerramento = threading.Event()
+
+    def runner_longo(**kwargs):
+        cancel_check = kwargs.get("cancel_check")
+        while True:
+            if cancel_check and cancel_check():
+                cancelamento_recebido.set()
+                segurar_encerramento.wait(timeout=30)
+                break
+            time.sleep(0.02)
+        return GenericResult(
+            status="CANCELADO",
+            execution_id="exec-longo",
+            mission_id="MISSAO-TESTE-121",
+            issue=121,
+            mission_digest="abc",
+        )
+
+    exec_svc = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_longo,
+    )
+    app = create_app()
+    app.dependency_overrides[get_execution_service] = lambda: exec_svc
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+    token = obter_csrf_token()
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+        "X-CSRF-Token": token,
+    }
+
+    # 1. Inicia execução
+    resp_init = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_init.status_code == 202
+    exec_id = resp_init.json()["execution_id"]
+
+    time.sleep(0.05)
+
+    # 2. Solicita cancelamento via API enquanto o worker ainda segura o encerramento
+    # Usamos join_timeout=0.05s para simular worker que não encerra instantaneamente
+    with patch.object(exec_svc, "cancelar_execucao", side_effect=lambda eid: ExecutionService.cancelar_execucao(exec_svc, eid, join_timeout=0.05)):
+        resp_cancel = client.post(
+            f"/api/missoes/execucoes/{exec_id}/cancelar",
+            json={"csrf_token": token},
+            headers=headers,
+        )
+        assert resp_cancel.status_code == 200
+        dados_cancel = resp_cancel.json()
+        assert dados_cancel["status"] == "CANCELAMENTO_PENDENTE"
+
+    # Consulta ativa durante CANCELAMENTO_PENDENTE
+    resp_ativa = client.get("/api/missoes/execucoes/ativa", headers=headers)
+    assert resp_ativa.status_code == 200
+    dados_ativa = resp_ativa.json()
+    assert dados_ativa["status"] == "CANCELAMENTO_PENDENTE"
+    assert dados_ativa["is_active"] is True
+
+    # Tentativa de disparar nova missão durante CANCELAMENTO_PENDENTE deve falhar com 409 Conflict
+    resp_conflito = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_conflito.status_code == 409
+
+    # Libera encerramento do worker
+    segurar_encerramento.set()
+    time.sleep(0.1)
+
+    # Consulta ativa após conclusão do cancelamento: não há mais execução ativa
+    resp_ativa_pos = client.get("/api/missoes/execucoes/ativa", headers=headers)
+    assert resp_ativa_pos.status_code == 200
+    assert resp_ativa_pos.json().get("execution_id") is None
+
+    # 3. Validações estritas no template missions.html (P2)
+    template_path = Path(__file__).resolve().parent.parent / "src" / "ch_control_center" / "templates" / "missions.html"
+    assert template_path.exists(), "Template missions.html deve existir"
+    html_content = template_path.read_text(encoding="utf-8")
+
+    # Verifica que cancelarExecucaoAtiva não anuncia falso sucesso quando não há confirmação
+    assert "!resp.ok" in html_content
+    assert "exibirAlertaDespacho(data.detail" in html_content
+    # Verifica tratamento explícito de CANCELAMENTO_PENDENTE
+    assert "data.status === 'CANCELAMENTO_PENDENTE'" in html_content
+    assert "Cancelamento solicitado; aguardando encerramento da execução no host." in html_content
+    # Verifica que o botão de despachar permanece desabilitado durante cancelamento pendente
+    assert "btnDespachar.disabled = true" in html_content
+    assert "btnDespachar.textContent = 'Cancelando...'" in html_content
+    # Verifica persistência no DOMContentLoaded
+    assert "window.addEventListener('DOMContentLoaded'" in html_content
+    assert "CANCELAMENTO_PENDENTE" in html_content
+
+    reset_services()
+
+
+
 

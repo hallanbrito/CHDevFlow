@@ -339,6 +339,10 @@ function exibirAlertaDespacho(mensagem, tipo = 'erro') {
     alerta.style.background = '#fee2e2';
     alerta.style.color = '#991b1b';
     alerta.style.border = '1px solid #f87171';
+  } else if (tipo === 'aviso' || tipo === 'alerta') {
+    alerta.style.background = '#fef3c7';
+    alerta.style.color = '#92400e';
+    alerta.style.border = '1px solid #fcd34d';
   } else {
     alerta.style.background = '#dcfce7';
     alerta.style.color = '#166534';
@@ -419,12 +423,27 @@ function iniciarPolling(executionId) {
       const status = data.status || '';
       if (!['INICIADO', 'EM_EXECUCAO', 'CANCELAMENTO_PENDENTE'].includes(status)) {
         clearInterval(pollingInterval);
-        document.getElementById('btn-despachar').disabled = false;
-        document.getElementById('btn-despachar').textContent = 'Disparar Missão Local';
-        document.getElementById('btn-cancelar-execucao').style.display = 'none';
+        const btnDespachar = document.getElementById('btn-despachar');
+        btnDespachar.disabled = false;
+        btnDespachar.textContent = 'Disparar Missão Local';
+        const btnCancel = document.getElementById('btn-cancelar-execucao');
+        if (btnCancel) btnCancel.style.display = 'none';
+
+        if (status === 'CANCELADO') {
+          exibirAlertaDespacho('Execução cancelada com sucesso.', 'erro');
+        }
 
         if (['APROVADO_AGUARDANDO_CH1', 'AGUARDANDO_PO'].includes(status)) {
           document.getElementById('secao-decisao-po').style.display = 'block';
+        }
+      } else if (status === 'CANCELAMENTO_PENDENTE') {
+        const btnDespachar = document.getElementById('btn-despachar');
+        btnDespachar.disabled = true;
+        btnDespachar.textContent = 'Cancelando...';
+        const btnCancel = document.getElementById('btn-cancelar-execucao');
+        if (btnCancel) {
+          btnCancel.disabled = true;
+          btnCancel.textContent = 'Cancelando...';
         }
       }
     } catch (err) {
@@ -440,23 +459,32 @@ function atualizarPainelMonitoramento(data) {
   document.getElementById('tempo-decorrido-execucao').textContent = '(' + (data.elapsed_seconds || 0) + 's decorridos)';
 
   const badge = document.getElementById('badge-status-execucao');
+  const btnCancel = document.getElementById('btn-cancelar-execucao');
   const status = data.status || 'DESCONHECIDO';
   badge.textContent = status;
   if (status === 'APROVADO_AGUARDANDO_CH1') {
     badge.className = 'badge-status badge-concluida';
+    if (btnCancel) btnCancel.style.display = 'none';
   } else if (status === 'EM_EXECUCAO' || status === 'INICIADO') {
     badge.className = 'badge-status badge-elegivel';
+    if (btnCancel) {
+      btnCancel.style.display = 'inline-block';
+      btnCancel.disabled = false;
+      btnCancel.textContent = 'Cancelar Execução';
+    }
   } else if (status === 'CANCELAMENTO_PENDENTE') {
     badge.className = 'badge-status badge-ciclo';
-    const btnCancel = document.getElementById('btn-cancelar-execucao');
     if (btnCancel) {
+      btnCancel.style.display = 'inline-block';
       btnCancel.disabled = true;
       btnCancel.textContent = 'Cancelando...';
     }
   } else if (status === 'AGUARDANDO_PO') {
     badge.className = 'badge-status badge-ciclo';
+    if (btnCancel) btnCancel.style.display = 'none';
   } else {
     badge.className = 'badge-status badge-bloqueada';
+    if (btnCancel) btnCancel.style.display = 'none';
   }
 
   const attempts = data.attempts || [];
@@ -505,14 +533,33 @@ async function cancelarExecucaoAtiva() {
       body: JSON.stringify({ csrf_token: csrfToken })
     });
     const data = await resp.json();
+    if (!resp.ok) {
+      exibirAlertaDespacho(data.detail || 'Erro ao cancelar execução no host.');
+      btn.disabled = false;
+      btn.textContent = 'Cancelar Execução';
+      return;
+    }
+
     atualizarPainelMonitoramento(data);
-    exibirAlertaDespacho('Execução cancelada com sucesso.', 'erro');
-    if (pollingInterval) clearInterval(pollingInterval);
-    document.getElementById('btn-despachar').disabled = false;
-    document.getElementById('btn-despachar').textContent = 'Disparar Missão Local';
-    btn.style.display = 'none';
+
+    if (data.status === 'CANCELAMENTO_PENDENTE') {
+      exibirAlertaDespacho('Cancelamento solicitado; aguardando encerramento da execução no host.', 'aviso');
+      const btnDespachar = document.getElementById('btn-despachar');
+      btnDespachar.disabled = true;
+      btnDespachar.textContent = 'Cancelando...';
+      iniciarPolling(activeExecutionId);
+    } else if (data.status === 'CANCELADO') {
+      exibirAlertaDespacho('Execução cancelada com sucesso.', 'erro');
+      if (pollingInterval) clearInterval(pollingInterval);
+      const btnDespachar = document.getElementById('btn-despachar');
+      btnDespachar.disabled = false;
+      btnDespachar.textContent = 'Disparar Missão Local';
+      btn.style.display = 'none';
+    } else {
+      atualizarPainelMonitoramento(data);
+    }
   } catch (err) {
-    alert('Erro ao cancelar: ' + err.message);
+    exibirAlertaDespacho('Erro de conexão ao cancelar: ' + err.message);
     btn.disabled = false;
     btn.textContent = 'Cancelar Execução';
   }
@@ -567,8 +614,14 @@ window.addEventListener('DOMContentLoaded', async () => {
       const data = await resp.json();
       if (data && data.execution_id && ['INICIADO', 'EM_EXECUCAO', 'CANCELAMENTO_PENDENTE'].includes(data.status)) {
         activeExecutionId = data.execution_id;
-        document.getElementById('btn-despachar').disabled = true;
-        document.getElementById('btn-despachar').textContent = 'Em Execução...';
+        const btnDespachar = document.getElementById('btn-despachar');
+        btnDespachar.disabled = true;
+        if (data.status === 'CANCELAMENTO_PENDENTE') {
+          btnDespachar.textContent = 'Cancelando...';
+          exibirAlertaDespacho('Cancelamento solicitado; aguardando encerramento da execução no host.', 'aviso');
+        } else {
+          btnDespachar.textContent = 'Em Execução...';
+        }
         atualizarPainelMonitoramento(data);
         iniciarPolling(activeExecutionId);
       }

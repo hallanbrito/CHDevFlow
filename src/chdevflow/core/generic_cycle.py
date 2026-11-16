@@ -205,7 +205,8 @@ def _persist(out: Path, result: GenericResult):
 def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                       accepted: bool, timeout: int = 480,
                       isolated_tests: bool = False,
-                      cancel_check: Callable[[], bool] | None = None) -> GenericResult:
+                      cancel_check: Callable[[], bool] | None = None,
+                      execution_id: str | None = None) -> GenericResult:
     """Execucao real opt-in. No maximo 3 AGY/2 devolucoes, tempo TOTAL."""
     if not accepted:
         raise PermissionError("Exige --i-accept-local-risk")
@@ -227,8 +228,12 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     # Copia canonica do manifesto fica SOMENTE no dossie local (nao publica
     # paths privados); vincula cada tentativa ao plano Git pinado.
     (evidence / "manifesto_missao.json").write_bytes(mission.canonical())
+    resolved_execution_id = execution_id or uuid4().hex
+    from chdevflow.core.local_executor import set_current_execution_id
+    set_current_execution_id(resolved_execution_id)
+
     result = GenericResult(
-        "INICIADO", uuid4().hex, mission.mission_id, mission.issue, mission.digest)
+        "INICIADO", resolved_execution_id, mission.mission_id, mission.issue, mission.digest)
     if isolated_tests:
         result.test_execution = "docker-readonly-no-network:" + docker_image_id
     deadline = time.monotonic() + min(timeout, mission.timeout_seconds)

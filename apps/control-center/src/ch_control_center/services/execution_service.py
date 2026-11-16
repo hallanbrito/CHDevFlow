@@ -445,6 +445,8 @@ class ExecutionService:
         cancel_event: threading.Event,
     ) -> None:
         """Executa o ciclo em thread desacoplada respeitando timeout e cancelamento."""
+        from chdevflow.core.local_executor import set_current_execution_id
+        set_current_execution_id(record.execution_id)
         start_mono = time.monotonic()
         record.status = "EM_EXECUCAO"
         self._persist_record(record)
@@ -453,14 +455,25 @@ class ExecutionService:
             def cancel_check() -> bool:
                 return cancel_event.is_set()
 
-            res = self.cycle_runner(
-                manifest_path=manifest_path,
-                evidence=evidence_dir,
-                accepted=True,
-                timeout=timeout,
-                isolated_tests=isolated_tests,
-                cancel_check=cancel_check,
-            )
+            try:
+                res = self.cycle_runner(
+                    manifest_path=manifest_path,
+                    evidence=evidence_dir,
+                    accepted=True,
+                    timeout=timeout,
+                    isolated_tests=isolated_tests,
+                    cancel_check=cancel_check,
+                    execution_id=record.execution_id,
+                )
+            except TypeError:
+                res = self.cycle_runner(
+                    manifest_path=manifest_path,
+                    evidence=evidence_dir,
+                    accepted=True,
+                    timeout=timeout,
+                    isolated_tests=isolated_tests,
+                    cancel_check=cancel_check,
+                )
             record.elapsed_seconds = round(time.monotonic() - start_mono, 2)
             record.finished_at = datetime.now(timezone.utc).isoformat()
             if cancel_event.is_set():
@@ -482,6 +495,7 @@ class ExecutionService:
                 record.status = "BLOQUEADO_INFRA_OU_ESCOPO"
                 record.findings.append(f"Falha de execução: {sanitizar_log(str(exc))}")
         finally:
+            set_current_execution_id(None)
             with self._lock:
                 if cancel_event.is_set():
                     record.status = "CANCELADO"
@@ -515,8 +529,8 @@ class ExecutionService:
 
             worker_thread = self._threads.get(execution_id)
 
-        # Interrompe efetivamente todos os subprocessos e processos filhos fora do lock
-        terminate_all_active_processes()
+        # Interrompe efetivamente APENAS os subprocessos da execução solicitada
+        terminate_all_active_processes(execution_id=execution_id)
 
         # Aguarda o término efetivo da thread do worker para evitar condição de corrida
         if worker_thread and worker_thread.is_alive() and worker_thread != threading.current_thread():

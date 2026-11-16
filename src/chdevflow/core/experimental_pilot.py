@@ -122,8 +122,9 @@ def _executables() -> tuple[list[str], list[str]]:
 
 
 def _run_command(command: list[str], *, cwd: Path,
-                 stdin: str | None, timeout: int) -> ProcessResult:
-    result = run_local_command(command, cwd=cwd, stdin=stdin, timeout=timeout)
+                 stdin: str | None, timeout: int,
+                 execution_id: str | None = None) -> ProcessResult:
+    result = run_local_command(command, cwd=cwd, stdin=stdin, timeout=timeout, execution_id=execution_id)
     return ProcessResult(result.code, result.stdout, result.stderr, result.timed_out)
 
 

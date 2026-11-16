@@ -109,29 +109,54 @@ class LocalProcessResult:
 
 
 _ACTIVE_PROCESSES_LOCK = threading.Lock()
-_ACTIVE_PROCESSES: set[subprocess.Popen] = set()
+# Mapeia processo ativo para o execution_id proprietário (ou None se avulso)
+_ACTIVE_PROCESSES: dict[subprocess.Popen, str | None] = {}
+_EXECUTION_CONTEXT = threading.local()
 
 
-def register_active_process(process: subprocess.Popen) -> None:
+def set_current_execution_id(execution_id: str | None) -> None:
+    """Define o execution_id ativo para o contexto da thread corrente."""
+    _EXECUTION_CONTEXT.execution_id = execution_id
+
+
+def get_current_execution_id() -> str | None:
+    """Retorna o execution_id associado ao contexto da thread corrente, se houver."""
+    return getattr(_EXECUTION_CONTEXT, "execution_id", None)
+
+
+def register_active_process(process: subprocess.Popen, execution_id: str | None = None) -> None:
+    """Registra um processo filho ativo associado ao seu proprietário de execução."""
+    owner_id = execution_id if execution_id is not None else get_current_execution_id()
     with _ACTIVE_PROCESSES_LOCK:
-        _ACTIVE_PROCESSES.add(process)
+        _ACTIVE_PROCESSES[process] = owner_id
 
 
 def unregister_active_process(process: subprocess.Popen) -> None:
+    """Desregistra um processo que já encerrou."""
     with _ACTIVE_PROCESSES_LOCK:
-        _ACTIVE_PROCESSES.discard(process)
+        _ACTIVE_PROCESSES.pop(process, None)
 
 
-def get_active_processes() -> list[subprocess.Popen]:
+def get_active_processes(execution_id: str | None = None) -> list[subprocess.Popen]:
+    """Retorna os subprocessos ativos. Se execution_id for informado, filtra pelo proprietário."""
     with _ACTIVE_PROCESSES_LOCK:
-        return list(_ACTIVE_PROCESSES)
+        if execution_id is None:
+            return list(_ACTIVE_PROCESSES.keys())
+        return [proc for proc, owner in _ACTIVE_PROCESSES.items() if owner == execution_id]
 
 
-def terminate_all_active_processes(*, platform: str | None = None) -> int:
-    """Interrompe forcadamente todos os subprocessos ativos e suas arvores filhas."""
+def terminate_all_active_processes(*, execution_id: str | None = None, platform: str | None = None) -> int:
+    """Interrompe forcadamente os subprocessos ativos e suas arvores filhas.
+
+    Se execution_id for especificado, encerra SOMENTE os processos associados
+    a essa execucao, sem afetar subprocessos de outras execucoes concorrentes.
+    """
     system = platform or sys.platform
     with _ACTIVE_PROCESSES_LOCK:
-        procs = list(_ACTIVE_PROCESSES)
+        if execution_id is not None:
+            procs = [proc for proc, owner in _ACTIVE_PROCESSES.items() if owner == execution_id]
+        else:
+            procs = list(_ACTIVE_PROCESSES.keys())
     terminated = 0
     for proc in procs:
         try:
@@ -139,6 +164,8 @@ def terminate_all_active_processes(*, platform: str | None = None) -> int:
             terminated += 1
         except Exception:
             pass
+        finally:
+            unregister_active_process(proc)
     return terminated
 
 
@@ -168,7 +195,8 @@ def _kill_tree(process: subprocess.Popen, *, platform: str) -> None:
 
 def run_local_command(command: list[str], *, cwd: Path, stdin: str | None,
                       timeout: int, platform: str | None = None,
-                      env: Mapping[str, str] | None = None) -> LocalProcessResult:
+                      env: Mapping[str, str] | None = None,
+                      execution_id: str | None = None) -> LocalProcessResult:
     """Popen real sob o usuário atual, com limite de tempo e limpeza da árvore.
 
     Não afirma que há sandbox: não executar código de terceiros fora de
@@ -189,7 +217,8 @@ def run_local_command(command: list[str], *, cwd: Path, stdin: str | None,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         creationflags=flags, start_new_session=(system != "win32"),
     )
-    register_active_process(process)
+    owner_id = execution_id if execution_id is not None else get_current_execution_id()
+    register_active_process(process, execution_id=owner_id)
     try:
         stdout, stderr = process.communicate(input=stdin, timeout=timeout)
         return LocalProcessResult(process.returncode, stdout or "", stderr or "")
