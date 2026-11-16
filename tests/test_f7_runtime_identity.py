@@ -83,6 +83,7 @@ class RuntimeIdentityTests(unittest.TestCase):
                 runtime.verify_loaded_f7_modules(self.root, self.commit)
 
     def test_modulo_carregado_de_outro_diretorio_bloqueia(self):
+        (self.root / "outro.py").write_text("def check(): pass\n", encoding="utf-8")
         self.module.__file__ = str(self.root / "outro.py")
         with self.loaded():
             with self.assertRaisesRegex(runtime.RuntimeIdentityError, "origem inesperada"):
