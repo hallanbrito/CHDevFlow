@@ -56,14 +56,14 @@ class RuntimeIdentityTests(unittest.TestCase):
         # de modulos globais; isso deve ser detectado, nao confundido com um
         # checkout de producao comprometido ou o baseline do importador.
         script = (
-            "import re, sys\\n"
-            "from pathlib import Path\\n"
-            "root = Path(sys.argv[1])\\n"
-            "sys.path.insert(0, str(root / 'src'))\\n"
-            "from chdevflow.core import po_escalation_publication as pub\\n"
-            "from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules\\n"
-            "assert pub.REMOTE_PUBLICATION_ENABLED is False\\n"
-            "print(verify_loaded_f7_modules(root, sys.argv[2]))\\n"
+            "import re, sys\n"
+            "from pathlib import Path\n"
+            "root = Path(sys.argv[1])\n"
+            "sys.path.insert(0, str(root / 'src'))\n"
+            "from chdevflow.core import po_escalation_publication as pub\n"
+            "from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules\n"
+            "assert pub.REMOTE_PUBLICATION_ENABLED is False\n"
+            "print(verify_loaded_f7_modules(root, sys.argv[2]))\n"
         )
         head = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD"],
