@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import inspect
 import json
 import os
 from pathlib import Path
@@ -51,6 +52,20 @@ def sanitizar_log(texto: str) -> str:
     if not isinstance(texto, str):
         return ""
     return _PADRAO_SEGREDO.sub("[REDACTED]", texto)
+
+
+def _runner_accepts_param(fn: Any, param_name: str) -> bool:
+    """Verifica antes da invocação se o callable aceita o parâmetro especificado ou **kwargs."""
+    try:
+        sig = inspect.signature(fn)
+        for param in sig.parameters.values():
+            if param.kind == inspect.Parameter.VAR_KEYWORD:  # **kwargs
+                return True
+            if param.name == param_name:
+                return True
+        return False
+    except (ValueError, TypeError):
+        return False
 
 
 class ProcessStatus:
@@ -262,6 +277,23 @@ class ExecutionService:
                 except Exception:
                     return None
 
+            if record.status == "CANCELAMENTO_PENDENTE":
+                from chdevflow.core.local_executor import get_active_processes
+                worker_thread = self._threads.get(execution_id)
+                thread_viva = bool(worker_thread and worker_thread.is_alive())
+                procs_restantes = get_active_processes(execution_id)
+                if not thread_viva and not procs_restantes:
+                    record.status = "CANCELADO"
+                    if not record.finished_at:
+                        record.finished_at = datetime.now(timezone.utc).isoformat()
+                    aviso_concluido = "Encerramento de todos os subprocessos confirmado; exclusividade liberada."
+                    if aviso_concluido not in record.findings:
+                        record.findings.append(aviso_concluido)
+                    if self._active_execution_id == execution_id:
+                        self._active_execution_id = None
+                    self._clean_lock_file_if_owned(execution_id)
+                    self._persist_record(record)
+
         # 3. Enriquecimento a partir da pasta de dossiê, se disponível
         dados_retorno = record.para_dicionario()
         evidence_path = Path(record.evidence_dir)
@@ -445,69 +477,74 @@ class ExecutionService:
         cancel_event: threading.Event,
     ) -> None:
         """Executa o ciclo em thread desacoplada respeitando timeout e cancelamento."""
-        from chdevflow.core.local_executor import set_current_execution_id
-        set_current_execution_id(record.execution_id)
-        start_mono = time.monotonic()
-        record.status = "EM_EXECUCAO"
-        self._persist_record(record)
-
-        try:
-            def cancel_check() -> bool:
-                return cancel_event.is_set()
+        from chdevflow.core.local_executor import execution_context
+        with execution_context(record.execution_id):
+            start_mono = time.monotonic()
+            record.status = "EM_EXECUCAO"
+            self._persist_record(record)
 
             try:
-                res = self.cycle_runner(
-                    manifest_path=manifest_path,
-                    evidence=evidence_dir,
-                    accepted=True,
-                    timeout=timeout,
-                    isolated_tests=isolated_tests,
-                    cancel_check=cancel_check,
-                    execution_id=record.execution_id,
-                )
-            except TypeError:
-                res = self.cycle_runner(
-                    manifest_path=manifest_path,
-                    evidence=evidence_dir,
-                    accepted=True,
-                    timeout=timeout,
-                    isolated_tests=isolated_tests,
-                    cancel_check=cancel_check,
-                )
-            record.elapsed_seconds = round(time.monotonic() - start_mono, 2)
-            record.finished_at = datetime.now(timezone.utc).isoformat()
-            if cancel_event.is_set():
-                record.status = "CANCELADO"
-                record.findings.append("Execução cancelada pelo operador.")
-            else:
-                record.status = res.status
-                record.attempts = res.attempts
-                record.returns_used = res.returns_used
-                record.findings = [sanitizar_log(f) for f in res.findings]
+                def cancel_check() -> bool:
+                    return cancel_event.is_set()
 
-        except Exception as exc:
-            record.elapsed_seconds = round(time.monotonic() - start_mono, 2)
-            record.finished_at = datetime.now(timezone.utc).isoformat()
-            if cancel_event.is_set():
-                record.status = "CANCELADO"
-                record.findings.append("Execução cancelada pelo operador.")
-            else:
-                record.status = "BLOQUEADO_INFRA_OU_ESCOPO"
-                record.findings.append(f"Falha de execução: {sanitizar_log(str(exc))}")
-        finally:
-            set_current_execution_id(None)
-            with self._lock:
+                kwargs: dict[str, Any] = {
+                    "manifest_path": manifest_path,
+                    "evidence": evidence_dir,
+                    "accepted": True,
+                    "timeout": timeout,
+                    "isolated_tests": isolated_tests,
+                    "cancel_check": cancel_check,
+                }
+                if _runner_accepts_param(self.cycle_runner, "execution_id"):
+                    kwargs["execution_id"] = record.execution_id
+
+                res = self.cycle_runner(**kwargs)
+                record.elapsed_seconds = round(time.monotonic() - start_mono, 2)
+                record.finished_at = datetime.now(timezone.utc).isoformat()
                 if cancel_event.is_set():
                     record.status = "CANCELADO"
-                    if not record.finished_at:
-                        record.finished_at = datetime.now(timezone.utc).isoformat()
-                    if "Execução cancelada pelo operador." not in record.findings:
-                        record.findings.append("Execução cancelada pelo operador.")
+                    record.findings.append("Execução cancelada pelo operador.")
+                else:
+                    record.status = res.status
+                    record.attempts = res.attempts
+                    record.returns_used = res.returns_used
+                    record.findings = [sanitizar_log(f) for f in res.findings]
 
-                if self._active_execution_id == record.execution_id:
-                    self._active_execution_id = None
-                self._clean_lock_file_if_owned(record.execution_id)
-                self._persist_record(record)
+            except Exception as exc:
+                record.elapsed_seconds = round(time.monotonic() - start_mono, 2)
+                record.finished_at = datetime.now(timezone.utc).isoformat()
+                if cancel_event.is_set():
+                    record.status = "CANCELADO"
+                    record.findings.append("Execução cancelada pelo operador.")
+                else:
+                    record.status = "BLOQUEADO_INFRA_OU_ESCOPO"
+                    record.findings.append(f"Falha de execução: {sanitizar_log(str(exc))}")
+            finally:
+                from chdevflow.core.local_executor import get_active_processes
+                procs_restantes = get_active_processes(record.execution_id)
+                with self._lock:
+                    if procs_restantes:
+                        # Incerteza / subprocessos ainda ativos: NÃO libera lock nem exclusividade!
+                        record.status = "CANCELAMENTO_PENDENTE"
+                        pids = [p.pid for p in procs_restantes]
+                        aviso = (
+                            f"Encerramento inconclusivo: {len(procs_restantes)} subprocesso(s) ainda ativo(s) "
+                            f"no host (PID(s): {pids}). Exclusividade e lock mantidos."
+                        )
+                        if aviso not in record.findings:
+                            record.findings.append(aviso)
+                    else:
+                        if cancel_event.is_set():
+                            record.status = "CANCELADO"
+                            if not record.finished_at:
+                                record.finished_at = datetime.now(timezone.utc).isoformat()
+                            if "Execução cancelada pelo operador." not in record.findings:
+                                record.findings.append("Execução cancelada pelo operador.")
+
+                        if self._active_execution_id == record.execution_id:
+                            self._active_execution_id = None
+                        self._clean_lock_file_if_owned(record.execution_id)
+                    self._persist_record(record)
 
     def cancelar_execucao(self, execution_id: str, join_timeout: float = 5.0) -> dict[str, Any]:
         """Cancela uma execução em andamento e interrompe todos os seus subprocessos."""
@@ -519,9 +556,13 @@ class ExecutionService:
                     raise ExecutionNotFoundError(f"Execução '{execution_id}' não encontrada.")
                 record = ExecutionRecord(**json.loads(registro_path.read_text(encoding="utf-8")))
 
-            # Se já estiver em estado terminal, não há o que cancelar
-            if record.status not in ("INICIADO", "EM_EXECUCAO", "CANCELAMENTO_PENDENTE"):
+            # Se já estiver em estado terminal e sem processos ativos, não há o que cancelar
+            if record.status in ("CONCLUIDO", "BLOQUEADO_INFRA_OU_ESCOPO", "REPROVADO_CH1"):
                 return record.para_dicionario()
+            if record.status == "CANCELADO":
+                from chdevflow.core.local_executor import get_active_processes
+                if not get_active_processes(execution_id):
+                    return record.para_dicionario()
 
             cancel_event = self._cancel_events.get(execution_id)
             if cancel_event:
@@ -536,11 +577,22 @@ class ExecutionService:
         if worker_thread and worker_thread.is_alive() and worker_thread != threading.current_thread():
             worker_thread.join(timeout=join_timeout)
 
+        from chdevflow.core.local_executor import get_active_processes
+        procs_restantes = get_active_processes(execution_id)
+
         with self._lock:
-            if worker_thread and worker_thread.is_alive():
-                # A worker thread ainda está viva! Mantém o lock e status não-terminal CANCELAMENTO_PENDENTE
+            if (worker_thread and worker_thread.is_alive()) or procs_restantes:
+                # A worker thread ainda está viva ou ainda há subprocessos vivos no host!
+                # Mantém o lock e status não-terminal CANCELAMENTO_PENDENTE
                 record.status = "CANCELAMENTO_PENDENTE"
-                aviso = "Cancelamento solicitado pelo operador; aguardando encerramento da worker thread."
+                if procs_restantes:
+                    pids = [p.pid for p in procs_restantes]
+                    aviso = (
+                        f"Cancelamento inconclusivo: {len(procs_restantes)} subprocesso(s) ainda ativo(s) "
+                        f"no host (PID(s): {pids}). Exclusividade e lock mantidos."
+                    )
+                else:
+                    aviso = "Cancelamento solicitado pelo operador; aguardando encerramento da worker thread."
                 if aviso not in record.findings:
                     record.findings.append(aviso)
                 self._persist_record(record)

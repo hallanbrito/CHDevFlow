@@ -1269,5 +1269,258 @@ def test_adversarial_p2_ui_comportamento_cancelamento_pendente_e_polling(lab_env
     reset_services()
 
 
+def test_adversarial_p1_typeerror_interno_nao_reinvoque_cycle_runner(lab_env):
+    """P1-1: Comprova que um TypeError interno no runner NÃO dispara reinvocação e preserva evidências."""
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    calls = 0
+
+    def runner_com_typeerror_interno(**kwargs):
+        nonlocal calls
+        calls += 1
+        evidence = kwargs["evidence"]
+        evidence.mkdir(mode=0o700, exist_ok=True)
+        # Cria evidência antes do erro
+        (evidence / "artefato_parcial.txt").write_text("Evidência gerada antes do erro", encoding="utf-8")
+        # Dispara TypeError interno de execução
+        raise TypeError("Erro interno de tipo durante processamento do lote: int + None")
+
+    exec_svc = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_com_typeerror_interno,
+    )
+
+    res = exec_svc.executar_missao(
+        manifest_path=lab_env["manifest_path"],
+        confirmacao_po=True,
+    )
+    exec_id = res["execution_id"]
+
+    # Aguarda término da thread
+    thread = exec_svc._threads.get(exec_id)
+    if thread:
+        thread.join(timeout=3.0)
+
+    detalhes = exec_svc.obter_execucao(exec_id)
+    # Asserções P1-1
+    assert calls == 1, f"cycle_runner deveria ter sido chamado exatamente 1 vez, mas foi chamado {calls} vezes"
+    assert detalhes["status"] == "BLOQUEADO_INFRA_OU_ESCOPO"
+    assert any("Erro interno de tipo durante processamento" in f for f in detalhes["findings"])
+
+    # Evidência deve ser preservada no disco
+    evidence_dir = Path(detalhes["evidence_dir"])
+    assert (evidence_dir / "artefato_parcial.txt").exists()
+    assert (evidence_dir / "artefato_parcial.txt").read_text(encoding="utf-8") == "Evidência gerada antes do erro"
+
+    reset_services()
+
+
+def test_adversarial_p1_cycle_runner_legado_sem_execution_id(lab_env):
+    """P1-1: Comprova compatibilidade com assinatura legada sem kwargs sem dupla execução."""
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    legacy_calls = 0
+
+    # Função sem **kwargs e sem execution_id
+    def runner_legado(manifest_path, evidence, accepted, timeout, isolated_tests, cancel_check):
+        nonlocal legacy_calls
+        legacy_calls += 1
+        evidence.mkdir(mode=0o700, exist_ok=True)
+        (evidence / "execucao.json").write_text(json.dumps({
+            "status": "APROVADO_AGUARDANDO_CH1",
+            "execution_id": "fake-legado",
+            "attempts": [],
+            "returns_used": 0,
+            "findings": [],
+        }), encoding="utf-8")
+        return GenericResult(
+            status="APROVADO_AGUARDANDO_CH1",
+            execution_id="fake-legado",
+            mission_id="MISSAO-TESTE-121",
+            issue=121,
+            mission_digest="abc",
+        )
+
+    exec_svc = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_legado,
+    )
+
+    res = exec_svc.executar_missao(
+        manifest_path=lab_env["manifest_path"],
+        confirmacao_po=True,
+    )
+    exec_id = res["execution_id"]
+
+    thread = exec_svc._threads.get(exec_id)
+    if thread:
+        thread.join(timeout=3.0)
+
+    detalhes = exec_svc.obter_execucao(exec_id)
+    assert legacy_calls == 1
+    assert detalhes["status"] == "APROVADO_AGUARDANDO_CH1"
+
+    reset_services()
+
+
+def test_adversarial_p1_falha_kill_tree_preserva_rastreio_e_lock(lab_env):
+    """P1-2: Comprova que se _kill_tree falha e subprocesso continua vivo, lock é mantido e B recebe 409."""
+    import sys
+    from chdevflow.core.local_executor import (
+        get_active_processes,
+        register_active_process,
+        unregister_active_process,
+    )
+
+    reset_services()
+    data_dir = lab_env["data_dir"]
+
+    # Cria subprocesso real de espera
+    proc_stubborn = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+
+    try:
+        def runner_com_subprocesso(**kwargs):
+            # Registra o subprocesso como pertencente a esta execução
+            register_active_process(proc_stubborn, execution_id=kwargs.get("execution_id"))
+            cancel_check = kwargs.get("cancel_check")
+            while True:
+                if cancel_check and cancel_check():
+                    break
+                time.sleep(0.05)
+            return GenericResult(
+                status="CANCELADO",
+                execution_id=kwargs.get("execution_id", "a"),
+                mission_id="MISSAO-A",
+                issue=121,
+                mission_digest="da",
+            )
+
+        exec_svc = ExecutionService(
+            data_dir=data_dir,
+            labs_root=lab_env["labs_root"],
+            cycle_runner=runner_com_subprocesso,
+        )
+        app = create_app()
+        app.dependency_overrides[get_execution_service] = lambda: exec_svc
+        client = TestClient(app, base_url="http://127.0.0.1:8000")
+        token = obter_csrf_token()
+        headers = {
+            "Origin": "http://127.0.0.1:8000",
+            "Referer": "http://127.0.0.1:8000/missoes",
+            "X-CSRF-Token": token,
+        }
+
+        # 1. Dispara Missão A
+        resp_a = client.post("/api/missoes/executar", json={
+            "manifest_path": str(lab_env["manifest_path"]),
+            "confirmacao_po": True,
+            "csrf_token": token,
+        }, headers=headers)
+        assert resp_a.status_code == 202
+        exec_id_a = resp_a.json()["execution_id"]
+        time.sleep(0.1)
+
+        # 2. Injeta falha em _kill_tree para simular processo que resiste ao kill
+        with patch("chdevflow.core.local_executor._kill_tree", side_effect=RuntimeError("Falha simulada no kill")):
+            res_cancel = exec_svc.cancelar_execucao(exec_id_a, join_timeout=0.1)
+            assert res_cancel["status"] == "CANCELAMENTO_PENDENTE"
+
+        # 3. Comprova que o processo permanece vivo e rastreado
+        assert proc_stubborn.poll() is None, "Processo teimoso deve permanecer vivo"
+        assert proc_stubborn in get_active_processes(exec_id_a)
+
+        # 4. Comprova que A NÃO liberou o lock e exclusividade está mantida
+        assert exec_svc.lock_file.exists()
+        assert exec_svc._active_execution_id == exec_id_a
+
+        # 5. Missão B tenta disparar e DEVE receber HTTP 409 Conflict
+        resp_b = client.post("/api/missoes/executar", json={
+            "manifest_path": str(lab_env["manifest_path"]),
+            "confirmacao_po": True,
+            "csrf_token": token,
+        }, headers=headers)
+        assert resp_b.status_code == 409
+        assert "Apenas uma execução é permitida simultaneamente" in resp_b.json()["detail"] or "Trava local detectada" in resp_b.json()["detail"]
+
+        # 6. Agora encerra comprovadamente o processo stub
+        proc_stubborn.kill()
+        proc_stubborn.wait(timeout=2)
+        assert proc_stubborn.poll() is not None
+
+        # 7. Consulta de status atualiza para CANCELADO e libera o lock
+        detalhes_a = exec_svc.obter_execucao(exec_id_a)
+        assert detalhes_a["status"] == "CANCELADO"
+        assert not exec_svc.lock_file.exists()
+        assert exec_svc._active_execution_id is None
+
+        # 8. Agora Missão B consegue executar normalmente
+        def runner_b(**kwargs):
+            return GenericResult(
+                status="APROVADO_AGUARDANDO_CH1",
+                execution_id="b",
+                mission_id="MISSAO-B",
+                issue=121,
+                mission_digest="db",
+            )
+        exec_svc.cycle_runner = runner_b
+        resp_b_ok = client.post("/api/missoes/executar", json={
+            "manifest_path": str(lab_env["manifest_path"]),
+            "confirmacao_po": True,
+            "csrf_token": token,
+        }, headers=headers)
+        assert resp_b_ok.status_code == 202
+
+    finally:
+        # Limpeza defensiva do subprocesso
+        if proc_stubborn.poll() is None:
+            proc_stubborn.kill()
+            proc_stubborn.wait()
+        unregister_active_process(proc_stubborn)
+        reset_services()
+
+
+def test_adversarial_p2_contexto_thread_local_nao_vaza_apos_erro_no_motor(lab_env):
+    """P2: Comprova que invocar o motor diretamente com erro não vaza execution_id no thread-local."""
+    from chdevflow.core.generic_cycle import run_generic_cycle
+    from chdevflow.core.local_executor import get_current_execution_id, set_current_execution_id
+
+    # Garante que antes da chamada está limpo
+    assert get_current_execution_id() is None
+
+    # Simula erro fatal dentro do motor durante a execução
+    with patch("chdevflow.core.generic_cycle._executables", return_value=(["fake-agy"], ["fake-codex"])), \
+         patch("chdevflow.core.generic_cycle._run_command", side_effect=RuntimeError("Falha simulada na execução")):
+        with pytest.raises(RuntimeError):
+            run_generic_cycle(
+                manifest_path=lab_env["manifest_path"],
+                evidence=lab_env["tmp_path"] / "dossie_teste_p2",
+                accepted=True,
+                execution_id="exec-teste-p2",
+            )
+
+    # Asserção crítica de P2: o execution_id NÃO pode ter vazado
+    assert get_current_execution_id() is None, "execution_id não pode vazar após erro no motor"
+
+    # Testa também contexto aninhado pré-existente: valor anterior deve ser preservado sem destruição
+    set_current_execution_id("contexto-pai-externo")
+    try:
+        with patch("chdevflow.core.generic_cycle._executables", return_value=(["fake-agy"], ["fake-codex"])), \
+             patch("chdevflow.core.generic_cycle._run_command", side_effect=RuntimeError("Falha aninhada")):
+            with pytest.raises(RuntimeError):
+                run_generic_cycle(
+                    manifest_path=lab_env["manifest_path"],
+                    evidence=lab_env["tmp_path"] / "dossie_teste_p2_nested",
+                    accepted=True,
+                    execution_id="exec-filho-interno",
+                )
+        # O contexto anterior DEVE ser restaurado com fidelidade
+        assert get_current_execution_id() == "contexto-pai-externo"
+    finally:
+        set_current_execution_id(None)
+
+
+
 
 

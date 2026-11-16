@@ -229,194 +229,193 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     # paths privados); vincula cada tentativa ao plano Git pinado.
     (evidence / "manifesto_missao.json").write_bytes(mission.canonical())
     resolved_execution_id = execution_id or uuid4().hex
-    from chdevflow.core.local_executor import set_current_execution_id
-    set_current_execution_id(resolved_execution_id)
-
-    result = GenericResult(
-        "INICIADO", resolved_execution_id, mission.mission_id, mission.issue, mission.digest)
-    if isolated_tests:
-        result.test_execution = "docker-readonly-no-network:" + docker_image_id
-    deadline = time.monotonic() + min(timeout, mission.timeout_seconds)
-    source_path = root / target
-    baseline = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
-    previous = baseline
-    feedback = ""
-    _persist(evidence, result)
-    for number in range(1, MAX_ATTEMPTS + 1):
-        if cancel_check and cancel_check():
-            result.status = "CANCELADO"
-            result.findings.append("Execucao cancelada pelo operador")
-            break
-        remaining = int(deadline - time.monotonic())
-        if remaining < 120:
-            result.status = "ORCAMENTO_ESGOTADO"
-            result.findings.append("Sem tempo para outra tentativa")
-            break
-        directory = evidence / f"attempt-{number:02d}"
-        directory.mkdir()
-        row = {"number": number, "status": "AGY_EXECUTANDO",
-               "codex_verdict": "NAO_EXECUTADO", "sha256": None}
-        result.attempts.append(row)
-        result.status = "EM_EXECUCAO"
-        _persist(evidence, result)  # write-ahead: nunca cobrar AGY sem registrar
-        stage = "AGY"
-        try:
-            _guard(root, target, snapshot, allow_target=number > 1)
-            fence = chr(96) * 3
-            request = (
-                "Implemente APENAS o arquivo Python da missao abaixo. "
-                "Sem ferramentas, terminal, rede, edicao direta, instalacao, "
-                "GitHub ou agendamento. Responda um unico bloco Markdown python "
-                "com o arquivo COMPLETO.\n"
-                f"Missao {mission.mission_id} | issue {mission.issue} | arquivo {target}\n"
-                f"Requisitos:\n{prompt}\n"
-                f"Codigo anterior:\n{fence}python\n{previous}\n{fence}\n"
-                + (f"Correcao obrigatoria:\n{feedback}\n" if feedback else ""))
-            raw = _run_command(
-                [*agy, "--sandbox", "--mode", "plan", "--disable-slash-commands",
-                 "--output-format", "json", "--print", request],
-                cwd=root, stdin=None, timeout=min(remaining, int(timeout * .65)))
-            _write_process_log(directory / "agy.log", raw)
-            if raw.code or raw.timed_out:
-                raise ValueError("AGY indisponivel/timeout; nao repetir")
-            candidate = _extract(_agy_response(raw))
-            _guard(root, target, snapshot, allow_target=number > 1)
-            source_path.write_text(candidate, encoding="utf-8", newline="\n")
-            sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
-            row["sha256"] = sha
-            (directory / "codigo.py").write_text(candidate, encoding="utf-8")
-            patch = _audit_patch(baseline, candidate, target)
-            if not patch:
-                raise ValueError("Arquivo sem mudancas frente ao baseline; auditoria vazia proibida")
-            (directory / "alteracoes.patch").write_text(_clean(patch), encoding="utf-8")
-            _guard(root, target, snapshot, allow_target=True)
-            stage = "TESTES"
-            remaining = int(deadline - time.monotonic())
-            if remaining < 30:
-                raise ValueError("Orcamento sem tempo para testes/Codex")
-            test_command = (
-                docker_acceptance.build_command(root) if isolated_tests else
-                [sys.executable, "-I", "-B", "-m", "unittest", "discover",
-                 "-s", "tests", "-p", "test_*.py", "-v"])
-            tests = _run_command(
-                test_command, cwd=root, stdin=None,
-                timeout=min(60, remaining))
-            _write_process_log(directory / "testes.log", tests)
-            # Somente uma invocacao efetiva do executor Docker pode fornecer
-            # evidencias F7 elegiveis; o modo host jamais atesta isolamento.
-            if isolated_tests and not tests.timed_out:
-                result.os_isolation_verified = True
-            if tests.timed_out:
-                raise ValueError("Timeout nos testes")
-            test_output = tests.stdout + tests.stderr
-            if not re.search(r"Ran [1-9][0-9]* tests?", test_output):
-                raise ValueError("Suite nao reportou testes reais")
-            _guard(root, target, snapshot, allow_target=True)
-            if source_path.read_bytes() != candidate.encode("utf-8"):
-                raise ValueError("Arquivo do teste diverge do codigo AGY auditado")
-            changed_files = _git(root, "status", "--porcelain", "--untracked-files=all")
-            if tests.code:
-                # Nao devolver falhas de instalacao/importacao ou ambiente ao AGY.
-                # Apenas reprovacao assertion de testes de aceite e corrigivel.
-                if (re.search(r"ModuleNotFoundError|ImportError|FileNotFoundError",
-                              test_output) or
-                        not re.search(r"FAILED\s*\(failures=[1-9]", test_output)):
-                    raise ValueError("Suite falhou por infra/erro inconclusivo")
-                row["status"] = "TESTES_REPROVADOS"
-                feedback = _clean(test_output)[-6000:]
-            else:
-                stage = "CODEX"
-                remaining = int(deadline - time.monotonic())
-                if remaining < 20:
-                    raise ValueError("Tempo restante insuficiente para Codex")
-                codex_prompt = (
-                    "Auditoria independente apenas textual. Nao edite nem use ferramentas. "
-                    "Primeira linha OBRIGATORIA: VEREDITO: APROVAR_LAB ou "
-                    "VEREDITO: BLOQUEADO. Em seguida achados e correcoes.\n"
-                    f"Missao:\n{prompt}\nArquivo: {target}\n"
-                    f"Codigo completo gerado, SHA256={sha}:\n"
-                    f"{fence}python\n{candidate}{fence}\n"
-                    f"Arquivos alterados (Git Porcelain, validados pela allowlist):\n"
-                    f"{changed_files}\n"
-                    f"Patch textual (baseline original vs codigo, LF normalizado):\n"
-                    f"{patch}\nTestes Docker/host:\n{test_output[-6000:]}")
-                audit = _run_command(
-                    [*codex, "-a", "never", "exec", "--sandbox", "read-only",
-                     "--ephemeral", "--skip-git-repo-check", "--json", "-"],
-                    cwd=root, stdin=codex_prompt, timeout=remaining)
-                _write_process_log(directory / "codex.log", audit)
-                if audit.timed_out or audit.code:
-                    raise ValueError("Codex indisponivel/timeout; nao repetir")
-                text = _codex_final_message(audit.stdout)
-                (directory / "auditoria_codex.md").write_text(
-                    _clean(text), encoding="utf-8")
-                verdict = text.strip().splitlines()[0].strip()
-                if verdict not in ("VEREDITO: APROVAR_LAB", "VEREDITO: BLOQUEADO"):
-                    raise ValueError("Codex sem parecer final valido")
-                row["codex_verdict"] = verdict.split(": ", 1)[1]
-                _guard(root, target, snapshot, allow_target=True)
-                if source_path.read_bytes() != candidate.encode("utf-8"):
-                    raise ValueError("Arquivo alterado durante auditoria; parecer invalido")
-                if row["codex_verdict"] == "APROVAR_LAB":
-                    row["status"] = "PASS"
-                    result.status = "APROVADO_AGUARDANDO_CH1"
-                    break
-                row["status"] = "CODEX_REPROVOU"
-                feedback = _clean(text)[-6000:]
-            previous = candidate
-            if number == MAX_ATTEMPTS:
-                result.status = "AGUARDANDO_PO"
-                result.findings.append("Tres reprovações; nenhuma quarta chamada")
-                # Outbox F7 duravel e sem caminhos absolutos/segredos.
-                # NUNCA tenta publicar ou reinicia agentes por falha de GitHub.
-                from chdevflow.core.po_escalation import (
-                    EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
-                )
-                files = (EVIDENCE_FILES_TESTS_REPROVADOS
-                         if row["status"] == "TESTES_REPROVADOS" else EVIDENCE_FILES)
-                outbox = {
-                    "schema": "CHDEVFLOW-F7-OUTBOX/1",
-                    "execution_id": result.execution_id,
-                    "mission_id": mission.mission_id, "issue": mission.issue,
-                    "status": "AGUARDANDO_PO",
-                    "publication_status": "PENDENTE_DE_AUTORIZACAO",
-                    "attempts": 3, "returns": result.returns_used,
-                    "code_sha256": sha,
-                    "third_attempt_status": row["status"],
-                    "evidence_files": list(files),
-                }
-                # Concluir/flush o registro primeiro para vincular a
-                # outbox aos hashes dos artefatos de todas as tres tentativas.
-                _persist(evidence, result)
-                from chdevflow.core.po_escalation_provenance import create_provenance
-                outbox["provenance"] = create_provenance(evidence)
-                receipt = evidence / "escalonamento_po.json"
-                temporary = evidence / "escalonamento_po.json.tmp"
-                with temporary.open("x", encoding="utf-8") as handle:
-                    json.dump(outbox, handle, ensure_ascii=False, indent=2)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary, receipt)
-                break
-            (directory / "feedback_para_agy.md").write_text(
-                _clean(feedback), encoding="utf-8")
-            result.returns_used += 1
-            result.status = "CORRECAO_PENDENTE"
-        except (ValueError, OSError, UnicodeError, SyntaxError,
-                subprocess.SubprocessError) as exc:
+    from chdevflow.core.local_executor import execution_context
+    with execution_context(resolved_execution_id):
+        result = GenericResult(
+            "INICIADO", resolved_execution_id, mission.mission_id, mission.issue, mission.digest)
+        if isolated_tests:
+            result.test_execution = "docker-readonly-no-network:" + docker_image_id
+        deadline = time.monotonic() + min(timeout, mission.timeout_seconds)
+        source_path = root / target
+        baseline = source_path.read_text(encoding="utf-8") if source_path.is_file() else ""
+        previous = baseline
+        feedback = ""
+        _persist(evidence, result)
+        for number in range(1, MAX_ATTEMPTS + 1):
             if cancel_check and cancel_check():
-                row["status"] = "CANCELADO"
                 result.status = "CANCELADO"
                 result.findings.append("Execucao cancelada pelo operador")
                 break
-            row["status"] = "BLOQUEADO"
-            result.status = "BLOQUEADO_INFRA_OU_ESCOPO"
-            result.findings.append(stage + ": " + _clean(str(exc)))
-            break
-        finally:
-            _persist(evidence, result)
-    _persist(evidence, result)
-    return result
+            remaining = int(deadline - time.monotonic())
+            if remaining < 120:
+                result.status = "ORCAMENTO_ESGOTADO"
+                result.findings.append("Sem tempo para outra tentativa")
+                break
+            directory = evidence / f"attempt-{number:02d}"
+            directory.mkdir()
+            row = {"number": number, "status": "AGY_EXECUTANDO",
+                   "codex_verdict": "NAO_EXECUTADO", "sha256": None}
+            result.attempts.append(row)
+            result.status = "EM_EXECUCAO"
+            _persist(evidence, result)  # write-ahead: nunca cobrar AGY sem registrar
+            stage = "AGY"
+            try:
+                _guard(root, target, snapshot, allow_target=number > 1)
+                fence = chr(96) * 3
+                request = (
+                    "Implemente APENAS o arquivo Python da missao abaixo. "
+                    "Sem ferramentas, terminal, rede, edicao direta, instalacao, "
+                    "GitHub ou agendamento. Responda um unico bloco Markdown python "
+                    "com o arquivo COMPLETO.\n"
+                    f"Missao {mission.mission_id} | issue {mission.issue} | arquivo {target}\n"
+                    f"Requisitos:\n{prompt}\n"
+                    f"Codigo anterior:\n{fence}python\n{previous}\n{fence}\n"
+                    + (f"Correcao obrigatoria:\n{feedback}\n" if feedback else ""))
+                raw = _run_command(
+                    [*agy, "--sandbox", "--mode", "plan", "--disable-slash-commands",
+                     "--output-format", "json", "--print", request],
+                    cwd=root, stdin=None, timeout=min(remaining, int(timeout * .65)))
+                _write_process_log(directory / "agy.log", raw)
+                if raw.code or raw.timed_out:
+                    raise ValueError("AGY indisponivel/timeout; nao repetir")
+                candidate = _extract(_agy_response(raw))
+                _guard(root, target, snapshot, allow_target=number > 1)
+                source_path.write_text(candidate, encoding="utf-8", newline="\n")
+                sha = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+                row["sha256"] = sha
+                (directory / "codigo.py").write_text(candidate, encoding="utf-8")
+                patch = _audit_patch(baseline, candidate, target)
+                if not patch:
+                    raise ValueError("Arquivo sem mudancas frente ao baseline; auditoria vazia proibida")
+                (directory / "alteracoes.patch").write_text(_clean(patch), encoding="utf-8")
+                _guard(root, target, snapshot, allow_target=True)
+                stage = "TESTES"
+                remaining = int(deadline - time.monotonic())
+                if remaining < 30:
+                    raise ValueError("Orcamento sem tempo para testes/Codex")
+                test_command = (
+                    docker_acceptance.build_command(root) if isolated_tests else
+                    [sys.executable, "-I", "-B", "-m", "unittest", "discover",
+                     "-s", "tests", "-p", "test_*.py", "-v"])
+                tests = _run_command(
+                    test_command, cwd=root, stdin=None,
+                    timeout=min(60, remaining))
+                _write_process_log(directory / "testes.log", tests)
+                # Somente uma invocacao efetiva do executor Docker pode fornecer
+                # evidencias F7 elegiveis; o modo host jamais atesta isolamento.
+                if isolated_tests and not tests.timed_out:
+                    result.os_isolation_verified = True
+                if tests.timed_out:
+                    raise ValueError("Timeout nos testes")
+                test_output = tests.stdout + tests.stderr
+                if not re.search(r"Ran [1-9][0-9]* tests?", test_output):
+                    raise ValueError("Suite nao reportou testes reais")
+                _guard(root, target, snapshot, allow_target=True)
+                if source_path.read_bytes() != candidate.encode("utf-8"):
+                    raise ValueError("Arquivo do teste diverge do codigo AGY auditado")
+                changed_files = _git(root, "status", "--porcelain", "--untracked-files=all")
+                if tests.code:
+                    # Nao devolver falhas de instalacao/importacao ou ambiente ao AGY.
+                    # Apenas reprovacao assertion de testes de aceite e corrigivel.
+                    if (re.search(r"ModuleNotFoundError|ImportError|FileNotFoundError",
+                                  test_output) or
+                            not re.search(r"FAILED\s*\(failures=[1-9]", test_output)):
+                        raise ValueError("Suite falhou por infra/erro inconclusivo")
+                    row["status"] = "TESTES_REPROVADOS"
+                    feedback = _clean(test_output)[-6000:]
+                else:
+                    stage = "CODEX"
+                    remaining = int(deadline - time.monotonic())
+                    if remaining < 20:
+                        raise ValueError("Tempo restante insuficiente para Codex")
+                    codex_prompt = (
+                        "Auditoria independente apenas textual. Nao edite nem use ferramentas. "
+                        "Primeira linha OBRIGATORIA: VEREDITO: APROVAR_LAB ou "
+                        "VEREDITO: BLOQUEADO. Em seguida achados e correcoes.\n"
+                        f"Missao:\n{prompt}\nArquivo: {target}\n"
+                        f"Codigo completo gerado, SHA256={sha}:\n"
+                        f"{fence}python\n{candidate}{fence}\n"
+                        f"Arquivos alterados (Git Porcelain, validados pela allowlist):\n"
+                        f"{changed_files}\n"
+                        f"Patch textual (baseline original vs codigo, LF normalizado):\n"
+                        f"{patch}\nTestes Docker/host:\n{test_output[-6000:]}")
+                    audit = _run_command(
+                        [*codex, "-a", "never", "exec", "--sandbox", "read-only",
+                         "--ephemeral", "--skip-git-repo-check", "--json", "-"],
+                        cwd=root, stdin=codex_prompt, timeout=remaining)
+                    _write_process_log(directory / "codex.log", audit)
+                    if audit.timed_out or audit.code:
+                        raise ValueError("Codex indisponivel/timeout; nao repetir")
+                    text = _codex_final_message(audit.stdout)
+                    (directory / "auditoria_codex.md").write_text(
+                        _clean(text), encoding="utf-8")
+                    verdict = text.strip().splitlines()[0].strip()
+                    if verdict not in ("VEREDITO: APROVAR_LAB", "VEREDITO: BLOQUEADO"):
+                        raise ValueError("Codex sem parecer final valido")
+                    row["codex_verdict"] = verdict.split(": ", 1)[1]
+                    _guard(root, target, snapshot, allow_target=True)
+                    if source_path.read_bytes() != candidate.encode("utf-8"):
+                        raise ValueError("Arquivo alterado durante auditoria; parecer invalido")
+                    if row["codex_verdict"] == "APROVAR_LAB":
+                        row["status"] = "PASS"
+                        result.status = "APROVADO_AGUARDANDO_CH1"
+                        break
+                    row["status"] = "CODEX_REPROVOU"
+                    feedback = _clean(text)[-6000:]
+                previous = candidate
+                if number == MAX_ATTEMPTS:
+                    result.status = "AGUARDANDO_PO"
+                    result.findings.append("Tres reprovações; nenhuma quarta chamada")
+                    # Outbox F7 duravel e sem caminhos absolutos/segredos.
+                    # NUNCA tenta publicar ou reinicia agentes por falha de GitHub.
+                    from chdevflow.core.po_escalation import (
+                        EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
+                    )
+                    files = (EVIDENCE_FILES_TESTS_REPROVADOS
+                             if row["status"] == "TESTES_REPROVADOS" else EVIDENCE_FILES)
+                    outbox = {
+                        "schema": "CHDEVFLOW-F7-OUTBOX/1",
+                        "execution_id": result.execution_id,
+                        "mission_id": mission.mission_id, "issue": mission.issue,
+                        "status": "AGUARDANDO_PO",
+                        "publication_status": "PENDENTE_DE_AUTORIZACAO",
+                        "attempts": 3, "returns": result.returns_used,
+                        "code_sha256": sha,
+                        "third_attempt_status": row["status"],
+                        "evidence_files": list(files),
+                    }
+                    # Concluir/flush o registro primeiro para vincular a
+                    # outbox aos hashes dos artefatos de todas as tres tentativas.
+                    _persist(evidence, result)
+                    from chdevflow.core.po_escalation_provenance import create_provenance
+                    outbox["provenance"] = create_provenance(evidence)
+                    receipt = evidence / "escalonamento_po.json"
+                    temporary = evidence / "escalonamento_po.json.tmp"
+                    with temporary.open("x", encoding="utf-8") as handle:
+                        json.dump(outbox, handle, ensure_ascii=False, indent=2)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(temporary, receipt)
+                    break
+                (directory / "feedback_para_agy.md").write_text(
+                    _clean(feedback), encoding="utf-8")
+                result.returns_used += 1
+                result.status = "CORRECAO_PENDENTE"
+            except (ValueError, OSError, UnicodeError, SyntaxError,
+                    subprocess.SubprocessError) as exc:
+                if cancel_check and cancel_check():
+                    row["status"] = "CANCELADO"
+                    result.status = "CANCELADO"
+                    result.findings.append("Execucao cancelada pelo operador")
+                    break
+                row["status"] = "BLOQUEADO"
+                result.status = "BLOQUEADO_INFRA_OU_ESCOPO"
+                result.findings.append(stage + ": " + _clean(str(exc)))
+                break
+            finally:
+                _persist(evidence, result)
+        _persist(evidence, result)
+        return result
 
 
 def main(argv=None) -> int:

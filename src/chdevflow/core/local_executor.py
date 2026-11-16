@@ -7,6 +7,7 @@ Compatível com Windows e Linux; a autenticação só é comprovada por turno re
 from __future__ import annotations
 
 from dataclasses import dataclass
+import contextlib
 import os
 from pathlib import Path
 import shutil
@@ -124,6 +125,17 @@ def get_current_execution_id() -> str | None:
     return getattr(_EXECUTION_CONTEXT, "execution_id", None)
 
 
+@contextlib.contextmanager
+def execution_context(execution_id: str | None):
+    """Context manager que define o execution_id ativo para o escopo e garante reversão segura no finally."""
+    prev = get_current_execution_id()
+    set_current_execution_id(execution_id)
+    try:
+        yield
+    finally:
+        set_current_execution_id(prev)
+
+
 def register_active_process(process: subprocess.Popen, execution_id: str | None = None) -> None:
     """Registra um processo filho ativo associado ao seu proprietário de execução."""
     owner_id = execution_id if execution_id is not None else get_current_execution_id()
@@ -138,8 +150,12 @@ def unregister_active_process(process: subprocess.Popen) -> None:
 
 
 def get_active_processes(execution_id: str | None = None) -> list[subprocess.Popen]:
-    """Retorna os subprocessos ativos. Se execution_id for informado, filtra pelo proprietário."""
+    """Retorna os subprocessos ativos comprovadamente vivos. Se execution_id for informado, filtra pelo proprietário."""
     with _ACTIVE_PROCESSES_LOCK:
+        # Purga do registro apenas os processos cujo encerramento já foi comprovado no SO
+        mortos = [p for p in list(_ACTIVE_PROCESSES.keys()) if p.poll() is not None]
+        for p in mortos:
+            _ACTIVE_PROCESSES.pop(p, None)
         if execution_id is None:
             return list(_ACTIVE_PROCESSES.keys())
         return [proc for proc, owner in _ACTIVE_PROCESSES.items() if owner == execution_id]
@@ -150,6 +166,7 @@ def terminate_all_active_processes(*, execution_id: str | None = None, platform:
 
     Se execution_id for especificado, encerra SOMENTE os processos associados
     a essa execucao, sem afetar subprocessos de outras execucoes concorrentes.
+    SOMENTE retira do registro processos cujo término foi comprovado no SO.
     """
     system = platform or sys.platform
     with _ACTIVE_PROCESSES_LOCK:
@@ -164,8 +181,12 @@ def terminate_all_active_processes(*, execution_id: str | None = None, platform:
             terminated += 1
         except Exception:
             pass
-        finally:
-            unregister_active_process(proc)
+        # Só desregistra se o término foi comprovado no SO
+        try:
+            if proc.poll() is not None:
+                unregister_active_process(proc)
+        except Exception:
+            pass
     return terminated
 
 
@@ -232,7 +253,8 @@ def run_local_command(command: list[str], *, cwd: Path, stdin: str | None,
         _kill_tree(process, platform=system)
         raise
     finally:
-        unregister_active_process(process)
+        if process.poll() is not None:
+            unregister_active_process(process)
 
 
 def _executables() -> tuple[list[str], list[str]]:
