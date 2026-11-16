@@ -32,6 +32,16 @@ Após o parecer, a PR foi atualizada para exigir também **ID GitHub numérico f
 
 A próxima auditoria deve analisar o **novo commit exato** depois da CI e o mecanismo de identidade do artefato executado. A variável administrativa `CH_F7_AUDITED_COMMIT_SHA` **não deve ser cadastrada** antes de veredito e aprovação específica do PO.
 
+## Segunda auditoria independente Codex — BLOQUEADO (16/11/2026)
+
+O PO executou `scripts/Auditar_F7_Codex.ps1` em clone separado, checkout detached e worktree limpa no commit `d29021634f75e8680c3e9b3919c2e8639182d596`. O Codex CLI retornou **VEREDITO: BLOQUEADO**, com **3 achados ALTOS, 4 MÉDIOS e 1 BAIXO**; registro de origem local `CHDevFlow-Labs/CH-F7-Codex-Auditoria-d2902163.jsonl`. A avaliação foi **textual**: Codex não utilizou ferramentas, não verificou GitHub/runs nem executou testes diretamente. A CI anterior estava verde, mas isso não supera os bloqueios.
+
+**Bloqueios altos:** (1) ausência de custódia/atestação em runner protegido compatível com uma outbox V1 real (a sonda de laboratório não serve como prova de produção); (2) verificação de identidade do executor somente *in-process*, sem binários/dependências/runner isolado e com lacuna para funções substituídas por objetos `callable`; (3) âncora de confiança da atestação entregue por variáveis do ambiente local, sem confrontação LIVE de run/workflow/artefato pelo publicador. A revisão também apontou janela de revogação antes do POST, ensaio multi-host ainda não coberto na própria auditoria, fraqueza do ID numérico no readback, integridade local diferente da custódia remota e vulnerabilidade residual de escrita de recibo em ancestrais.
+
+**Resposta técnica sem aceite automático:** foram abertas correções na Draft PR #94 para exigir `user.id` do PO no reconhecimento de comentário e na reconciliação, além de negar exportações Python/métodos substituídos por objetos chamáveis opacos. A auditoria do SHA antigo não se estende ao novo HEAD; após CI verde será necessária nova avaliação, ainda mantendo o bloqueio dos riscos altos restantes.
+
+A matriz completa está registrada na [PR #94](https://github.com/hallanbrito/CHDevFlow/pull/94#issuecomment-6918659143) e [Issue #95](https://github.com/hallanbrito/CHDevFlow/issues/95#issuecomment-6918661271). Não cadastrar `CH_F7_AUDITED_COMMIT_SHA`, não usar a sonda como autorização para outbox real, não ativar `REMOTE_PUBLICATION_ENABLED`.
+
 ## Evidência adicional de identidade de código carregado
 
 O módulo `src/chdevflow/core/po_escalation_runtime.py` inspeciona a origem dos módulos críticos F7, compara cada blob com `git rev-parse SHA:caminho` e `git hash-object --path` (inclusive normalização Git/CRLF) e confere os `code objects` das funções Python presentes em memória contra a fonte recompilada. O digest `f7_runtime_digest` vincula essas observações ao plano, ao snapshot e ao readback.
