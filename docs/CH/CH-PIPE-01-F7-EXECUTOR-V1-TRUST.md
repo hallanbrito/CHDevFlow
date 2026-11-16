@@ -98,6 +98,52 @@ A assinatura do Environment deve cobrir **todos esses campos**, não apenas
 código gerado e outbox. O publicador não pode reescrever o manifesto confiável.
 Terceiro job, sem chave privada, deve validar assinatura e origem LIVE.
 
+### Atestação de build nativa do GitHub (caminho preferencial)
+
+Usar **GitHub Artifact Attestations (Sigstore)** para atestar um pacote ou
+imagem OCI referenciado por digest, com identidade OIDC do workflow. Segundo
+as instruções oficiais do GitHub, o job construtor requer as permissões
+`id-token: write`, `contents: read`, `attestations: write` e a ação
+`actions/attest@v4` com `subject-path` para artefato (ou
+`subject-name`/`subject-digest` para imagem). Para imagem em GHCR,
+`packages: write` seria uma permissão adicional. Nenhuma permissão de
+escrita ao Project #2.
+
+Exemplo **proposto, NÃO configurado nem executado**:
+
+~~~yaml
+permissions:
+  id-token: write
+  contents: read
+  attestations: write
+steps:
+  - name: Atestar o pacote do executor construido e fixado
+    uses: actions/attest@v4
+    with:
+      subject-path: ./dist/executor-f7.tar.gz
+~~~
+
+A verificação em job/ambiente distinto deverá exigir repositório e
+workflow específico, por exemplo:
+
+~~~powershell
+gh attestation verify .\dist\executor-f7.tar.gz `
+  -R hallanbrito/CHDevFlow `
+  --signer-workflow hallanbrito/CHDevFlow/.github/workflows/f7-v1-producer.yml
+~~~
+
+Verificar também o SHA Git, branch, digest do executável e manifesto
+antes de aceitar. O atestado GitHub comprova **proveniência do build**;
+não comprova segurança funcional, todas as dependências ou ausência de
+comprometimento do runner. Não usar atestação apenas do código-fonte
+como prova de execução imutável. Considerar workflow reutilizável
+controlado e runner efêmero para reduzir privilégios.
+
+Referências oficiais:
+- https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations
+- https://docs.github.com/en/actions/concepts/security/artifact-attestations
+
+
 ## Plano de homologação incremental
 
 **E3-A — Política de confiança e origem (Draft agora):**
