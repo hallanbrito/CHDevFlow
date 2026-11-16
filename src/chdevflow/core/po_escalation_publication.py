@@ -223,9 +223,12 @@ def _eligible_outbox(path: Path) -> dict:
         "CODEX_REPROVOU": EVIDENCE_FILES,
         "TESTES_REPROVADOS": EVIDENCE_FILES_TESTS_REPROVADOS,
     }
+    # Diferenciar o preview legado da V1 antes das validacoes de publicacao.
+    # Nenhuma outbox sem schema V1 pode alcancar proveniencia ou chamadas LIVE.
+    if outbox.get("schema") != SCHEMA:
+        raise PublicationError("Outbox legada nao publicavel: somente preview F7")
     status = outbox.get("third_attempt_status")
-    if (outbox.get("schema") != SCHEMA
-            or not isinstance(outbox.get("code_sha256"), str)
+    if (not isinstance(outbox.get("code_sha256"), str)
             or status not in allowed
             or outbox.get("evidence_files") != list(allowed[status])):
         raise PublicationError("Outbox sem causa da terceira reprovacao: somente preview F7")
