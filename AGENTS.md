@@ -7,7 +7,7 @@ Este arquivo na raiz é o ponto de entrada para ChatGPT CH-1, AGY, Codex e outro
 1. `docs/PROJETO.md` — o produto que queremos entregar.
 2. `docs/STATUS.md` — o que está realmente integrado na `main`.
 3. `docs/CH/DECISOES.md` — decisões do PO.
-4. `docs/CH/CHDEVFLOW-CONTEXTO.md` e `docs/CH/CHDEVFLOW-EVIDENCIAS.md` — antirretrabalho e provas.
+4. `docs/CH/CHDEVFLOW-CONTEXTO.md`, `docs/CH/CHDEVFLOW-EVIDENCIAS.md` e `docs/CH/CHDEVFLOW-MAPA-TESTES.md` — antirretrabalho, provas e localização dos testes.
 5. `.agents/skills/chdevflow/SKILL.md` — o papel do arquiteto especialista.
 6. `docs/RFC-CH-DEVFLOW.md`, a Issue/PR atual, código real e testes específicos.
 
