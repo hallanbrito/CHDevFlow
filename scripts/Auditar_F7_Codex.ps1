@@ -24,6 +24,8 @@ if ($LASTEXITCODE -ne 0 -or $gitDirty.Count -gt 0) {
 $items = @(
     "src/chdevflow/core/po_escalation_publication.py",
     "src/chdevflow/core/po_escalation_runtime.py",
+    "src/chdevflow/core/po_escalation_origin.py",
+    "tests/test_f7_v1_origin.py",
     "src/chdevflow/core/po_escalation_attestation.py",
     "src/chdevflow/core/po_escalation_reservation.py",
     "src/chdevflow/core/po_escalation_provenance.py",
