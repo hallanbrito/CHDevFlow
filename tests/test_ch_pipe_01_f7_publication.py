@@ -742,6 +742,8 @@ class PublicationTests(unittest.TestCase):
         with (patch.object(pub, "_gh_json", side_effect=api) as get,
               patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
                            pub.validate_trusted_key(key, "NONE")),
+              patch.object(pub, "F7_TRUSTED_PRODUCER_SHA_PIN", "e" * 40),
+              patch.object(pub, "F7_TRUSTED_V1_WORKFLOW_ID_PIN", 4242),
               patch.dict(os.environ, {
                   "CH_F7_TRUSTED_RUNNER_PUBKEY": "chave-forjada",
                   "CH_F7_TRUSTED_RUNNER_SHA": "f" * 40,
@@ -781,7 +783,9 @@ class PublicationTests(unittest.TestCase):
                     return {"name": name, "value": data[name]}
                 with (patch.object(pub, "_gh_json", side_effect=api),
                       patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
-                                   pub.validate_trusted_key(key, "NONE"))):
+                                   pub.validate_trusted_key(key, "NONE")),
+                      patch.object(pub, "F7_TRUSTED_PRODUCER_SHA_PIN", "e" * 40),
+                      patch.object(pub, "F7_TRUSTED_V1_WORKFLOW_ID_PIN", 4242)):
                     with self.assertRaises(pub.PublicationError):
                         pub._f7_remote_trust_policy()
         with patch.object(pub, "_gh_json",
