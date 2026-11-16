@@ -124,7 +124,8 @@ preparar um plano, usar `--approval-comment <ID_REAL_DO_PO> --plan-file
 aprovacao/ACL, corpo sanitizado e escopo COMMENT_ONLY. Sem aprovar/aplicar,
 essa etapa e exclusivamente leitura.
 
-Aplicacao real **nao autorizada por esta documentacao**: exige
+A aplicacao remota permanece desativada (`REMOTE_PUBLICATION_ENABLED=False`).
+O caminho abaixo e exercitado somente por testes offline e, apos futura homologacao, exige
 `--apply-plan <PLANO> --confirm <DIGEST_COMPLETO> --audit-file
 <ARQUIVO_NOVO>`, mais confirmacao humana interativa especifica
 `APROVO F7 PUBLICAR <12primeirosdigitosdigest>`. Revalida estado LIVE
