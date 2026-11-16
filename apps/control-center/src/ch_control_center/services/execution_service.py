@@ -53,35 +53,70 @@ def sanitizar_log(texto: str) -> str:
     return _PADRAO_SEGREDO.sub("[REDACTED]", texto)
 
 
-def is_pid_alive(pid: int) -> bool:
-    """Verifica de forma segura e fail-closed se um processo com o PID informado está ativo no host."""
-    if not isinstance(pid, int) or pid <= 0:
-        return False
+class ProcessStatus:
+    VIVO = "VIVO"
+    MORTO_COMPROVADO = "MORTO_COMPROVADO"
+    INCONCLUSIVO = "INCONCLUSIVO"
+
+
+def check_process_status(pid: Any) -> str:
+    """Verifica de forma segura e fail-closed o status de um processo no host.
+
+    Retorna:
+    - VIVO: processo existe e está ativo no host.
+    - MORTO_COMPROVADO: confirmação estrita de que o PID não existe mais no SO.
+    - INCONCLUSIVO: falha de leitura, PID ausente/inválido ou impossibilidade de comprovar óbito.
+    """
+    if pid is None or not isinstance(pid, int) or pid <= 0:
+        return ProcessStatus.INCONCLUSIVO
+
+    # Se o PID for exatamente o do processo atual, ele está comprovadamente VIVO
+    if pid == os.getpid():
+        return ProcessStatus.VIVO
+
     if os.name == "nt":
         import ctypes
         kernel32 = ctypes.windll.kernel32
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         SYNCHRONIZE = 0x00100000
+
         handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid)
         if not handle:
-            return False
+            err = kernel32.GetLastError()
+            # ERROR_INVALID_PARAMETER (87): PID não existe mais no sistema
+            if err == 87:
+                return ProcessStatus.MORTO_COMPROVADO
+            # ERROR_ACCESS_DENIED (5): processo existe, mas sem permissão de acesso -> está VIVO
+            if err == 5:
+                return ProcessStatus.VIVO
+            # Qualquer outro erro é inconclusivo
+            return ProcessStatus.INCONCLUSIVO
+
         try:
             exit_code = ctypes.c_ulong()
             if kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-                return exit_code.value == 259  # STILL_ACTIVE
-            return True
+                if exit_code.value == 259:  # STILL_ACTIVE
+                    return ProcessStatus.VIVO
+                return ProcessStatus.MORTO_COMPROVADO
+            return ProcessStatus.INCONCLUSIVO
         finally:
             kernel32.CloseHandle(handle)
     else:
         try:
             os.kill(pid, 0)
-            return True
+            return ProcessStatus.VIVO
         except ProcessLookupError:
-            return False
+            return ProcessStatus.MORTO_COMPROVADO
         except PermissionError:
-            return True
+            # Processo existe no sistema, porém pertence a outro usuário -> VIVO
+            return ProcessStatus.VIVO
         except OSError:
-            return False
+            return ProcessStatus.INCONCLUSIVO
+
+
+def is_pid_alive(pid: Any) -> bool:
+    """Verifica de forma segura se o PID está comprovadamente vivo no host."""
+    return check_process_status(pid) == ProcessStatus.VIVO
 
 
 @dataclass
@@ -89,7 +124,7 @@ class ExecutionRecord:
     execution_id: str
     mission_id: str
     issue: int
-    status: str  # "INICIADO" | "EM_EXECUCAO" | "APROVADO_AGUARDANDO_CH1" | "AGUARDANDO_PO" | "CANCELADO" | "BLOQUEADO_INFRA_OU_ESCOPO" | "ORCAMENTO_ESGOTADO" | "INTERROMPIDO_CRASH" | "ERRO"
+    status: str  # "INICIADO" | "EM_EXECUCAO" | "CANCELAMENTO_PENDENTE" | "APROVADO_AGUARDANDO_CH1" | "AGUARDANDO_PO" | "CANCELADO" | "BLOQUEADO_INFRA_OU_ESCOPO" | "ORCAMENTO_ESGOTADO" | "INTERROMPIDO_CRASH" | "ERRO"
     manifest_path: str
     worktree: str
     evidence_dir: str
@@ -141,9 +176,10 @@ class ExecutionService:
             if not self.lock_file.exists():
                 return
             try:
-                dados = json.loads(self.lock_file.read_text(encoding="utf-8"))
+                raw_text = self.lock_file.read_text(encoding="utf-8")
+                dados = json.loads(raw_text)
             except Exception:
-                # Fail-closed: se o lock estiver corrompido ou ilegível, não o removemos cegamente
+                # Fail-closed estrito: se o lock estiver corrompido ou ilegível, não removemos cegamente
                 return
 
             if not isinstance(dados, dict):
@@ -152,35 +188,43 @@ class ExecutionService:
             pid = dados.get("pid")
             exec_id = dados.get("execution_id")
 
-            # Verifica se o processo dono do lock ainda está vivo no host
-            if pid and pid != os.getpid() and is_pid_alive(pid):
+            # Avalia status do processo dono do lock
+            status_processo = check_process_status(pid)
+
+            if status_processo == ProcessStatus.VIVO:
+                # Processo comprovadamente vivo no host: preserva lock e assume ID ativo
                 if exec_id:
                     self._active_execution_id = exec_id
                 return
 
-            # O processo não está vivo: atualiza registro e remove lock stale
-            if exec_id:
-                try:
-                    registro_path = self.executions_dir / f"{exec_id}.json"
-                    if registro_path.exists():
-                        registro_dict = json.loads(registro_path.read_text(encoding="utf-8"))
-                        if registro_dict.get("status") in ("INICIADO", "EM_EXECUCAO"):
-                            registro_dict["status"] = "INTERROMPIDO_CRASH"
-                            registro_dict["finished_at"] = datetime.now(timezone.utc).isoformat()
-                            registro_dict["findings"] = registro_dict.get("findings", []) + [
-                                f"Servidor reiniciado ou processo interrompido abruptamente (PID {pid or 'desconhecido'} inativo)."
-                            ]
-                            registro_path.write_text(
-                                json.dumps(registro_dict, ensure_ascii=False, indent=2),
-                                encoding="utf-8",
-                            )
-                except Exception:
-                    pass
+            if status_processo == ProcessStatus.INCONCLUSIVO:
+                # Casos inconclusivos (ex: PID ausente, falha de acesso) permanecem bloqueados
+                return
 
-            try:
-                self.lock_file.unlink(missing_ok=True)
-            except OSError:
-                pass
+            # Apenas se status for estritamente MORTO_COMPROVADO podemos limpar o lock
+            if status_processo == ProcessStatus.MORTO_COMPROVADO:
+                if exec_id:
+                    try:
+                        registro_path = self.executions_dir / f"{exec_id}.json"
+                        if registro_path.exists():
+                            registro_dict = json.loads(registro_path.read_text(encoding="utf-8"))
+                            if registro_dict.get("status") in ("INICIADO", "EM_EXECUCAO", "CANCELAMENTO_PENDENTE"):
+                                registro_dict["status"] = "INTERROMPIDO_CRASH"
+                                registro_dict["finished_at"] = datetime.now(timezone.utc).isoformat()
+                                registro_dict["findings"] = registro_dict.get("findings", []) + [
+                                    f"Servidor reiniciado ou processo comprovadamente morto (PID {pid} inativo)."
+                                ]
+                                registro_path.write_text(
+                                    json.dumps(registro_dict, ensure_ascii=False, indent=2),
+                                    encoding="utf-8",
+                                )
+                    except Exception:
+                        pass
+
+                try:
+                    self.lock_file.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def _clean_lock_file_if_owned(self, execution_id: str) -> None:
         """Remove o arquivo de lock apenas se ele pertencer à execução especificada."""
@@ -307,29 +351,23 @@ class ExecutionService:
         except Exception as exc:
             raise ManifestValidationError(f"Validação do manifesto/laboratório falhou: {sanitizar_log(str(exc))}") from exc
 
-        # 5. Seção crítica de aquisição do lock de execução única
+        # 5. Seção crítica de aquisição do lock de execução única (intra e inter-processos)
         with self._lock:
             if self._active_execution_id is not None:
                 raise ExecutionConflictError(
                     f"Já existe uma missão ativa em execução (ID: {self._active_execution_id}). "
                     "Apenas uma execução é permitida simultaneamente."
                 )
-            if self.lock_file.exists():
-                raise ExecutionConflictError(
-                    "Trava local detectada em disco. Aguarde ou recupere o estado antes de nova execução."
-                )
 
             execution_id = uuid4().hex
-            self._active_execution_id = execution_id
-            cancel_event = threading.Event()
-            self._cancel_events[execution_id] = cancel_event
 
             # Prepara pasta de dossiê nova e isolada (fora da worktree)
             self.labs_root.mkdir(mode=0o700, parents=True, exist_ok=True)
             timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
             evidence_dir = self.labs_root / f"CH-Dossie-{timestamp_str}-{execution_id[:8]}"
 
-            # Grava o lock file no disco (write-ahead)
+            # Aquisição atômica no sistema de arquivos via os.O_CREAT | os.O_EXCL
+            # Garante exclusividade estrita mesmo entre múltiplos processos concorrentes
             lock_data = {
                 "execution_id": execution_id,
                 "mission_id": mission.mission_id,
@@ -339,9 +377,26 @@ class ExecutionService:
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "timeout_seconds": timeout_segundos,
             }
-            temp_lock = self.lock_file.with_suffix(".tmp")
-            temp_lock.write_text(json.dumps(lock_data, ensure_ascii=False, indent=2), encoding="utf-8")
-            temp_lock.replace(self.lock_file)
+            lock_bytes = json.dumps(lock_data, ensure_ascii=False, indent=2).encode("utf-8")
+
+            try:
+                fd = os.open(str(self.lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                try:
+                    os.write(fd, lock_bytes)
+                finally:
+                    os.close(fd)
+            except FileExistsError:
+                raise ExecutionConflictError(
+                    "Trava local detectada em disco. Aguarde ou recupere o estado antes de nova execução."
+                )
+            except OSError as exc:
+                raise ExecutionConflictError(
+                    f"Falha ao adquirir trava exclusiva em disco: {sanitizar_log(str(exc))}"
+                )
+
+            self._active_execution_id = execution_id
+            cancel_event = threading.Event()
+            self._cancel_events[execution_id] = cancel_event
 
             # Inicializa o registro de execução
             record = ExecutionRecord(
@@ -428,12 +483,19 @@ class ExecutionService:
                 record.findings.append(f"Falha de execução: {sanitizar_log(str(exc))}")
         finally:
             with self._lock:
+                if cancel_event.is_set():
+                    record.status = "CANCELADO"
+                    if not record.finished_at:
+                        record.finished_at = datetime.now(timezone.utc).isoformat()
+                    if "Execução cancelada pelo operador." not in record.findings:
+                        record.findings.append("Execução cancelada pelo operador.")
+
                 if self._active_execution_id == record.execution_id:
                     self._active_execution_id = None
                 self._clean_lock_file_if_owned(record.execution_id)
                 self._persist_record(record)
 
-    def cancelar_execucao(self, execution_id: str) -> dict[str, Any]:
+    def cancelar_execucao(self, execution_id: str, join_timeout: float = 5.0) -> dict[str, Any]:
         """Cancela uma execução em andamento e interrompe todos os seus subprocessos."""
         with self._lock:
             record = self._memory_records.get(execution_id)
@@ -444,7 +506,7 @@ class ExecutionService:
                 record = ExecutionRecord(**json.loads(registro_path.read_text(encoding="utf-8")))
 
             # Se já estiver em estado terminal, não há o que cancelar
-            if record.status not in ("INICIADO", "EM_EXECUCAO"):
+            if record.status not in ("INICIADO", "EM_EXECUCAO", "CANCELAMENTO_PENDENTE"):
                 return record.para_dicionario()
 
             cancel_event = self._cancel_events.get(execution_id)
@@ -458,9 +520,18 @@ class ExecutionService:
 
         # Aguarda o término efetivo da thread do worker para evitar condição de corrida
         if worker_thread and worker_thread.is_alive() and worker_thread != threading.current_thread():
-            worker_thread.join(timeout=5.0)
+            worker_thread.join(timeout=join_timeout)
 
         with self._lock:
+            if worker_thread and worker_thread.is_alive():
+                # A worker thread ainda está viva! Mantém o lock e status não-terminal CANCELAMENTO_PENDENTE
+                record.status = "CANCELAMENTO_PENDENTE"
+                aviso = "Cancelamento solicitado pelo operador; aguardando encerramento da worker thread."
+                if aviso not in record.findings:
+                    record.findings.append(aviso)
+                self._persist_record(record)
+                return record.para_dicionario()
+
             record.status = "CANCELADO"
             if not record.finished_at:
                 record.finished_at = datetime.now(timezone.utc).isoformat()
@@ -495,10 +566,10 @@ class ExecutionService:
                 record = ExecutionRecord(**json.loads(registro_path.read_text(encoding="utf-8")))
 
             # Validação do status atual da execução
-            if record.status in ("INICIADO", "EM_EXECUCAO"):
+            if record.status in ("INICIADO", "EM_EXECUCAO", "CANCELAMENTO_PENDENTE"):
                 raise ValueError(
                     f"Não é permitido registrar decisão em execução ainda em andamento (status: '{record.status}'). "
-                    "Aguarde o término do ciclo ou cancele a execução."
+                    "Aguarde o término do ciclo ou a conclusão do cancelamento."
                 )
 
             if decisao_normalizada == "APROVADO" and record.status not in ("APROVADO_AGUARDANDO_CH1", "AGUARDANDO_PO"):

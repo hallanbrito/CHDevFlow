@@ -32,6 +32,8 @@ from ch_control_center.services.execution_service import (
     ExecutionConflictError,
     ExecutionService,
     ManifestValidationError,
+    ProcessStatus,
+    check_process_status,
 )
 
 
@@ -735,7 +737,7 @@ def test_crash_recovery_preserva_lock_se_pid_vivo_ou_corrompido(lab_env):
         )
 
     # Caso 2: Lock com PID vivo mockado
-    with patch("ch_control_center.services.execution_service.is_pid_alive", return_value=True):
+    with patch("ch_control_center.services.execution_service.check_process_status", return_value=ProcessStatus.VIVO):
         lock_file.write_text(json.dumps({
             "execution_id": "exec-vivo",
             "pid": 11111,
@@ -753,7 +755,7 @@ def test_crash_recovery_preserva_lock_se_pid_vivo_ou_corrompido(lab_env):
             )
 
     # Caso 3: Lock com PID inativo/morto
-    with patch("ch_control_center.services.execution_service.is_pid_alive", return_value=False):
+    with patch("ch_control_center.services.execution_service.check_process_status", return_value=ProcessStatus.MORTO_COMPROVADO):
         lock_file.write_text(json.dumps({
             "execution_id": "exec-morto",
             "pid": 99999999,
@@ -861,5 +863,255 @@ def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(lab_env):
     assert resp_reprovada.status_code == 200
     assert resp_reprovada.json()["decisao_po"]["tipo"] == "decisao_local_declarada"
     assert resp_reprovada.json()["decisao_po"]["decisao"] == "REPROVADO"
+
+
+def test_adversarial_p1_cancelamento_lento_retorna_pendente_e_bloqueia_missao_b(lab_env):
+    """P1-1: Fake worker que ignora cancelamento por mais de timeout do join.
+
+    Comprova:
+    - Retorna status CANCELAMENTO_PENDENTE mantendo o lock e exclusividade.
+    - Tentativa de despachar missão B enquanto A ainda vive é rejeitada com HTTP 409.
+    - Só após o término comprovado de A, a missão B pode iniciar com sucesso.
+    """
+    reset_services()
+    worker_a_iniciou = threading.Event()
+    permitir_encerramento_a = threading.Event()
+
+    def runner_lento_a(**kwargs):
+        worker_a_iniciou.set()
+        # Ignora cancelamento até liberação explícita
+        permitir_encerramento_a.wait(timeout=5)
+        return GenericResult(
+            status="CANCELADO",
+            execution_id="a",
+            mission_id="M-A",
+            issue=121,
+            mission_digest="da",
+        )
+
+    exec_svc = ExecutionService(
+        data_dir=lab_env["data_dir"],
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_lento_a,
+    )
+    app = create_app()
+    app.dependency_overrides[get_execution_service] = lambda: exec_svc
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
+    token = obter_csrf_token()
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+        "X-CSRF-Token": token,
+    }
+
+    # 1. Inicia Missão A
+    resp_a = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_a.status_code == 202
+    exec_id_a = resp_a.json()["execution_id"]
+    assert worker_a_iniciou.wait(timeout=3)
+
+    # 2. Cancela A com timeout curto (0.05s) para simular worker que excede o tempo de join
+    res_cancel_a = exec_svc.cancelar_execucao(exec_id_a, join_timeout=0.05)
+    assert res_cancel_a["status"] == "CANCELAMENTO_PENDENTE"
+    assert exec_svc.lock_file.exists()
+    assert exec_svc._active_execution_id == exec_id_a
+
+    # 3. Tentativa de despachar Missão B enquanto A vive DEVE ser rejeitada com HTTP 409
+    resp_b_conflito = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_b_conflito.status_code == 409
+    assert "Apenas uma execução é permitida simultaneamente" in resp_b_conflito.json()["detail"] or "Trava local detectada" in resp_b_conflito.json()["detail"]
+
+    # 4. Libera worker A para terminar efetivamente
+    permitir_encerramento_a.set()
+    time.sleep(0.1)
+
+    # Status de A transicionou para CANCELADO e lock foi liberado
+    detalhes_a = exec_svc.obter_execucao(exec_id_a)
+    assert detalhes_a["status"] == "CANCELADO"
+    assert not exec_svc.lock_file.exists()
+    assert exec_svc._active_execution_id is None
+
+    # 5. Agora a Missão B DEVE iniciar com sucesso
+    def runner_b(**kwargs):
+        return GenericResult(
+            status="APROVADO_AGUARDANDO_CH1",
+            execution_id="b",
+            mission_id="M-B",
+            issue=121,
+            mission_digest="db",
+        )
+    exec_svc.cycle_runner = runner_b
+
+    resp_b_sucesso = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_b_sucesso.status_code == 202
+    exec_id_b = resp_b_sucesso.json()["execution_id"]
+    assert exec_id_b != exec_id_a
+    time.sleep(0.1)
+    reset_services()
+
+
+def test_adversarial_p1_crash_recovery_fail_closed_cinco_casos(lab_env):
+    """P1-2: Comprova fail-closed estrito nos 5 cenários enumerados pela auditoria.
+
+    Nenhum destes 5 casos pode gerar desbloqueio automático inseguro:
+    1. Lock do processo atual (pid == os.getpid())
+    2. PID ausente / inválido
+    3. JSON corrompido
+    4. PID existente / ativo no SO
+    5. Falha de acesso simulada no Windows (ERROR_ACCESS_DENIED) ou POSIX PermissionError
+    """
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    lock_file = data_dir / "active_execution.lock"
+
+    # Caso 1: Lock do processo atual (pid == os.getpid())
+    lock_file.write_text(json.dumps({
+        "execution_id": "exec-meu-pid",
+        "pid": os.getpid(),
+    }), encoding="utf-8")
+    svc1 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+    assert lock_file.exists(), "Lock com PID atual jamais pode ser apagado"
+    assert svc1._active_execution_id == "exec-meu-pid"
+
+    # Caso 2: PID ausente / nulo / inválido
+    lock_file.write_text(json.dumps({
+        "execution_id": "exec-sem-pid",
+        "pid": None,
+    }), encoding="utf-8")
+    svc2 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+    assert lock_file.exists(), "Lock com PID ausente deve permanecer bloqueado (inconclusivo)"
+
+    lock_file.write_text(json.dumps({
+        "execution_id": "exec-pid-invalido",
+        "pid": -99,
+    }), encoding="utf-8")
+    svc2_inv = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+    assert lock_file.exists(), "Lock com PID inválido deve permanecer bloqueado"
+
+    # Caso 3: JSON corrompido
+    lock_file.write_text("{conteudo quebrado e incompleto", encoding="utf-8")
+    svc3 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+    assert lock_file.exists(), "Lock com JSON corrompido jamais pode ser apagado cegamente"
+
+    # Caso 4: PID existente / vivo
+    with patch("ch_control_center.services.execution_service.check_process_status", return_value=ProcessStatus.VIVO):
+        lock_file.write_text(json.dumps({
+            "execution_id": "exec-vivo",
+            "pid": 12345,
+        }), encoding="utf-8")
+        svc4 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+        assert lock_file.exists(), "Lock com PID vivo deve ser preservado"
+
+    # Caso 5: Falha de acesso simulada (Windows ERROR_ACCESS_DENIED ou POSIX PermissionError)
+    if os.name == "nt":
+        import ctypes
+        with patch.object(ctypes.windll.kernel32, "OpenProcess", return_value=0), \
+             patch.object(ctypes.windll.kernel32, "GetLastError", return_value=5):
+            lock_file.write_text(json.dumps({
+                "execution_id": "exec-access-denied",
+                "pid": 55555,
+            }), encoding="utf-8")
+            status = check_process_status(55555)
+            assert status == ProcessStatus.VIVO
+            svc5 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+            assert lock_file.exists(), "Falha de acesso no Windows comprova que o processo existe e está vivo"
+    else:
+        with patch("os.kill", side_effect=PermissionError):
+            lock_file.write_text(json.dumps({
+                "execution_id": "exec-perm-error",
+                "pid": 55555,
+            }), encoding="utf-8")
+            status = check_process_status(55555)
+            assert status == ProcessStatus.VIVO
+            svc5 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+            assert lock_file.exists(), "PermissionError em os.kill comprova que o processo existe e está vivo"
+
+    # Caso de Contraste: Somente MORTO_COMPROVADO deve desbloquear
+    with patch("ch_control_center.services.execution_service.check_process_status", return_value=ProcessStatus.MORTO_COMPROVADO):
+        lock_file.write_text(json.dumps({
+            "execution_id": "exec-morto-comprovado",
+            "pid": 99999999,
+        }), encoding="utf-8")
+        svc_morto = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
+        assert not lock_file.exists(), "Apenas prova segura de término (MORTO_COMPROVADO) limpa o lock"
+
+
+def test_adversarial_p1_lock_exclusivo_atomico_e_limpeza_por_proprietario(lab_env):
+    """P1-3: Comprova aquisição atômica no filesystem via os.O_CREAT | os.O_EXCL e limpeza estrita por proprietário."""
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    em_andamento = threading.Event()
+    liberar = threading.Event()
+
+    def runner_segura(**kwargs):
+        em_andamento.set()
+        liberar.wait(timeout=5)
+        return GenericResult(
+            status="APROVADO_AGUARDANDO_CH1",
+            execution_id="1",
+            mission_id="M",
+            issue=121,
+            mission_digest="d",
+        )
+
+    # Cria duas instâncias independentes apontando para o mesmo data_dir (simulando processos distintos)
+    svc1 = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_segura,
+    )
+    svc2 = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=fake_cycle_runner_success,
+    )
+
+    # svc1 adquire o lock
+    res1 = svc1.executar_missao(
+        manifest_path=lab_env["manifest_path"],
+        confirmacao_po=True,
+    )
+    exec_id_1 = res1["execution_id"]
+    assert em_andamento.wait(timeout=3)
+    assert svc1.lock_file.exists()
+
+    # svc2 tenta adquirir enquanto svc1 detém o lock -> DEVE falhar com ExecutionConflictError
+    with pytest.raises(ExecutionConflictError) as exc_info:
+        svc2.executar_missao(
+            manifest_path=lab_env["manifest_path"],
+            confirmacao_po=True,
+        )
+    assert "Trava local detectada" in str(exc_info.value) or "Já existe uma missão ativa" in str(exc_info.value)
+
+    # Garante que o lock file NÃO foi sobrescrito por svc2
+    dados_lock = json.loads(svc1.lock_file.read_text(encoding="utf-8"))
+    assert dados_lock["execution_id"] == exec_id_1
+
+    # Limpeza por proprietário: svc2 tenta limpar passando outro ID
+    svc2._clean_lock_file_if_owned("id_estranho_qualquer")
+    assert svc1.lock_file.exists(), "Lock file não pode ser removido por quem não é seu proprietário"
+
+    # Libera svc1 para concluir
+    liberar.set()
+    time.sleep(0.1)
+
+    # Somente o proprietário correto pode remover o lock
+    svc1._clean_lock_file_if_owned(exec_id_1)
+    assert not svc1.lock_file.exists(), "Proprietário correto remove o lock com sucesso"
+    reset_services()
+
 
 

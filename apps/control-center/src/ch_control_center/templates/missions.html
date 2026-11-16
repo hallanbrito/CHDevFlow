@@ -417,7 +417,7 @@ function iniciarPolling(executionId) {
       atualizarPainelMonitoramento(data);
 
       const status = data.status || '';
-      if (!['INICIADO', 'EM_EXECUCAO'].includes(status)) {
+      if (!['INICIADO', 'EM_EXECUCAO', 'CANCELAMENTO_PENDENTE'].includes(status)) {
         clearInterval(pollingInterval);
         document.getElementById('btn-despachar').disabled = false;
         document.getElementById('btn-despachar').textContent = 'Disparar Missão Local';
@@ -446,6 +446,13 @@ function atualizarPainelMonitoramento(data) {
     badge.className = 'badge-status badge-concluida';
   } else if (status === 'EM_EXECUCAO' || status === 'INICIADO') {
     badge.className = 'badge-status badge-elegivel';
+  } else if (status === 'CANCELAMENTO_PENDENTE') {
+    badge.className = 'badge-status badge-ciclo';
+    const btnCancel = document.getElementById('btn-cancelar-execucao');
+    if (btnCancel) {
+      btnCancel.disabled = true;
+      btnCancel.textContent = 'Cancelando...';
+    }
   } else if (status === 'AGUARDANDO_PO') {
     badge.className = 'badge-status badge-ciclo';
   } else {
@@ -558,7 +565,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     const resp = await fetch('/api/missoes/execucoes/ativa');
     if (resp.ok) {
       const data = await resp.json();
-      if (data && data.execution_id && ['INICIADO', 'EM_EXECUCAO'].includes(data.status)) {
+      if (data && data.execution_id && ['INICIADO', 'EM_EXECUCAO', 'CANCELAMENTO_PENDENTE'].includes(data.status)) {
         activeExecutionId = data.execution_id;
         document.getElementById('btn-despachar').disabled = true;
         document.getElementById('btn-despachar').textContent = 'Em Execução...';
