@@ -47,6 +47,8 @@ F7_REPOSITORY_ID = 1424359000
 # Pin versionado, intencionalmente nao provisionado. Exige auditoria do SHA
 # e decisao explicita PO antes de confiar em qualquer pubkey remota.
 F7_TRUST_KEY_FINGERPRINT_PIN = ""
+F7_TRUSTED_PRODUCER_SHA_PIN = ""
+F7_TRUSTED_V1_WORKFLOW_ID_PIN = 0
 F7_TRUST_VARIABLES = (
     "CH_F7_TRUSTED_RUNNER_PUBKEY",
     "CH_F7_TRUSTED_RUNNER_SHA",
@@ -183,8 +185,10 @@ def _f7_remote_trust_policy() -> dict:
         v1_workflow = values["CH_F7_V1_PRODUCER_WORKFLOW_ID"]
         if (not HEX40.fullmatch(sha)
                 or not re.fullmatch(r"[1-9][0-9]{0,19}", workflow)
-                or not re.fullmatch(r"[1-9][0-9]{0,19}", v1_workflow)):
-            raise ValueError("SHA/workflow do produtor invalidos")
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", v1_workflow)
+                or sha != F7_TRUSTED_PRODUCER_SHA_PIN
+                or int(v1_workflow) != F7_TRUSTED_V1_WORKFLOW_ID_PIN):
+            raise ValueError("SHA/workflow V1 nao corresponde ao pin revisado")
     except (ValueError, KeyError) as exc:
         raise PublicationError("Politica F7 remota invalida ou revogada") from exc
     return {
