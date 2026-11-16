@@ -68,7 +68,7 @@ class ManualLabPipelineTests(unittest.TestCase):
             json.dumps(self.recheck_data), encoding="utf-8"
         )
         for name, content in self.artifacts.items():
-            (self.recheck / name).write_text(content, encoding="utf-8")
+            (self.recheck / name).write_text(content, encoding="utf-8", newline="\n")
         lines = ["# Dossiê", ""]
         for name, label in (
             ("alteracoes.patch", "diff"),
@@ -79,7 +79,7 @@ class ManualLabPipelineTests(unittest.TestCase):
                 f"- SHA256 {label}: `{digest(self.artifacts[name].removesuffix(chr(10)))}`"
             )
         (self.recheck / "RELATORIO_COMPLETO_CH1.md").write_text(
-            "\n".join(lines) + "\n", encoding="utf-8"
+            "\n".join(lines) + "\n", encoding="utf-8", newline="\n"
         )
 
     def test_cadeia_recheck_consistente_aguarda_ch1(self):

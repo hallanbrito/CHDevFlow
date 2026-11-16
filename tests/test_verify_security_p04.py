@@ -122,7 +122,7 @@ class TestVerifySecurityP04(unittest.TestCase):
     def test_tp05_node_npm_allowed(self) -> None:
         """TP-05: Adaptadores Node/npm com subcomandos de teste e lifecycle scripts autorizados."""
         sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
-        echo_bin = shutil.which("echo") or "/bin/echo"
+        echo_bin = str(Path(sys.executable).resolve())
         with patch("shutil.which", return_value=echo_bin):
             tokens_test = parse_and_validate_command("npm test", self.root, sanitized_path)
             self.assertEqual(tokens_test[0], str(Path(echo_bin).resolve()))
@@ -159,8 +159,8 @@ class TestVerifySecurityP04(unittest.TestCase):
     def test_tp08_adapter_subcommands_allowed(self) -> None:
         """TP-08: Subcomandos de adaptadores permitidos (dotnet, cargo, go)."""
         sanitized_path = sanitize_subprocess_env(None, self.root).get("PATH", "")
-        # O runner pode apontar /usr/bin/echo para coreutils via symlink.
-        echo_bin = shutil.which("echo") or "/bin/echo"
+        # Usa executavel real e multiplataforma como fake de adaptador.
+        echo_bin = str(Path(sys.executable).resolve())
         with patch("shutil.which", return_value=echo_bin):
             tokens_dotnet = parse_and_validate_command("dotnet test", self.root, sanitized_path)
             self.assertEqual(tokens_dotnet[0], str(Path(echo_bin).resolve()))

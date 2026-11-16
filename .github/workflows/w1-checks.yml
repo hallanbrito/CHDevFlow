@@ -55,3 +55,44 @@ jobs:
 
       - name: Testes Control Center (apps/control-center/tests/)
         run: pytest apps/control-center/tests -v
+
+  # CH-WIN-01: somente em disparo manual, para nao multiplicar runners.
+  # Falhas reais Windows nao sao ignoradas nem escondidas por continue-on-error.
+  windows-checks:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Windows
+        uses: actions/checkout@v6
+
+      - name: Configurar Python 3.12 Windows
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar dependencias Windows
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ./apps/bootstrap/sentinela
+          python -m pip install -e "./apps/control-center[dev]"
+          python -m pip install -e ".[dev]"
+
+      - name: Windows suites integrais (falha visivel)
+        shell: pwsh
+        run: |
+          $failed = $false
+          python -m compileall -q src scripts apps
+          if ($LASTEXITCODE -ne 0) { $failed = $true }
+          python -m unittest discover -s tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { $failed = $true }
+          python -m unittest discover -s apps/bootstrap/sentinela/tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { $failed = $true }
+          python -m pytest apps/control-center/tests -v
+          if ($LASTEXITCODE -ne 0) { $failed = $true }
+          if ($failed) {
+            Write-Error "CH-WIN-01: testes Windows falharam, nao homologar."
+            exit 1
+          }
+          Write-Output "CH-WIN-01: Windows integral PASS."
