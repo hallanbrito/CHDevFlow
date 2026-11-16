@@ -143,6 +143,11 @@ ch watch --once --dry-run
 
 ## Navegação
 
+- **[Comece aqui: contexto e protocolo antirretrabalho](docs/CH/CHDEVFLOW-CONTEXTO.md)**
+- [O que já testamos — evidências reais, mocks, incidentes e CI](docs/CH/CHDEVFLOW-EVIDENCIAS.md)
+- [Mapa completo dos módulos de testes e workflows](docs/CH/CHDEVFLOW-MAPA-TESTES.md)
+- [Skill especialista CHDevFlow](.agents/skills/chdevflow/SKILL.md)
+- [Prompt para retomar um novo chat CH-1](docs/CH/CHDEVFLOW-PROMPT-RETOMADA.md)
 - [RFC de arquitetura](docs/RFC-CH-DEVFLOW.md)
 - [W1 — Esteiras e Kanban (instalado e homologado)](docs/W1-ESTEIRAS-KANBAN.md)
 - [GitHub Project W1 — esteiras](https://github.com/users/hallanbrito/projects/2)
