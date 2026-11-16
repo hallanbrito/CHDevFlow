@@ -849,15 +849,14 @@ class PublicationTests(unittest.TestCase):
         """Nao basta barrar CLI e _post_comment: a API tambem deve bloquear."""
         plan = self._plan()
         calls = []
-        with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", False):
-            with self.assertRaisesRegex(pub.PublicationError, "desativada"):
-                pub.apply_publication_plan(
-                    self.outbox, plan, plan["digest"],
-                    reader=lambda *_: calls.append("GET") or self.context,
-                    poster=lambda *_: calls.append("POST") or {"id": 1},
-                    human_prompt=lambda *_: calls.append("INPUT") or "sim",
-                    audit=lambda *_: calls.append("AUDIT"),
-                )
+        with self.assertRaisesRegex(pub.PublicationError, "desativada"):
+            pub.apply_publication_plan(
+                self.outbox, plan, plan["digest"],
+                reader=lambda *_: calls.append("GET") or self.context,
+                poster=lambda *_: calls.append("POST") or {"id": 1},
+                human_prompt=lambda *_: calls.append("INPUT") or "sim",
+                audit=lambda *_: calls.append("AUDIT"),
+            )
         self.assertEqual(calls, [])
         self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
 
