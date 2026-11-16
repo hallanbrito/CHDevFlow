@@ -1201,7 +1201,7 @@ class PublicationTests(unittest.TestCase):
             })
             self.context["f7_commit"]["git_commit"]["tree"]["sha"] = "f" * 40
             return {"id": 1290}
-        with self.assertRaisesRegex(pub.PublicationPending, "Readback"):
+        with self.assertRaisesRegex(pub.PublicationPending, "reconciliar LIVE"):
             self._apply(plan=plan, poster=poster)
         self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
 
