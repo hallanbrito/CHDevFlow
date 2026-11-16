@@ -25,6 +25,8 @@ from chdevflow.core import po_escalation_publication as pub
 from chdevflow.core.po_escalation_attestation import SSH_NAMESPACE, execution_statement, statement_bytes
 from chdevflow.core.manual_pipeline_runner import Mission, SCHEMA as MISSION_SCHEMA
 from chdevflow.core.po_escalation_provenance import create_provenance, verify_provenance
+from chdevflow.core.attested_executor import IMAGE_ID as ATTESTED_IMAGE_ID
+from chdevflow.core.po_escalation_runtime_receipt import ExternalRuntimeReceiptError
 from chdevflow.core.po_escalation_reservation import (
     GitReservationStore, NAMESPACE, ReservationError,
 )
@@ -88,7 +90,7 @@ class PublicationTests(unittest.TestCase):
             "mission_id": self.data["mission_id"], "issue": 85,
             "mission_digest": manifest.digest, "returns_used": 2,
             "os_isolation_verified": True,
-            "test_execution": "docker-readonly-no-network:sha256:" + ("c" * 64),
+            "test_execution": "docker-attested-e3b-sigstore:" + ATTESTED_IMAGE_ID,
             "attempts": [{
                 "number": num, "status": "CODEX_REPROVOU",
                 "sha256": self.data["code_sha256"],
@@ -99,6 +101,14 @@ class PublicationTests(unittest.TestCase):
             json.dumps(record, ensure_ascii=False), encoding="utf-8")
         self.data["provenance"] = create_provenance(self.root)
         self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        # Mock explicito em testes de governanca anteriores: nao afirma
+        # que exista uma assinatura REAL de missao. As negativas E3-C5
+        # deixam claro que a publicacao REAL exige o verificador externo.
+        receipt_patch = patch(
+            "chdevflow.core.po_escalation_provenance.verify_runtime_receipt",
+            return_value={"schema": "CHDEVFLOW-F7-E3C4-RUNTIME-RECEIPT/1"})
+        self.addCleanup(receipt_patch.stop)
+        self.mock_runtime_receipt = receipt_patch.start()
         self.approval_id = 448200
         self.f7_sha = "b" * 40
         statement = (
@@ -497,9 +507,12 @@ class PublicationTests(unittest.TestCase):
         state_path.write_text(json.dumps(state), encoding="utf-8")
         self.data["provenance"] = create_provenance(self.root)
         self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
-        with self.assertRaisesRegex(
-                external.ExternalRuntimeReceiptError, "nao esta pinado"):
-            self._outbox()
+        with patch(
+                "chdevflow.core.po_escalation_provenance.verify_runtime_receipt",
+                side_effect=external.ExternalRuntimeReceiptError("nao esta pinado")):
+            with self.assertRaisesRegex(
+                    external.ExternalRuntimeReceiptError, "nao esta pinado"):
+                self._outbox()
         # Mesmo sem alterar SHA do codigo, prova de build nao basta.
         with patch(
                 "chdevflow.core.po_escalation_provenance.verify_runtime_receipt",
@@ -520,6 +533,23 @@ class PublicationTests(unittest.TestCase):
                 self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
                 with self.assertRaisesRegex(ValueError, "Docker isolada"):
                     self._outbox()
+
+    def test_docker_legado_nao_e_mais_publicavel_nem_com_flag_true(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["test_execution"] = "docker-readonly-no-network:sha256:" + "c" * 64
+        state["os_isolation_verified"] = True
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        self.mock_runtime_receipt.reset_mock()
+        with self.assertRaisesRegex(ValueError, "executor E3-B atestado"):
+            self._outbox()
+        self.mock_runtime_receipt.assert_not_called()
+        # No F6, hashes continuam legiveis para diagnostico local.
+        self.assertEqual(
+            verify_provenance(self.root, self.data),
+            self.data["provenance"])
 
     def test_proveniencia_sem_isolamento_docker_nao_e_publicavel(self):
         state_path = self.root / "execucao.json"
