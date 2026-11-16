@@ -117,6 +117,7 @@ class PublicationTests(unittest.TestCase):
             "f7_commit": {
                 "policy_sha": self.f7_sha, "local_sha": self.f7_sha,
                 "git_commit": {"sha": self.f7_sha, "tree": {"sha": "c" * 40}},
+                "runtime_digest": "e" * 64,
             },
             "issue": {
                 "id": "I_id_mock", "number": 85, "state": "OPEN",
@@ -1249,6 +1250,46 @@ class PublicationTests(unittest.TestCase):
             })
             self.context["f7_commit"]["git_commit"]["tree"]["sha"] = "f" * 40
             return {"id": 1290}
+        with self.assertRaisesRegex(pub.PublicationPending, "reconciliar LIVE"):
+            self._apply(plan=plan, poster=poster)
+        self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
+
+    def test_gate3_runtime_digest_exigido_e_pinado_no_plano(self):
+        plan = self._plan()
+        self.assertEqual(plan["f7_runtime_digest"], "e" * 64)
+        self.assertIn("f7_audited_commit", plan["snapshot"])
+        cases = (None, "curto", "f" * 63, 55)
+        for changed in cases:
+            with self.subTest(changed=changed):
+                self.context["f7_commit"]["runtime_digest"] = changed
+                with self.assertRaisesRegex(pub.PublicationError, "codigo executado"):
+                    self._plan()
+        self.context["f7_commit"]["runtime_digest"] = "e" * 64
+
+    def test_gate3_runtime_drift_entre_snapshots_bloqueia_sem_post(self):
+        plan = self._plan()
+        calls = []
+        def reader(*_):
+            calls.append("GET")
+            if len(calls) == 2:
+                self.context["f7_commit"]["runtime_digest"] = "f" * 64
+            return self.context
+        with self.assertRaisesRegex(pub.PublicationError, "Corrida"):
+            self._apply(plan=plan, reader=reader,
+                        poster=lambda *_: self.fail("POST indevido"))
+        self.assertEqual(calls, ["GET", "GET"])
+        self.reservations.assert_not_called()
+
+    def test_gate3_readback_com_runtime_alterado_nao_confirma(self):
+        plan = self._plan()
+        def poster(_issue, body):
+            self.context["comments"].append({
+                "id": 1291, "body": body,
+                "user": {"login": pub.OWNER, "id": pub.PO_GITHUB_ID},
+                "updated_at": "2026-11-16T16:00:00Z",
+            })
+            self.context["f7_commit"]["runtime_digest"] = "f" * 64
+            return {"id": 1291}
         with self.assertRaisesRegex(pub.PublicationPending, "reconciliar LIVE"):
             self._apply(plan=plan, poster=poster)
         self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
