@@ -787,9 +787,33 @@ def test_rejeicao_confirmacao_po_string_ou_inteiro(custom_client, lab_env):
         assert "booleano True" in resp.json()["detail"]
 
 
-def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(custom_client, lab_env):
+def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(lab_env):
     """Comprova que decisões não são aceitas em execução ativa e APROVADO é rejeitado em estados não elegíveis."""
-    client, exec_svc = custom_client
+    reset_services()
+    em_execucao_event = threading.Event()
+
+    def runner_pausado(**kwargs):
+        em_execucao_event.set()
+        cancel_check = kwargs.get("cancel_check")
+        while not (cancel_check and cancel_check()):
+            time.sleep(0.01)
+        return GenericResult(
+            status="CANCELADO",
+            execution_id="c",
+            mission_id="M",
+            issue=121,
+            mission_digest="d",
+        )
+
+    exec_svc = ExecutionService(
+        data_dir=lab_env["data_dir"],
+        labs_root=lab_env["labs_root"],
+        cycle_runner=runner_pausado,
+    )
+    app = create_app()
+    app.dependency_overrides[get_execution_service] = lambda: exec_svc
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
     token = obter_csrf_token()
     headers = {
         "Origin": "http://127.0.0.1:8000",
@@ -797,13 +821,13 @@ def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(custom_client,
         "X-CSRF-Token": token,
     }
 
-    # 1. Cria execução e simula status EM_EXECUCAO
+    # 1. Inicia execução que fica aguardando cancelamento
     res = exec_svc.executar_missao(
         manifest_path=lab_env["manifest_path"],
         confirmacao_po=True,
     )
     exec_id = res["execution_id"]
-    exec_svc._memory_records[exec_id].status = "EM_EXECUCAO"
+    assert em_execucao_event.wait(timeout=3)
 
     # Tentativa de registrar decisão durante EM_EXECUCAO deve retornar HTTP 400
     resp_ativa = client.post(f"/api/missoes/execucoes/{exec_id}/decisao", json={
@@ -815,7 +839,8 @@ def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(custom_client,
     assert "ainda em andamento" in resp_ativa.json()["detail"]
 
     # 2. Cancela a execução
-    exec_svc.cancelar_execucao(exec_id)
+    resp_cancel = exec_svc.cancelar_execucao(exec_id)
+    assert resp_cancel["status"] == "CANCELADO"
     assert exec_svc.obter_execucao(exec_id)["status"] == "CANCELADO"
 
     # Tentativa de APROVAR execução cancelada deve retornar HTTP 400
@@ -836,4 +861,5 @@ def test_rejeicao_decisao_aprovado_em_execucao_ativa_ou_cancelada(custom_client,
     assert resp_reprovada.status_code == 200
     assert resp_reprovada.json()["decisao_po"]["tipo"] == "decisao_local_declarada"
     assert resp_reprovada.json()["decisao_po"]["decisao"] == "REPROVADO"
+
 
