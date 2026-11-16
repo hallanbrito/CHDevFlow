@@ -95,7 +95,7 @@ def _verify_module_code(module: Any, filename: Path) -> str:
     missing = [name for name in expected if name.isidentifier()
                and name not in vars(module)]
     if missing:
-        raise RuntimeIdentityError("Funcao Python F7 ausente no runtime")
+        raise RuntimeIdentityError("Funcao Python F7 ausente no runtime: " + missing[0])
     for name, code in runtime.items():
         baseline = expected.get(name)
         if baseline is None or marshal.dumps(code) != marshal.dumps(baseline):
