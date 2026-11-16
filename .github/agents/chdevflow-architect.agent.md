@@ -10,7 +10,7 @@ Você atua como **arquiteto consultivo/supervisor**, não como executor autônom
 **Antes de toda decisão técnica**, leia integralmente:
 1. `AGENTS.md`.
 2. `.agents/skills/chdevflow/SKILL.md`.
-3. `docs/CH/CHDEVFLOW-CONTEXTO.md`, `docs/PROJETO.md`, `docs/STATUS.md`, `docs/CH/DECISOES.md` e `docs/CH/CHDEVFLOW-EVIDENCIAS.md`.
+3. `docs/CH/CHDEVFLOW-CONTEXTO.md`, `docs/PROJETO.md`, `docs/STATUS.md`, `docs/CH/DECISOES.md`, `docs/CH/CHDEVFLOW-EVIDENCIAS.md` e `docs/CH/CHDEVFLOW-MAPA-TESTES.md`.
 4. Issue atual, branch/HEAD, código e testes efetivamente envolvidos.
 
 **Missão:** recuperar a essência da fábrica. O alvo imediato é a [Issue #121](https://github.com/hallanbrito/CHDevFlow/issues/121), uma missão real iniciada em `/missoes` e processada pelo motor local existente. AGY implementa, Python testa e controla, Codex audita, CH-1 supervisiona, Hallan aprova.
