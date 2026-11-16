@@ -50,6 +50,37 @@ A suíte `tests/test_f7_runtime_identity.py` cobre origem adulterada, arquivo ed
 
 **Limites e risco residual:** verificação em processo **não é prova externa de execução hermética ou imutável**. Um atacante capaz de adulterar o intérprete, os módulos do verificador, a memória depois da última verificação, as ferramentas `git`/`gh`, ou as dependências externas poderá contornar este mecanismo. A homologação integral do achado #6 ainda requer um artefato executor versionado, um ambiente de execução isolado/imutável com identidade verificável (por exemplo, digest de imagem ou pacote), configuração de dependências fixada, e preservação desse vínculo até o ponto da escrita. **Nenhum dos novos testes concede autorização de publicação.**
 
+## Hardenings E3-A — política LIVE + admissão de outbox V1 (Draft)
+
+Implementadas na branch da PR #94, **ainda sem homologação**:
+
+- O publicador consulta **repo Actions Variables pelo GitHub API LIVE**
+  para obter chave pública de atestação, SHA do produtor, fingerprints revogados
+  e IDs de workflow. Não usa o ambiente local como origem de confiança.
+- Três **pins versionados** exigem fingerprint da chave, SHA do produtor e
+  ID do workflow V1; **permanecem vazios/desabilitados** até auditoria e
+  aprovação individual do PO. Repo Variables sozinhas não são imutáveis
+  para um administrador Solo; essa segunda checagem dificulta trocar a
+  política sem mudar o SHA do publicador auditado.
+- A admissão V1 somente aceita recibo assinado com origem
+  `github-actions:v1:<run>:<attempt>:<artifact>:sha256:<digest>` e
+  verifica via GitHub API workflow, SHA, branch main, repo ID, tentativa,
+  artefato, bytes do ZIP e SHA-256 e reconfere o run. A sonda
+  `F7-CUSTODY-PROBE` não satisfaz esse contrato.
+- Testes novos cobrem ausência/alteração dos pins, overrides de env,
+  política inválida, workflow/repo/artefato trocados, ZIP adulterado,
+  corrida no run e origem da sonda.
+
+**Bloqueios importantes mantidos:** ainda não há workflow produtor V1, imagem
+OCI/lock de dependências atestados, execução real AGY/Codex num runner
+independente, nem assinatura de um manifesto de executor. O verificador
+in-process continua apenas defesa adicional. O risco residual de conta
+administrativa comprometida permanece.
+
+O desenho executável, fases de implantação, Sigstore/SLSA e critérios de
+aceite estão em [CH-PIPE-01-F7-EXECUTOR-V1-TRUST.md](CH-PIPE-01-F7-EXECUTOR-V1-TRUST.md).
+O Gate 3 NÃO pode ser homologado com E3-A isoladamente.
+
 ## Evidências exigidas para homologar Gate 3
 
 - Relatório de auditoria Codex com commit exato do publicador, parecer e achados resolvidos ou riscos aceitos explicitamente pelo PO, sem inferir homologação de um teste mockado.
