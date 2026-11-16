@@ -1192,6 +1192,19 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(calls, ["GET", "GET"])
         self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
 
+    def test_gate3_readback_com_arvore_f7_alterada_nao_confirma_publicacao(self):
+        plan = self._plan()
+        def poster(_issue, body):
+            self.context["comments"].append({
+                "id": 1290, "body": body, "user": {"login": "hallanbrito"},
+                "updated_at": "2026-11-16T15:00:00Z",
+            })
+            self.context["f7_commit"]["git_commit"]["tree"]["sha"] = "f" * 40
+            return {"id": 1290}
+        with self.assertRaisesRegex(pub.PublicationPending, "Readback"):
+            self._apply(plan=plan, poster=poster)
+        self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
+
     def test_gate3_plano_antigo_rejeitado_antes_de_reserva_ou_post(self):
         plan = self._plan()
         plan.pop("f7_audited_sha")
