@@ -71,11 +71,28 @@ class ExternalRuntimeReceiptTests(unittest.TestCase):
             "repository": {"id": receipt.REPO_ID},
         }
 
+    def _producer(self):
+        return {
+            "id": self.data["producer_run_id"],
+            "workflow_id": 4567,
+            "path": receipt.PRODUCER_WORKFLOW_PATH + "@refs/heads/main",
+            "head_sha": "f" * 40,
+            "head_branch": "main",
+            "event": "workflow_dispatch",
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": self.data["producer_run_attempt"],
+            "repository": {"id": receipt.REPO_ID},
+        }
+
     def _verified(self, run=None):
         if run is None:
             run = self._live()
         with patch.object(receipt, "ATTESTOR_SHA_PIN", "e" * 40), \
              patch.object(receipt, "ATTESTOR_WORKFLOW_ID_PIN", 7890), \
+             patch.object(receipt, "PRODUCER_SHA_PIN", "f" * 40), \
+             patch.object(receipt, "PRODUCER_WORKFLOW_ID_PIN", 4567), \
+             patch.object(receipt, "_live_producer_run", return_value=self._producer()), \
              patch.object(receipt, "_live_attestor_run", return_value=run), \
              patch.object(receipt, "_verify_sigstore") as sigstore:
             outcome = receipt.verify_runtime_receipt(
@@ -102,6 +119,9 @@ class ExternalRuntimeReceiptTests(unittest.TestCase):
     def test_recibo_sem_assinatura_bloqueia(self):
         with patch.object(receipt, "ATTESTOR_SHA_PIN", "e" * 40), \
              patch.object(receipt, "ATTESTOR_WORKFLOW_ID_PIN", 7890), \
+             patch.object(receipt, "PRODUCER_SHA_PIN", "f" * 40), \
+             patch.object(receipt, "PRODUCER_WORKFLOW_ID_PIN", 4567), \
+             patch.object(receipt, "_live_producer_run", return_value=self._producer()), \
              patch.object(receipt, "_live_attestor_run", return_value=self._live()), \
              patch.object(receipt, "_verify_sigstore",
                           side_effect=receipt.ExternalRuntimeReceiptError("sem assinatura")):
@@ -165,6 +185,9 @@ class ExternalRuntimeReceiptTests(unittest.TestCase):
             with self.subTest(changed=changed):
                 with patch.object(receipt, "ATTESTOR_SHA_PIN", "e" * 40), \
                      patch.object(receipt, "ATTESTOR_WORKFLOW_ID_PIN", 7890), \
+                     patch.object(receipt, "PRODUCER_SHA_PIN", "f" * 40), \
+                     patch.object(receipt, "PRODUCER_WORKFLOW_ID_PIN", 4567), \
+                     patch.object(receipt, "_live_producer_run", return_value=self._producer()), \
                      patch.object(receipt, "_live_attestor_run",
                                   return_value={**self._live(), **changed}), \
                      patch.object(receipt, "_verify_sigstore") as sigstore:
@@ -172,6 +195,36 @@ class ExternalRuntimeReceiptTests(unittest.TestCase):
                         receipt.verify_runtime_receipt(
                             self.root, self.outbox, self.proof)
                     sigstore.assert_not_called()
+
+    def test_run_produtor_falseado_bloqueia_sem_assinatura(self):
+        variants = (
+            {"id": True},
+            {"workflow_id": 9999},
+            {"path": ".github/workflows/f7-custody-producer.yml"},
+            {"head_sha": "a" * 40},
+            {"head_branch": "feat/noprotect"},
+            {"event": "push"},
+            {"status": "in_progress"},
+            {"conclusion": "failure"},
+            {"run_attempt": 2},
+            {"repository": {"id": 900}},
+        )
+        for update in variants:
+            with self.subTest(update=update):
+                with patch.object(receipt, "ATTESTOR_SHA_PIN", "e" * 40), \
+                     patch.object(receipt, "ATTESTOR_WORKFLOW_ID_PIN", 7890), \
+                     patch.object(receipt, "PRODUCER_SHA_PIN", "f" * 40), \
+                     patch.object(receipt, "PRODUCER_WORKFLOW_ID_PIN", 4567), \
+                     patch.object(receipt, "_live_producer_run",
+                                  return_value={**self._producer(), **update}), \
+                     patch.object(receipt, "_live_attestor_run") as live_attestor, \
+                     patch.object(receipt, "_verify_sigstore") as signature:
+                    with self.assertRaisesRegex(
+                            receipt.ExternalRuntimeReceiptError, "Run produtor"):
+                        receipt.verify_runtime_receipt(
+                            self.root, self.outbox, self.proof)
+                    live_attestor.assert_not_called()
+                    signature.assert_not_called()
 
     def test_recibo_simbolico_bloqueia(self):
         self.receipt_path.unlink()
