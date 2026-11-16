@@ -107,7 +107,7 @@ def _verify_module_code(module: Any, filename: Path) -> str:
     for name, code in runtime.items():
         baseline = expected.get(name)
         if baseline is None or marshal.dumps(code) != marshal.dumps(baseline):
-            raise RuntimeIdentityError("Bytecode Python carregado difere da fonte F7")
+            raise RuntimeIdentityError("Bytecode Python carregado diverge: " + module.__name__ + ":" + name)
     digest = hashlib.sha256()
     for name, code in sorted(runtime.items()):
         digest.update(name.encode("utf-8"))
