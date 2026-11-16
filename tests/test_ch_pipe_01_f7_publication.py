@@ -694,15 +694,19 @@ class PublicationTests(unittest.TestCase):
                 "trusted_key": key, "producer_sha": producer_sha,
                 "revocations": "NONE", "producer_workflow_id": 42,
                 "source_repo_id": pub.F7_REPOSITORY_ID,
+                "v1_workflow_id": 4242,
                 "key_fingerprint": "SHA256:teste",
             }
-            with patch.object(pub, "_f7_remote_trust_policy", return_value=policy):
+            with (patch.object(pub, "_f7_remote_trust_policy", return_value=policy),
+                  patch.object(pub, "verify_v1_producer_origin",
+                               return_value={"run_id": 42}) as origin_check):
                 original = execution_statement(
                     self._outbox(), producer_sha=producer_sha, producer_run=origin)
                 sign(original, trusted)
                 code, result = observe()
                 self.assertEqual(code, 0)
                 self.assertEqual(json.loads(result)["producer_run"], origin)
+                origin_check.assert_called()
 
                 (self.root / "attempt-02" / "testes.log").write_text(
                     "Log alterado e hashes locais recalculados", encoding="utf-8")
@@ -727,6 +731,7 @@ class PublicationTests(unittest.TestCase):
             "CH_F7_TRUSTED_RUNNER_SHA": "e" * 40,
             "CH_F7_REVOKED_RUNNER_FINGERPRINTS": "NONE",
             "CH_F7_PRODUCER_WORKFLOW_ID": "42",
+            "CH_F7_V1_PRODUCER_WORKFLOW_ID": "4242",
         }
         def api(*args):
             endpoint = args[-1]
@@ -743,7 +748,7 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(policy["trusted_key"], key)
         self.assertEqual(policy["producer_sha"], "e" * 40)
         self.assertEqual(policy["producer_workflow_id"], 42)
-        self.assertEqual(get.call_count, 5)
+        self.assertEqual(get.call_count, 6)
 
     def test_politica_remota_f7_nega_vars_ausentes_ou_violadas(self):
         import base64
@@ -754,11 +759,13 @@ class PublicationTests(unittest.TestCase):
             "CH_F7_TRUSTED_RUNNER_SHA": "e" * 40,
             "CH_F7_REVOKED_RUNNER_FINGERPRINTS": "NONE",
             "CH_F7_PRODUCER_WORKFLOW_ID": "42",
+            "CH_F7_V1_PRODUCER_WORKFLOW_ID": "4242",
         }
         variants = (
             ("missing", "CH_F7_TRUSTED_RUNNER_PUBKEY", None),
             ("bad-sha", "CH_F7_TRUSTED_RUNNER_SHA", "curto"),
             ("bad-workflow", "CH_F7_PRODUCER_WORKFLOW_ID", "0"),
+            ("bad-v1-workflow", "CH_F7_V1_PRODUCER_WORKFLOW_ID", "0"),
             ("missing-revocation", "CH_F7_REVOKED_RUNNER_FINGERPRINTS", ""),
         )
         for label, field, changed in variants:
