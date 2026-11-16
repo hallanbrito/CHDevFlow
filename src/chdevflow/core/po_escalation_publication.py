@@ -44,6 +44,9 @@ HEX32 = re.compile(r"^[0-9a-f]{32}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 F7_AUDIT_VARIABLE = "CH_F7_AUDITED_COMMIT_SHA"
 F7_REPOSITORY_ID = 1424359000
+# Pin versionado, intencionalmente nao provisionado. Exige auditoria do SHA
+# e decisao explicita PO antes de confiar em qualquer pubkey remota.
+F7_TRUST_KEY_FINGERPRINT_PIN = ""
 F7_TRUST_VARIABLES = (
     "CH_F7_TRUSTED_RUNNER_PUBKEY",
     "CH_F7_TRUSTED_RUNNER_SHA",
@@ -171,6 +174,10 @@ def _f7_remote_trust_policy() -> dict:
         key = values["CH_F7_TRUSTED_RUNNER_PUBKEY"]
         revocations = values["CH_F7_REVOKED_RUNNER_FINGERPRINTS"]
         fingerprint = validate_trusted_key(key, revocations)
+        if (not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}",
+                             F7_TRUST_KEY_FINGERPRINT_PIN)
+                or fingerprint != F7_TRUST_KEY_FINGERPRINT_PIN):
+            raise ValueError("Chave remota nao corresponde ao pin versionado")
         sha = values["CH_F7_TRUSTED_RUNNER_SHA"]
         workflow = values["CH_F7_PRODUCER_WORKFLOW_ID"]
         v1_workflow = values["CH_F7_V1_PRODUCER_WORKFLOW_ID"]
