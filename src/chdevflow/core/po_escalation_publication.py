@@ -39,6 +39,8 @@ MARKER_PREFIX = "<!-- CHDEVFLOW-F7-EXECUTION:"
 # serializacao entre hosts e reauditoria. Nao habilitar apenas por env.
 REMOTE_PUBLICATION_ENABLED = False
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+F7_AUDIT_VARIABLE = "CH_F7_AUDITED_COMMIT_SHA"
 
 
 class PublicationError(ValueError):
@@ -154,6 +156,68 @@ def _verify_reservation_protection() -> dict:
             "namespace": NAMESPACE, "can_bypass": False}
 
 
+
+def _local_f7_checkout_sha() -> str:
+    """Identifica o checkout que efetivamente executa o publicador F7.
+
+    Nunca confia em SHA fornecido por outbox ou argumento CLI. O checkout deve
+    ser o HEAD auditado, sem alteracoes rastreadas ou arquivos nao rastreados.
+    """
+    root = Path(__file__).resolve().parents[3]
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False)
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PublicationError("Commit F7 local nao verificavel; sem escrita") from exc
+    if (head.returncode != 0 or status.returncode != 0 or status.stdout
+            or not isinstance(head.stdout, bytes)):
+        raise PublicationError("Worktree F7 suja ou Git indisponivel; sem escrita")
+    try:
+        sha = head.stdout.decode("ascii").strip()
+    except UnicodeError as exc:
+        raise PublicationError("SHA Git F7 invalido") from exc
+    if not HEX40.fullmatch(sha):
+        raise PublicationError("SHA Git F7 invalido")
+    return sha
+
+
+def _f7_audit_context() -> dict:
+    """Consulta o pin cadastrado pelo PO na API LIVE, nao na outbox local."""
+    variable = _gh_json("api", f"repos/{REPO}/actions/variables/{F7_AUDIT_VARIABLE}")
+    if not isinstance(variable, dict) or variable.get("name") != F7_AUDIT_VARIABLE:
+        raise PublicationError("Politica externa de commit F7 auditado ausente")
+    sha = variable.get("value")
+    if not isinstance(sha, str) or not HEX40.fullmatch(sha):
+        raise PublicationError("Pin do commit F7 auditado ausente ou invalido")
+    return {
+        "policy_sha": sha,
+        "local_sha": _local_f7_checkout_sha(),
+        "git_commit": _gh_json("api", f"repos/{REPO}/git/commits/{sha}"),
+    }
+
+
+def _validated_f7_audited_commit(context: dict) -> tuple[str, str]:
+    """Exige o MESMO SHA no pin do PO, no checkout e no objeto Git remoto."""
+    audited = context.get("f7_commit")
+    if not isinstance(audited, dict):
+        raise PublicationError("Evidencia do commit F7 auditado ausente")
+    pinned, local, remote = (
+        audited.get("policy_sha"), audited.get("local_sha"), audited.get("git_commit"))
+    if (not isinstance(pinned, str) or not HEX40.fullmatch(pinned)
+            or local != pinned or not isinstance(remote, dict)
+            or remote.get("sha") != pinned):
+        raise PublicationError("SHA do commit F7 auditado divergente ou ausente")
+    tree = remote.get("tree")
+    tree_sha = tree.get("sha") if isinstance(tree, dict) else None
+    if not isinstance(tree_sha, str) or not HEX40.fullmatch(tree_sha):
+        raise PublicationError("Arvore do commit F7 auditado nao verificavel")
+    return pinned, tree_sha
+
+
 def _live_context(issue: int, approval_comment: int) -> dict:
     if type(issue) is not int or issue < 1 or type(approval_comment) is not int or approval_comment < 1:
         raise PublicationError("Identificadores de consulta invalidos")
@@ -168,6 +232,7 @@ def _live_context(issue: int, approval_comment: int) -> dict:
         raise PublicationError("Permissao LIVE de escrita na Issue nao comprovada")
     target = _live_issue(issue)
     base_commit = _gh_json("api", f"repos/{REPO}/git/commits/{_issue_baseline_sha(target)}")
+    f7_commit = _f7_audit_context()
     project = _gh_json(
         "project", "item-list", str(PROJECT), "--owner", OWNER,
         "--format", "json", "-L", "500")
@@ -188,12 +253,12 @@ def _live_context(issue: int, approval_comment: int) -> dict:
                         else [*_issue_comments(approval_thread_number), *comments])
     return {
         "who": who, "repository": repository, "issue": target, "base_commit": base_commit,
-        "project": project, "approval": approval,
+        "f7_commit": f7_commit, "project": project, "approval": approval,
         "comments": comments, "approval_history": approval_history,
     }
 
 
-def _expected_comment(outbox: dict, approval_id: int) -> str:
+def _expected_comment(outbox: dict, approval_id: int, f7_sha: str) -> str:
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     return (
         "CHDevFlow F7 — Escalonamento para decisao do PO\n\n"
@@ -204,7 +269,8 @@ def _expected_comment(outbox: dict, approval_id: int) -> str:
         f"SHA-256 do codigo AGY: {outbox['code_sha256']}\n"
         f"SHA Git base da missao: {outbox['provenance']['base_sha']}\n"
         f"Digest do manifesto: {outbox['provenance']['mission_digest']}\n"
-        f"Autorizacao especifica: comentario #{approval_id}\n\n"
+        f"Autorizacao especifica: comentario #{approval_id}\n"
+        f"SHA Git F7 auditado/autorizado: {f7_sha}\n\n"
         "Evidencias locais permanecem sob custodia do PO. "
         "Esta publicacao nao autoriza admissao no Project #2, "
         "merge, deploy, execucao de agentes nem alteracao de campos.\n\n"
@@ -213,7 +279,7 @@ def _expected_comment(outbox: dict, approval_id: int) -> str:
 
 
 def _approval_fingerprint(proof: dict, outbox: dict,
-                          history: list[dict]) -> dict:
+                          history: list[dict], f7_sha: str) -> dict:
     if not isinstance(proof, dict):
         raise PublicationError("Comentario PO invalido")
     approval_id = proof.get("id")
@@ -233,6 +299,7 @@ def _approval_fingerprint(proof: dict, outbox: dict,
         f"CODE_SHA256={outbox['code_sha256']} "
         f"BASE_SHA={outbox['provenance']['base_sha']} "
         f"MISSION_DIGEST={outbox['provenance']['mission_digest']} "
+        f"F7_AUDITED_SHA={f7_sha} "
         "ACTION=COMMENT_ONLY"
     )
     body = proof.get("body")
@@ -265,6 +332,7 @@ def _approval_fingerprint(proof: dict, outbox: dict,
         "id": approval_id, "updated_at": proof.get("updated_at"),
         "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
         "issue_url": proof["issue_url"], "login": OWNER,
+        "f7_audited_sha": f7_sha,
     }
 
 
@@ -362,11 +430,12 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
             + " " + ", ".join(diagnosis["reasons"]))
     base_tree = _validate_issue_baseline(
         issue, outbox["provenance"]["base_sha"], context.get("base_commit"))
+    f7_sha, f7_tree = _validated_f7_audited_commit(context)
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
     approval = _approval_fingerprint(
-        context.get("approval"), outbox, context.get("approval_history"))
-    comment_text = _expected_comment(outbox, approval["id"])
+        context.get("approval"), outbox, context.get("approval_history"), f7_sha)
+    comment_text = _expected_comment(outbox, approval["id"], f7_sha)
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     normalized = _comment_snapshot(context.get("comments"))
     matches = [c for c in context["comments"] if marker in c["body"]]
@@ -389,6 +458,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "comments": _digest(normalized),
         "approval": _digest(approval),
         "approval_history": _digest(_comment_snapshot(context["approval_history"])),
+        "f7_audited_commit": _digest({"sha": f7_sha, "tree": f7_tree}),
         "identity": _digest({
             "who": context["who"].get("login"),
             "permissions": context["repository"].get("permissions"),
@@ -401,6 +471,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "mission_digest": outbox["provenance"]["mission_digest"],
         "base_sha": outbox["provenance"]["base_sha"],
         "base_tree": base_tree,
+        "f7_audited_sha": f7_sha, "f7_audited_tree": f7_tree,
         "approval_comment": approval["id"],
         "project_state": preview["state"],
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
@@ -582,6 +653,10 @@ def apply_publication_plan(
             or plan.get("mission_id") != outbox["mission_id"]
             or plan.get("mission_digest") != outbox["provenance"]["mission_digest"]
             or plan.get("base_sha") != outbox["provenance"]["base_sha"]
+            or not isinstance(plan.get("f7_audited_sha"), str)
+            or not HEX40.fullmatch(plan["f7_audited_sha"])
+            or not isinstance(plan.get("f7_audited_tree"), str)
+            or not HEX40.fullmatch(plan["f7_audited_tree"])
             or type(plan.get("approval_comment")) is not int):
         raise PublicationError("Plano nao pertence a outbox")
     def current_plan() -> dict:
@@ -624,6 +699,7 @@ def apply_publication_plan(
             "Revalidacao apos lock inconclusiva; nenhuma repeticao automatica"
         ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
+           "f7_audited_sha": plan["f7_audited_sha"],
            "reservation_sha": reservation_sha,
            "producer": custody,
            "issue": outbox["issue"], "digest": supplied_digest})
