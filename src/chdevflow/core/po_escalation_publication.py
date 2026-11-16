@@ -16,7 +16,7 @@ import sys
 from typing import Any, Callable
 
 from chdevflow.core.intake import validate_issue, _fields, _get
-from chdevflow.core.po_escalation_attestation import verify_external_attestation
+from chdevflow.core.po_escalation_attestation import (verify_external_attestation, validate_trusted_key)
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
 from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules, RuntimeIdentityError
@@ -42,6 +42,13 @@ REMOTE_PUBLICATION_ENABLED = False
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 F7_AUDIT_VARIABLE = "CH_F7_AUDITED_COMMIT_SHA"
+F7_REPOSITORY_ID = 1424359000
+F7_TRUST_VARIABLES = (
+    "CH_F7_TRUSTED_RUNNER_PUBKEY",
+    "CH_F7_TRUSTED_RUNNER_SHA",
+    "CH_F7_REVOKED_RUNNER_FINGERPRINTS",
+    "CH_F7_PRODUCER_WORKFLOW_ID",
+)
 
 
 class PublicationError(ValueError):
@@ -120,13 +127,64 @@ def _reservation_store() -> GitReservationStore:
     return GitReservationStore(f"https://github.com/{REPO}.git", github_cli_credentials=True)
 
 
+def _f7_remote_trust_policy() -> dict:
+    """Consulta LIVE uma politica no repositorio GitHub, nunca no env local.
+
+    Este controle so elimina injeção de CH_F7_TRUSTED_RUNNER_* via host.
+    Variaveis de repositorio podem ser modificadas pelo administrador Solo;
+    politica remota ainda nao equivale a raiz imutavel nem a runner atestado.
+    """
+    repository = _gh_json("api", f"repos/{REPO}")
+    if (not isinstance(repository, dict)
+            or repository.get("full_name") != REPO
+            or type(repository.get("id")) is not int
+            or repository["id"] != F7_REPOSITORY_ID):
+        raise PublicationError("Identidade do repositorio da politica F7 diverge")
+    values: dict[str, str] = {}
+    for name in F7_TRUST_VARIABLES:
+        variable = _gh_json("api", f"repos/{REPO}/actions/variables/{name}")
+        if (not isinstance(variable, dict) or variable.get("name") != name
+                or not isinstance(variable.get("value"), str)
+                or not variable["value"].isascii()
+                or not 0 < len(variable["value"]) <= 4096):
+            raise PublicationError("Variavel de politica F7 LIVE ausente ou invalida")
+        values[name] = variable["value"].strip()
+    try:
+        key = values["CH_F7_TRUSTED_RUNNER_PUBKEY"]
+        revocations = values["CH_F7_REVOKED_RUNNER_FINGERPRINTS"]
+        fingerprint = validate_trusted_key(key, revocations)
+        sha = values["CH_F7_TRUSTED_RUNNER_SHA"]
+        workflow = values["CH_F7_PRODUCER_WORKFLOW_ID"]
+        if (not HEX40.fullmatch(sha)
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", workflow)):
+            raise ValueError("SHA/workflow do produtor invalidos")
+    except (ValueError, KeyError) as exc:
+        raise PublicationError("Politica F7 remota invalida ou revogada") from exc
+    return {
+        "producer_sha": sha, "producer_workflow_id": int(workflow),
+        "trusted_key": key, "revocations": revocations,
+        "key_fingerprint": fingerprint,
+        "source_repo_id": F7_REPOSITORY_ID,
+    }
+
+
 def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
-    return verify_external_attestation(
+    policy = _f7_remote_trust_policy()
+    proof = verify_external_attestation(
         outbox_path.parent / "f7-attestation.json", outbox,
-        trusted_key=os.environ.get("CH_F7_TRUSTED_RUNNER_PUBKEY", ""),
-        trusted_producer_sha=os.environ.get("CH_F7_TRUSTED_RUNNER_SHA", ""),
-        revoked_fingerprints=os.environ.get("CH_F7_REVOKED_RUNNER_FINGERPRINTS", ""),
+        trusted_key=policy["trusted_key"],
+        trusted_producer_sha=policy["producer_sha"],
+        revoked_fingerprints=policy["revocations"],
     )
+    return {
+        **proof,
+        "trust_policy": {
+            "source_repo_id": policy["source_repo_id"],
+            "producer_workflow_id": policy["producer_workflow_id"],
+            "producer_sha": policy["producer_sha"],
+            "key_fingerprint": policy["key_fingerprint"],
+        },
+    }
 
 
 RESERVATION_RULESET_ID = 27322425
