@@ -26,6 +26,7 @@ CORE_MODULES = (
     "chdevflow.core.po_escalation_reservation",
     "chdevflow.core.po_escalation",
     "chdevflow.core.po_escalation_runtime",
+    "chdevflow.core.po_escalation_origin",
     "chdevflow.core.intake",
     "chdevflow.core.experimental_pilot",
 )
