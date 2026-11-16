@@ -1,0 +1,82 @@
+name: F7 E3-C1 - V1 read-only readiness gate
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3c1-v1-preflight-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3c1-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lab-evidence-readiness:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3c1-v1-preflight-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Checkout exact SHA (no persisted credentials)
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate V1 fail-closed contract offline
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python -m unittest discover -s tests -p test_f7_v1_preflight.py -v
+      - name: Download exact E3-C0 LAB chain (read-only)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download 43888441966 -R hallanbrito/CHDevFlow \
+            --name f7-e3c0-consumer-075ddbdb39bd32a824b212cd531461543d1307d9 \
+            --dir dist
+          echo 'e474e9a54e49f9a2209425ae9d286965097bc790e88078ed9a4be203f6937fb3  dist/e3c0-manifest.json' \
+            | sha256sum --check
+          gh attestation verify dist/e3c0-manifest.json \
+            -R hallanbrito/CHDevFlow \
+            --signer-workflow hallanbrito/CHDevFlow/.github/workflows/f7-e3c0-consume-attested-executor.yml \
+            --source-digest 075ddbdb39bd32a824b212cd531461543d1307d9 \
+            --source-ref refs/heads/feat/ch-pipe-01-f7-e3c0-consumer-20261116 \
+            --deny-self-hosted-runners
+          echo E3C1_E3C0_SOURCE_ATTESTED
+      - name: Read verified LAB evidence without granting V1 authorization
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/f7_v1_preflight.py --manifest dist/e3c0-manifest.json \
+            | tee dist/e3c1-readiness.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          obj = json.loads(Path("dist/e3c1-readiness.json").read_text())
+          assert obj["state"] == "BLOCKED_V1_NOT_AUTHORIZED"
+          assert obj["classification"] == "LAB_ONLY_NOT_V1"
+          assert obj["v1_run_created"] is False
+          assert obj["remote_publication_enabled"] is False
+          assert "REAL_AGY_EXECUTION_AND_CODEX_AUDIT" in obj["missing_gates"]
+          assert "GATE5_CONTROLLED_REAL_PILOT" in obj["missing_gates"]
+          assert not Path("dist/escalonamento_po.json").exists()
+          PY
+          echo E3C1_ATTESTED_LAB_REJECTED_FOR_V1_AS_DESIGNED
+      - name: Preserve read-only result; never an outbox
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: f7-e3c1-readiness-${{ github.sha }}
+          path: dist/e3c1-readiness.json
+          retention-days: 7
+          if-no-files-found: error
