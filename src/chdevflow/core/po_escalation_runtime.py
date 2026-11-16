@@ -23,6 +23,9 @@ CORE_MODULES = (
     "chdevflow.core.po_escalation_provenance",
     "chdevflow.core.po_escalation_reservation",
     "chdevflow.core.po_escalation",
+    "chdevflow.core.po_escalation_runtime",
+    "chdevflow.core.intake",
+    "chdevflow.core.experimental_pilot",
 )
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
@@ -82,7 +85,7 @@ def _verify_module_code(module: Any, filename: Path) -> str:
     try:
         with tokenize.open(filename) as stream:
             source = stream.read()
-        expected = _nested_compiled(compile(source, str(filename), "exec"))
+        expected = _nested_compiled(compile(source, str(filename), "exec", dont_inherit=True))
     except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
         raise RuntimeIdentityError("Fonte Python F7 nao recompilavel") from exc
     runtime = _runtime_functions(module)
