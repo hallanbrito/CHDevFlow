@@ -42,6 +42,13 @@ Publicador F7 em commit auditado, sem segredo de assinatura
    não fornecem mais a âncora da verificação do publicador.**
    A variável `CH_F7_V1_PRODUCER_WORKFLOW_ID` ainda não está provisionada;
    somente o PO pode cadastrá-la após validar o workflow V1.
+   **Pins versionados, vazios por design:** `F7_TRUST_KEY_FINGERPRINT_PIN`,
+   `F7_TRUSTED_PRODUCER_SHA_PIN` e `F7_TRUSTED_V1_WORKFLOW_ID_PIN` no
+   publicador. A comparação GH LIVE só autorizará a política se chave,
+   SHA e workflow também coincidirem com esses valores auditados. O PO
+   precisará fornecer os três dados reais após o produtor V1 existir,
+   aprovar o commit que os fixa e reauditar o HEAD. Não editar a variável
+   sem revisão nem preencher os pins com valores fictícios.
 2. **Origem LIVE:** `po_escalation_origin.verify_v1_producer_origin` só admite
    `github-actions:v1:<run_id>:<attempt>:<artifact_id>:sha256:<digest>`
    e consulta GH LIVE para verificar repo ID, workflow V1, branch `main`,
@@ -60,8 +67,10 @@ Publicador F7 em commit auditado, sem segredo de assinatura
 - O workflow `.github/workflows/f7-v1-producer.yml` **não existe nem executou**
   nesta entrega. Nenhuma outbox V1 real pode passar esta admissão.
 - Repo Variables são mais confiáveis que ambiente local, mas **não são imutáveis
-  contra administrador único**. Antes do aceite, adicionar pin/revisão da raiz
-  criptográfica de confiança ou atestação independente.
+  contra administrador único**. Os três pins compilados exigem revisão do SHA
+  para troca de chave, produtor ou workflow, mas **não eliminam o risco de
+  comprometimento da conta administrativa nem atestam o host consumidor**.
+  Avaliar também prova de atestação independente de ambiente/repositório.
 - Metadados e ZIP não demonstram automaticamente o que aconteceu no runner.
   Manifesto e assinatura independente precisam comprovar testes/execução reais.
 - A sonda Gate 1 não atesta missão V1 real. Nenhum run ou recibo de sonda pode
