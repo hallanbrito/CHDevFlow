@@ -50,6 +50,18 @@ class RuntimeIdentityTests(unittest.TestCase):
             with patch.object(runtime, "CORE_MODULES", (self.name,)):
                 yield
 
+    def test_checkout_real_e_modulos_f7_carregados_batem_com_git(self):
+        # Smoke independente usando os modulos de producao, sem GH remoto.
+        from chdevflow.core import po_escalation_publication as publication
+        self.assertFalse(publication.REMOTE_PUBLICATION_ENABLED)
+        head = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD"],
+            stdin=subprocess.DEVNULL, capture_output=True, check=False)
+        self.assertEqual(head.returncode, 0)
+        digest = runtime.verify_loaded_f7_modules(
+            ROOT, head.stdout.decode("ascii").strip())
+        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
     def test_blobs_e_funcoes_carregadas_idempotentes(self):
         with self.loaded():
             digest = runtime.verify_loaded_f7_modules(self.root, self.commit)
