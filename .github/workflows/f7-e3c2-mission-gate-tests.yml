@@ -1,0 +1,36 @@
+name: F7 E3-C2 - Mission authorization tests (no agents)
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3c2-mission-gate-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3c2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mission-gate-tests:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3c2-mission-gate-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact SHA without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Execute positive/negative authorization tests with no network
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_v1_mission_gate.py -v
+          python -I scripts/f7_v1_mission_gate.py --help >/dev/null
+          echo "E3C2_AUTHORIZATION_GATES_TESTED_NO_AGENTS"
