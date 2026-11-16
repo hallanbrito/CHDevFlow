@@ -99,7 +99,7 @@ def _semantic_code_digest(code: CodeType) -> str:
                     tuple(normalize(item) for item in value.co_consts),
                     value.co_names, value.co_varnames,
                     value.co_freevars, value.co_cellvars,
-                    value.co_exceptiontable)
+                    getattr(value, "co_exceptiontable", b""))
         if isinstance(value, (tuple, list)):
             return tuple(normalize(item) for item in value)
         return value
