@@ -28,6 +28,7 @@ APPROVAL_ISSUE = 63
 PLAN_SCHEMA = "CHDEVFLOW-F7-COMMENT-PLAN/1"
 RECEIPT_SCHEMA = "CHDEVFLOW-F7-COMMENT-PENDING/1"
 MAX_COMMENT_PAGES = 15
+REMOTE_PUBLICATION_ENABLED = False
 MARKER_PREFIX = "<!-- CHDEVFLOW-F7-EXECUTION:"
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
@@ -311,6 +312,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
 
 def _post_comment(issue: int, body: str) -> dict:
     """Unica escrita permitida: um comentario na Issue; sem retry."""
+    if not REMOTE_PUBLICATION_ENABLED:
+        raise PublicationError("POST F7 desativado ate a homologacao dos gates")
     return _gh_json(
         "api", "-X", "POST", f"repos/{REPO}/issues/{issue}/comments",
         "-f", "body=" + body)
@@ -374,6 +377,8 @@ def apply_publication_plan(
     human_prompt: Callable[[str], str] | None = None,
 ) -> dict:
     """Uma tentativa, guardada por digest, frase PO e duplo snapshot LIVE."""
+    if not REMOTE_PUBLICATION_ENABLED:
+        raise PublicationError("Aplicacao F7 desativada ate a homologacao dos gates")
     # Callbacks resolvidos em tempo de execucao para simular GitHub no teste
     # da CLI, sem executar qualquer chamada remota verdadeira.
     if reader is None:
@@ -502,6 +507,8 @@ def main(argv=None) -> int:
                     not args.confirm or args.audit_file is None):
                 raise PublicationError(
                     "Aplicacao exige somente --apply-plan, --confirm e --audit-file")
+            if not REMOTE_PUBLICATION_ENABLED:
+                raise PublicationError("POST F7 desativado ate a homologacao dos gates")
             plan = json.loads(args.apply_plan.read_text(encoding="utf-8"))
             handle, audit = _audit_writer(args.audit_file)
             with handle:
