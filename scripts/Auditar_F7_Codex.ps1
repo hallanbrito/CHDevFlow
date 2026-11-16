@@ -10,6 +10,17 @@ if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[0-9a-f]{40}$') {
     throw "Git SHA invalido; auditoria nao iniciada."
 }
 Get-Command codex -ErrorAction Stop | Out-Null
+Get-Command gh -ErrorAction Stop | Out-Null
+# Prova externa somente leitura: commit exato deve existir no GitHub oficial.
+$remoteSha = @(gh api "repos/hallanbrito/CHDevFlow/commits/$sha" --jq .sha)
+if ($LASTEXITCODE -ne 0 -or $remoteSha.Count -ne 1 -or $remoteSha[0].Trim() -ne $sha) {
+    throw "Commit F7 nao confirmado no GitHub remoto; auditoria bloqueada."
+}
+# Nao aceitar worktree divergente do HEAD sob revisao.
+$gitDirty = @(git -C $RepoRoot status --porcelain --untracked-files=all)
+if ($LASTEXITCODE -ne 0 -or $gitDirty.Count -gt 0) {
+    throw "Worktree suja ou Git indisponivel: nenhum SHA sera atestado."
+}
 $items = @(
     "src/chdevflow/core/po_escalation_publication.py",
     "src/chdevflow/core/po_escalation_provenance.py",
@@ -56,8 +67,21 @@ foreach ($relative in $items) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
         throw "Arquivo de auditoria ausente: $relative"
     }
+    # Confere conteudo local contra blob do commit HEAD. --path aplica
+    # filtros do Git (ex.: CRLF no Windows) antes de calcular o object id.
+    $gitObject = ("{0}:{1}" -f $sha, $relative)
+    $expectedBlob = (git -C $RepoRoot rev-parse --verify $gitObject).Trim()
+    if ($LASTEXITCODE -ne 0 -or $expectedBlob -notmatch '^[0-9a-f]{40}$') {
+        throw "Arquivo nao pertence ao commit: $relative"
+    }
+    $actualBlob = (git -C $RepoRoot hash-object "--path=$relative" $file).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualBlob -ne $expectedBlob) {
+        throw "Conteudo local difere de HEAD: $relative"
+    }
     $content = Get-Content -LiteralPath $file -Raw -Encoding utf8
-    $segments.Add("### ARQUIVO: $relative" + [Environment]::NewLine + $content)
+    $segments.Add(
+        ("### ARQUIVO: {0} | GIT_SHA={1} | BLOB={2}" -f $relative, $sha, $expectedBlob) +
+        [Environment]::NewLine + $content)
 }
 $prompt = $segments -join ([Environment]::NewLine + [Environment]::NewLine)
 $labRoot = Join-Path $HOME "CHDevFlow-Labs"

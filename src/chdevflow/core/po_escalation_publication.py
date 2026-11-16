@@ -15,12 +15,18 @@ import subprocess
 import sys
 from typing import Any, Callable
 
-from chdevflow.core.intake import validate_issue
+from chdevflow.core.intake import validate_issue, _fields, _get
+from chdevflow.core.po_escalation_attestation import verify_external_attestation
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
+from chdevflow.core.po_escalation_reservation import (
+    GitReservationStore, NAMESPACE, SCHEMA as RESERVATION_SCHEMA, ReservationError,
+)
 from chdevflow.core.po_escalation import (
+    _evidence_text, _read_evidence_bytes,
     EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
-    OWNER, PROJECT, REPO, SCHEMA, _safe_outbox,
+    OWNER, PROJECT, REPO, SCHEMA, _safe_outbox, _assert_no_link_ancestors,
+    _json_unique,
     build_escalation_preview, write_receipt_once,
 )
 
@@ -28,8 +34,10 @@ APPROVAL_ISSUE = 63
 PLAN_SCHEMA = "CHDEVFLOW-F7-COMMENT-PLAN/1"
 RECEIPT_SCHEMA = "CHDEVFLOW-F7-COMMENT-PENDING/1"
 MAX_COMMENT_PAGES = 15
-REMOTE_PUBLICATION_ENABLED = False
 MARKER_PREFIX = "<!-- CHDEVFLOW-F7-EXECUTION:"
+# A bloqueio definitivo e proposital ate prova externa de custodia,
+# serializacao entre hosts e reauditoria. Nao habilitar apenas por env.
+REMOTE_PUBLICATION_ENABLED = False
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 
 
@@ -47,8 +55,18 @@ def _digest(value: Any) -> str:
     ).encode("utf-8")).hexdigest()
 
 
+def _read_local_json(path: Path, *, cap: int = 100000) -> Any:
+    """Leitura estrita de plano/recibo, sem JSON excessivo ou chaves duplicadas."""
+    _assert_no_link_ancestors(path)
+    if not path.is_file() or path.stat().st_size > cap:
+        raise PublicationError("JSON local ausente ou excessivo")
+    return _json_unique(_evidence_text(_read_evidence_bytes(path, cap=cap)))
+
+
 def _gh_json(*args: str, expected_type: type = dict) -> Any:
     """Comunicacao GH por bytes UTF-8, sem locale cp1252 e sem expor stderr."""
+    if args and args[0] == "api":
+        args = ("api", "--hostname", "github.com", *args[1:])
     try:
         done = subprocess.run(
             ["gh", *args], capture_output=True, stdin=subprocess.DEVNULL,
@@ -57,8 +75,10 @@ def _gh_json(*args: str, expected_type: type = dict) -> Any:
         raise PublicationError("GitHub CLI indisponivel; sem escrita") from exc
     if done.returncode:
         raise PublicationError("Consulta GitHub negada/indisponivel; sem escrita")
+    if not isinstance(done.stdout, bytes) or len(done.stdout) > 4_000_000:
+        raise PublicationError("Resposta GitHub ausente ou excessiva")
     try:
-        parsed = json.loads(done.stdout.decode("utf-8", errors="strict"))
+        parsed = _json_unique(done.stdout.decode("utf-8", errors="strict"))
     except (UnicodeError, ValueError, AttributeError) as exc:
         raise PublicationError("GitHub CLI retornou JSON/UTF-8 invalido") from exc
     if not isinstance(parsed, expected_type):
@@ -81,6 +101,59 @@ def _issue_comments(issue: int) -> list[dict]:
     raise PublicationError("Comentarios nao exaustivos; sem publicar")
 
 
+def _live_issue(issue: int) -> dict:
+    return _gh_json(
+        "issue", "view", str(issue), "-R", REPO,
+        "--json", "id,number,title,body,labels,state,url")
+
+
+def _reconciliation_context(issue: int, _approval_comment: int) -> dict:
+    # A consulta de um efeito existente independe de a aprovacao ainda existir.
+    return {"who": _gh_json("api", "user"), "issue": _live_issue(issue),
+            "comments": _issue_comments(issue)}
+
+
+def _reservation_store() -> GitReservationStore:
+    return GitReservationStore(f"https://github.com/{REPO}.git", github_cli_credentials=True)
+
+
+def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
+    return verify_external_attestation(
+        outbox_path.parent / "f7-attestation.json", outbox,
+        trusted_key=os.environ.get("CH_F7_TRUSTED_RUNNER_PUBKEY", ""),
+        trusted_producer_sha=os.environ.get("CH_F7_TRUSTED_RUNNER_SHA", ""),
+        revoked_fingerprints=os.environ.get("CH_F7_REVOKED_RUNNER_FINGERPRINTS", ""),
+    )
+
+
+RESERVATION_RULESET_ID = 27322425
+PO_GITHUB_ID = 113695320
+
+
+def _verify_reservation_protection() -> dict:
+    """Confirma a politica imutavel e a identidade do mesmo cliente Git/REST."""
+    rule = _gh_json("api", f"repos/{REPO}/rulesets/{RESERVATION_RULESET_ID}")
+    if (not isinstance(rule, dict) or rule.get("id") != RESERVATION_RULESET_ID
+            or rule.get("source_type") != "Repository" or rule.get("source") != REPO
+            or rule.get("target") != "tag" or rule.get("enforcement") != "active"
+            or rule.get("bypass_actors") != [] or rule.get("current_user_can_bypass") != "never"
+            or rule.get("conditions") != {
+                "ref_name": {"include": [NAMESPACE + "*"], "exclude": []}}
+            or not isinstance(rule.get("rules"), list)
+            or {item.get("type") for item in rule["rules"] if isinstance(item, dict)}
+            != {"update", "deletion"}):
+        raise PublicationError("Namespace de reservas Git sem regra ativa de imutabilidade")
+    who = _gh_json("api", "user")
+    repo = _gh_json("api", f"repos/{REPO}")
+    perms = repo.get("permissions")
+    if (who.get("id") != PO_GITHUB_ID or who.get("login") != OWNER
+            or repo.get("full_name") != REPO
+            or not isinstance(perms, dict) or perms.get("push") is not True):
+        raise PublicationError("Identidade/permissao Git LIVE para reserva nao comprovada")
+    return {"ruleset_id": RESERVATION_RULESET_ID, "actor_id": PO_GITHUB_ID,
+            "namespace": NAMESPACE, "can_bypass": False}
+
+
 def _live_context(issue: int, approval_comment: int) -> dict:
     if type(issue) is not int or issue < 1 or type(approval_comment) is not int or approval_comment < 1:
         raise PublicationError("Identificadores de consulta invalidos")
@@ -93,9 +166,8 @@ def _live_context(issue: int, approval_comment: int) -> dict:
         perms.get(k) is True for k in ("push", "maintain", "admin")
     ):
         raise PublicationError("Permissao LIVE de escrita na Issue nao comprovada")
-    target = _gh_json(
-        "issue", "view", str(issue), "-R", REPO,
-        "--json", "id,number,title,body,labels,state,url")
+    target = _live_issue(issue)
+    base_commit = _gh_json("api", f"repos/{REPO}/git/commits/{_issue_baseline_sha(target)}")
     project = _gh_json(
         "project", "item-list", str(PROJECT), "--owner", OWNER,
         "--format", "json", "-L", "500")
@@ -115,7 +187,7 @@ def _live_context(issue: int, approval_comment: int) -> dict:
     approval_history = (comments if approval_thread_number == issue
                         else [*_issue_comments(approval_thread_number), *comments])
     return {
-        "who": who, "repository": repository, "issue": target,
+        "who": who, "repository": repository, "issue": target, "base_commit": base_commit,
         "project": project, "approval": approval,
         "comments": comments, "approval_history": approval_history,
     }
@@ -182,8 +254,9 @@ def _approval_fingerprint(proof: dict, outbox: dict,
         f"EXECUTION#{outbox['execution_id']}"
     )
     for comment in history:
-        if (comment["id"] > approval_id
-                and comment["user"].get("login") == OWNER
+        # Revogacao editada em comentario anterior tambem bloqueia.
+        # Uma nova autorizacao para esta mesma execucao nao a reabilita.
+        if (comment["user"].get("login") == OWNER
                 and isinstance(comment.get("body"), str)
                 and any(line.strip().startswith(revoke_prefix)
                         for line in comment["body"].splitlines())):
@@ -235,8 +308,33 @@ def _eligible_outbox(path: Path) -> dict:
         raise PublicationError("Outbox sem causa da terceira reprovacao: somente preview F7")
     # No modo publicacao, a V1 precisa comprovar toda a linha de producao.
     # Preview legado continua permitido em po_escalation.py.
-    verify_provenance(path.parent, outbox)
+    verify_provenance(path.parent, outbox, require_isolation=True)
     return outbox
+
+
+def _issue_baseline_sha(issue: dict) -> str:
+    body = issue.get("body")
+    if not isinstance(body, str):
+        raise PublicationError("Baseline Git da Issue LIVE ausente")
+    baseline = _get(body, _fields(body), ("Baseline Git (branch e SHA)", "Base SHA"))
+    hashes = re.findall(r"(?<![0-9a-fA-F])[0-9a-fA-F]{40}(?![0-9a-fA-F])",
+                        baseline)
+    if len(hashes) != 1:
+        raise PublicationError("Baseline Git da Issue LIVE deve ter um SHA completo")
+    return hashes[0].lower()
+
+
+def _validate_issue_baseline(issue: dict, expected_sha: str, commit: Any) -> str:
+    """Vincula a Issue e o manifesto ao objeto Git consultado no repositorio."""
+    if _issue_baseline_sha(issue) != expected_sha:
+        raise PublicationError("Baseline Git da Issue LIVE diverge do manifesto")
+    if not isinstance(commit, dict) or commit.get("sha") != expected_sha:
+        raise PublicationError("Objeto do commit base Git ausente ou divergente")
+    tree = commit.get("tree")
+    tree_sha = tree.get("sha") if isinstance(tree, dict) else None
+    if not isinstance(tree_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", tree_sha):
+        raise PublicationError("Objeto da arvore base Git ausente ou invalido")
+    return tree_sha
 
 
 def build_publication_plan(outbox: dict, context: dict) -> dict:
@@ -262,6 +360,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         raise PublicationError(
             "Intake F1 bloqueou publicacao: " + diagnosis["content_status"]
             + " " + ", ".join(diagnosis["reasons"]))
+    base_tree = _validate_issue_baseline(
+        issue, outbox["provenance"]["base_sha"], context.get("base_commit"))
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
     approval = _approval_fingerprint(
@@ -300,34 +400,33 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "mission_id": outbox["mission_id"], "code_sha256": outbox["code_sha256"],
         "mission_digest": outbox["provenance"]["mission_digest"],
         "base_sha": outbox["provenance"]["base_sha"],
+        "base_tree": base_tree,
         "approval_comment": approval["id"],
         "project_state": preview["state"],
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
         "published_comment_id": found_id,
         "body": comment_text, "snapshot": snapshot,
+        "reservation_protocol": RESERVATION_SCHEMA,
         "remote_project_writes": 0,
     }
     return {**data, "digest": _digest(data)}
 
 
 def _post_comment(issue: int, body: str) -> dict:
-    """Unica escrita permitida: um comentario na Issue; sem retry."""
+    """Nenhum POST real ate reauditoria de autenticidade e serializacao."""
     if not REMOTE_PUBLICATION_ENABLED:
-        raise PublicationError("POST F7 desativado ate a homologacao dos gates")
+        raise PublicationError("POST F7 desativado: custodia e executor unico pendentes")
     return _gh_json(
         "api", "-X", "POST", f"repos/{REPO}/issues/{issue}/comments",
         "-f", "body=" + body)
 
 
 def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Path:
-    """Lock local permanente: evita POST concorrente/repetido no mesmo dossie.
-
-    Em erro inconclusivo NAO remover o lock automaticamente. Reconciliacao
-    externa e aprovacao humana novas sao obrigatorias para uma segunda tentativa.
-    """
+    """Journal local complementar; a exclusao entre executores fica no Git."""
     if not HEX32.fullmatch(execution_id):
         raise PublicationError("Execution ID do lock invalido")
     lock = outbox_path.parent / ("f7-publicacao-" + execution_id + ".lock")
+    _assert_no_link_ancestors(lock)
     if _is_link(lock) or _is_link(lock.parent) or lock.exists():
         raise PublicationError("Publicacao anterior existe; reconciliar antes de repetir")
     try:
@@ -351,7 +450,7 @@ def _mark_verified(lock: Path, *, comment_id: int) -> None:
     """Atualiza journal somente DEPOIS do readback confirmado."""
     if type(comment_id) is not int or comment_id <= 0:
         raise PublicationError("Comentario verificado sem ID valido")
-    record = json.loads(lock.read_text(encoding="utf-8"))
+    record = _read_local_json(lock, cap=10000)
     if record.get("publication_status") != "PENDENTE_PUBLICACAO":
         raise PublicationError("Estado da tentativa de publicacao divergente")
     record.update({
@@ -369,6 +468,84 @@ def _mark_verified(lock: Path, *, comment_id: int) -> None:
     os.replace(temp, lock)
 
 
+def reconcile_pending_publication(
+    outbox_path: Path, plan: dict, *,
+    reader: Callable[[int, int], dict] | None = None,
+) -> dict:
+    """Reconciliacao LIVE somente leitura; NUNCA libera repeticao de POST."""
+    if (not isinstance(plan, dict) or plan.get("schema") != PLAN_SCHEMA
+            or plan.get("digest") != _digest({
+                k: v for k, v in plan.items() if k != "digest"
+            })):
+        raise PublicationError("Plano de reconciliacao invalido")
+    outbox = _eligible_outbox(outbox_path)
+    execution = outbox["execution_id"]
+    if (plan.get("execution_id") != execution
+            or plan.get("issue") != outbox["issue"]
+            or plan.get("code_sha256") != outbox["code_sha256"]
+            or plan.get("mission_digest") != outbox["provenance"]["mission_digest"]
+            or type(plan.get("approval_comment")) is not int):
+        raise PublicationError("Plano de reconciliacao nao pertence a outbox")
+    reservation_sha = None
+    if plan.get("reservation_protocol") == RESERVATION_SCHEMA:
+        reservation_sha = _reservation_store().read(plan)
+        journal_status = "RESERVA_REMOTA_CONFIRMADA"
+    elif "reservation_protocol" not in plan:
+        lock = outbox_path.parent / ("f7-publicacao-" + execution + ".lock")
+        _assert_no_link_ancestors(lock)
+        if not lock.is_file() or lock.stat().st_size > 10000:
+            raise PublicationError("Journal de publicacao ausente/invalido")
+        record = _read_local_json(lock, cap=10000)
+        if (not isinstance(record, dict)
+                or record.get("schema") != RECEIPT_SCHEMA
+                or record.get("execution_id") != execution
+                or record.get("digest") != plan["digest"]
+                or record.get("publication_status") not in (
+                    "PENDENTE_PUBLICACAO", "PUBLICADO_VERIFICADO"
+                )):
+            raise PublicationError("Journal divergente; reconciliacao bloqueada")
+        journal_status = record["publication_status"]
+    else:
+        raise PublicationError("Protocolo de reserva desconhecido")
+    if reader is None:
+        reader = _reconciliation_context
+    context = reader(outbox["issue"], plan["approval_comment"])
+    # Readback de publicacao e diferente de NOVA autorizacao. Deve funcionar
+    # inclusive apos Issue CLOSED/revogacao, sem consultar permissoes de POST.
+    if (not isinstance(context, dict)
+            or context.get("who", {}).get("login") != OWNER
+            or not isinstance(context.get("issue"), dict)
+            or context["issue"].get("number") != outbox["issue"]
+            or context["issue"].get("url") !=
+                f"https://github.com/{REPO}/issues/{outbox['issue']}"):
+        raise PublicationError("Identidade LIVE de reconciliacao invalida")
+    comments = context.get("comments")
+    _comment_snapshot(comments)
+    marker = MARKER_PREFIX + execution + " -->"
+    matches = [item for item in comments if marker in item["body"]]
+    if len(matches) > 1:
+        raise PublicationError("Colisao de publicacoes remotas; bloquear retry")
+    if matches:
+        item = matches[0]
+        if (item.get("body") != plan.get("body")
+                or item["user"].get("login") != OWNER):
+            raise PublicationError("Marcador remoto nao autentico; bloquear retry")
+        status = "COMENTARIO_REMOTO_ENCONTRADO"
+        comment_id = item["id"]
+    else:
+        status = "COMENTARIO_NAO_OBSERVADO"
+        comment_id = None
+    receipt = {
+        "status": status, "execution_id": execution,
+        "comment_id": comment_id, "journal_status": journal_status,
+        "remote_writes": 0, "retry_allowed": False,
+        "requires_po_decision": True,
+    }
+    if reservation_sha is not None:
+        receipt["reservation_sha"] = reservation_sha
+    return receipt
+
+
 def apply_publication_plan(
     outbox_path: Path, plan: dict, confirmation: str, *,
     reader: Callable[[int, int], dict] | None = None,
@@ -377,8 +554,12 @@ def apply_publication_plan(
     human_prompt: Callable[[str], str] | None = None,
 ) -> dict:
     """Uma tentativa, guardada por digest, frase PO e duplo snapshot LIVE."""
+    # Gate na API publica, nao apenas CLI/adapter HTTP. Sem ele, qualquer
+    # chamador pode injetar um "poster" remoto e contornar _post_comment().
+    # A suite offline pode habilitar este gate apenas sob mock isolado.
     if not REMOTE_PUBLICATION_ENABLED:
-        raise PublicationError("Aplicacao F7 desativada ate a homologacao dos gates")
+        raise PublicationError(
+            "Aplicacao F7 desativada: custodia externa e executor unico pendentes")
     # Callbacks resolvidos em tempo de execucao para simular GitHub no teste
     # da CLI, sem executar qualquer chamada remota verdadeira.
     if reader is None:
@@ -419,11 +600,23 @@ def apply_publication_plan(
         raise PublicationError("Acao de publicacao fora do escopo")
     if current_plan() != plan:
         raise PublicationError("Corrida detectada antes de publicar; zero escrita")
+    custody = _verify_attestation(outbox_path, outbox)
+    if (outbox["mission_id"] == "F7-CUSTODY-PROBE"
+            or custody["producer_run"].startswith(("github-actions:probe:", "github-actions:custody:"))):
+        raise PublicationError("Atestacao de sonda F7 somente para verificacao")
+    _verify_reservation_protection()
     journal = _claim_publication(
         outbox_path, outbox["execution_id"], supplied_digest)
+    try:
+        reservation_sha = _reservation_store().claim(plan)
+    except ReservationError as exc:
+        audit({"event": "PENDENTE_PUBLICACAO", "reason": "RESERVA_REMOTA_INCONCLUSIVA"})
+        raise PublicationPending(
+            "Reserva remota nao confirmada; nenhum POST autorizado") from exc
     # Terceira leitura LIVE imediatamente antes do POST, inclusive revogacao.
     # Se falhar, manter journal pendente para reconciliacao humana.
     try:
+        _verify_reservation_protection()
         if current_plan() != plan:
             raise PublicationError("Estado LIVE alterado depois do lock")
     except Exception as exc:
@@ -431,6 +624,8 @@ def apply_publication_plan(
             "Revalidacao apos lock inconclusiva; nenhuma repeticao automatica"
         ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
+           "reservation_sha": reservation_sha,
+           "producer": custody,
            "issue": outbox["issue"], "digest": supplied_digest})
     try:
         posted = poster(outbox["issue"], plan["body"])
@@ -463,10 +658,12 @@ def apply_publication_plan(
             "Readback OK, mas comprovante local inconclusivo; reconciliar LIVE"
         ) from exc
     return {"status": "PUBLICADO_VERIFICADO", "comment_id": posted["id"],
+            "reservation_sha": reservation_sha,
             "remote_writes": 1}
 
 
 def _write_json_once(path: Path, payload: dict) -> None:
+    _assert_no_link_ancestors(path)
     if (path.exists() or _is_link(path) or not path.parent.is_dir()
             or _is_link(path.parent)):
         raise PublicationError("Plano ja existe ou destino inseguro")
@@ -479,6 +676,7 @@ def _write_json_once(path: Path, payload: dict) -> None:
 
 
 def _audit_writer(path: Path):
+    _assert_no_link_ancestors(path)
     if (path.exists() or _is_link(path) or not path.parent.is_dir()
             or _is_link(path.parent)):
         raise PublicationError("Auditoria existe ou destino invalido")
@@ -494,22 +692,56 @@ def _audit_writer(path: Path):
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="F7 publicacao por comentario: preview por padrao, sem escrita")
-    parser.add_argument("--outbox", type=Path, required=True)
+    parser.add_argument("--outbox", type=Path)
+    parser.add_argument("--verify-reservation-policy", action="store_true")
     parser.add_argument("--approval-comment", type=int)
     parser.add_argument("--plan-file", type=Path)
     parser.add_argument("--apply-plan", type=Path)
+    parser.add_argument("--reconcile-plan", type=Path)
+    parser.add_argument("--verify-attestation", action="store_true")
     parser.add_argument("--confirm")
     parser.add_argument("--audit-file", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.verify_reservation_policy:
+            if any(value is not None and value is not False
+                   for name, value in vars(args).items() if name != "verify_reservation_policy"):
+                raise PublicationError("Preflight Git aceita somente --verify-reservation-policy")
+            policy = _verify_reservation_protection()
+            print(json.dumps({"status": "POLITICA_DE_RESERVA_VERIFICADA", **policy}))
+            return 0
+        if args.outbox is None:
+            raise PublicationError("Outbox obrigatoria")
+        if args.verify_attestation:
+            if (args.apply_plan or args.reconcile_plan or args.plan_file or args.approval_comment
+                    or args.confirm or args.audit_file):
+                raise PublicationError("Validacao externa aceita somente --verify-attestation")
+            outbox = _eligible_outbox(args.outbox)
+            proof = _verify_attestation(args.outbox, outbox)
+            print(json.dumps({"status": "ATESTACAO_VERIFICADA", **proof}))
+            return 0
+        if args.reconcile_plan:
+            if (args.apply_plan or args.plan_file or args.approval_comment
+                    or args.confirm or args.audit_file):
+                raise PublicationError("Reconciliacao aceita somente --reconcile-plan")
+            _assert_no_link_ancestors(args.reconcile_plan)
+            plan = _read_local_json(args.reconcile_plan)
+            result = reconcile_pending_publication(args.outbox, plan)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0
         if args.apply_plan:
             if (args.plan_file or args.approval_comment or
                     not args.confirm or args.audit_file is None):
                 raise PublicationError(
                     "Aplicacao exige somente --apply-plan, --confirm e --audit-file")
+            # Modo producao intencionalmente desligado antes de criar
+            # journal/lock. CLI offline pode ser testada com mocks explicitos.
             if not REMOTE_PUBLICATION_ENABLED:
-                raise PublicationError("POST F7 desativado ate a homologacao dos gates")
-            plan = json.loads(args.apply_plan.read_text(encoding="utf-8"))
+                raise PublicationError(
+                    "POST F7 desativado ate autenticidade externa, "
+                    "executor unico e isolamento comprovado")
+            _assert_no_link_ancestors(args.apply_plan)
+            plan = _read_local_json(args.apply_plan)
             handle, audit = _audit_writer(args.audit_file)
             with handle:
                 try:

@@ -1,0 +1,94 @@
+name: F7 - Prova GitHub da reserva autorizada
+
+on:
+  push:
+    branches:
+      - security/ch-pipe-01-f7-hardening-20261115
+    paths:
+      - .github/workflows/f7-reservation-live-proof.yml
+
+permissions: {}
+
+jobs:
+  reservation:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.actor_id == '113695320' &&
+      github.run_attempt == '1' &&
+      github.event.before == '7faf18d730481c3a49ed213faac121d238c1f93e'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Criar a reserva autorizada e verificar as duas recusas
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: '0'
+          PYTHONPATH: src
+        shell: bash
+        run: |
+          python - <<'PY'
+          import hashlib
+          import os
+          import subprocess
+
+          from chdevflow.core.po_escalation_reservation import GitReservationStore
+
+          repo = "hallanbrito/CHDevFlow"
+          namespace = "refs/tags/chdevflow-f7-publication/"
+          execution = "7faf18d730481c3a49ed213faac121d2"
+          ref = namespace + execution
+          remote = f"https://github.com/{repo}.git"
+          alternate = "7faf18d730481c3a49ed213faac121d238c1f93e"
+          git = ["git", "-c", "credential.helper=", "-c",
+                 "credential.https://github.com.helper=!gh auth git-credential"]
+
+          def git_read(*arguments):
+              return subprocess.run(
+                  [*git, *arguments], capture_output=True, text=True, check=True,
+                  timeout=25).stdout.strip()
+
+          def remote_ref():
+              return git_read("ls-remote", "--refs", remote, ref)
+
+          if remote_ref():
+              raise SystemExit("A ref ja existe. Prova interrompida sem escrita.")
+          if git_read("rev-parse", "--verify", alternate + "^{commit}") != alternate:
+              raise SystemExit("O objeto alternativo nao foi confirmado.")
+
+          store = GitReservationStore(remote, github_cli_credentials=True)
+          plan = {"repo": repo, "execution_id": execution, "issue": 86,
+                  "digest": hashlib.sha256(("gate2-live-proof:" + ref).encode()).hexdigest()}
+          original = store.claim(plan)
+          expected = f"{original}\t{ref}"
+          if remote_ref() != expected or store.read(plan) != original:
+              raise SystemExit("Criacao sem confirmacao independente. Prova interrompida.")
+          print(f"F7_RESERVATION_CREATED {ref} {original}", flush=True)
+
+          def prove_denial(operation, refspec, reason):
+              try:
+                  ret = subprocess.run(
+                      [*git, "push", "--porcelain", f"--force-with-lease={ref}:{original}",
+                       "--", remote, refspec],
+                      capture_output=True, text=True, check=False, timeout=25)
+              except subprocess.TimeoutExpired:
+                  raise SystemExit(f"F7_INCONCLUSIVE {operation} sem resposta. Prova interrompida.")
+              if ret.returncode == 0:
+                  raise SystemExit(f"F7_INCIDENT {operation} aceito. Prova interrompida.")
+              safe = (ret.stdout + ret.stderr).replace(os.environ["GH_TOKEN"], "[REDACTED]")
+              print(safe, flush=True)
+              if f"GH013: Repository rule violations found for {ref}" not in safe or reason not in safe.lower():
+                  raise SystemExit(f"F7_INCONCLUSIVE {operation} sem recusa atribuivel a regra.")
+              if remote_ref() != expected:
+                  raise SystemExit(f"F7_INCIDENT {operation} mudou a ref. Prova interrompida.")
+              print(f"F7_RULESET_DENIED {operation} GH013", flush=True)
+
+          prove_denial("UPDATE", f"{alternate}:{ref}", "cannot update")
+          prove_denial("DELETE", f":{ref}", "cannot delete")
+          print(f"F7_RESERVATION_VERIFIED {ref} {original}", flush=True)
+          PY

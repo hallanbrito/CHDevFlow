@@ -17,6 +17,8 @@ name: CHDevFlow CI Integral
   pull_request:
     branches:
       - main
+      - feat/ch-pipe-01-f7-po-escalation
+      - fix/ch-pipe-01-f7-legacy-outbox-20261115
   workflow_dispatch:
 
 permissions:
@@ -37,6 +39,23 @@ jobs:
       - name: Compilação sintática de todos os componentes
         run: python -m compileall -q src scripts apps
 
+      - name: Parser PowerShell da auditoria F7 (sem executar Codex)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/Auditar_F7_Codex.ps1).Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            foreach ($errorInfo in $errors) {
+              Write-Host ("PowerShell parser: " + $errorInfo.Message)
+            }
+            exit 1
+          }
+
       - name: Prévia offline de governança W1
         run: python scripts/w1_github_project.py
 
@@ -55,3 +74,86 @@ jobs:
 
       - name: Testes Control Center (apps/control-center/tests/)
         run: pytest apps/control-center/tests -v
+
+  f7-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Testes de publicacao F7 e caminhos Windows
+        shell: pwsh
+        run: |
+          if (Test-Path tests/test_ch_pipe_01_f7_publication.py) {
+            python -I -m unittest discover -s tests -p test_ch_pipe_01_f7_publication.py -v
+          }
+
+  f7-custody-producer:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 91
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Executar sonda F7 com testes Docker reais
+        run: |
+          docker pull python:3.12-slim
+          python scripts/f7_custody_probe.py produce "$RUNNER_TEMP/f7-evidence"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f7-probe-evidence
+          path: ${{ runner.temp }}/f7-evidence
+          if-no-files-found: error
+          retention-days: 7
+
+  f7-custody-attestor:
+    needs: f7-custody-producer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: f7-probe-evidence
+          path: ${{ runner.temp }}/f7-evidence
+      - name: Assinar e verificar o dossie em runner independente
+        run: |
+          python scripts/f7_custody_probe.py sign "$RUNNER_TEMP/f7-evidence" "$RUNNER_TEMP/f7-receipt"
+      - name: Verificar ZIP e digest pela API GitHub em laboratorio sem segredo
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONPATH: scripts
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from f7_custody_live import api, unpack
+
+          run_id = int(os.environ["GITHUB_RUN_ID"])
+          name = "f7-probe-evidence"
+          items = api(f"actions/runs/{run_id}/artifacts?name={name}&per_page=2")["artifacts"]
+          if len(items) != 1 or items[0]["name"] != name:
+              raise ValueError("Artefato de laboratorio ambiguo")
+          artifact = items[0]
+          outbox = "escalonamento_po.json"
+          with TemporaryDirectory() as folder:
+              root = Path(folder)
+              unpack(api(f"actions/artifacts/{artifact['id']}/zip", binary=True),
+                     artifact["digest"], root)
+              expected = Path(os.environ["RUNNER_TEMP"]) / "f7-evidence" / outbox
+              if (root / outbox).read_bytes() != expected.read_bytes():
+                  raise ValueError("Transporte GitHub divergente")
+          print("F7_LAB_GITHUB_ARTIFACT_DIGEST_VERIFIED")
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f7-probe-public-receipt
+          path: ${{ runner.temp }}/f7-receipt
+          if-no-files-found: error
+          retention-days: 7

@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import contextlib
 import copy
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -18,8 +22,12 @@ if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
 from chdevflow.core import po_escalation_publication as pub
+from chdevflow.core.po_escalation_attestation import SSH_NAMESPACE, execution_statement, statement_bytes
 from chdevflow.core.manual_pipeline_runner import Mission, SCHEMA as MISSION_SCHEMA
-from chdevflow.core.po_escalation_provenance import create_provenance
+from chdevflow.core.po_escalation_provenance import create_provenance, verify_provenance
+from chdevflow.core.po_escalation_reservation import (
+    GitReservationStore, NAMESPACE, ReservationError,
+)
 
 
 def issue_body():
@@ -29,7 +37,7 @@ def issue_body():
         "### Objetivo e valor\nEntregar uma missao Python auditavel\n"
         "### Escopo, exclusões e critérios de aceite\n"
         "Codigo Python com testes independentes e gate humano\n"
-        "### Baseline Git (branch e SHA)\nfeat/f6 abcdef0123456\n"
+        "### Baseline Git (branch e SHA)\nfeat/f6 " + ("a" * 40) + "\n"
         "### Verificações e evidências exigidas\n"
         "Docker e Codex devem registrar resultados verificaveis\n"
     )
@@ -79,6 +87,8 @@ class PublicationTests(unittest.TestCase):
             "status": "AGUARDANDO_PO", "execution_id": self.data["execution_id"],
             "mission_id": self.data["mission_id"], "issue": 85,
             "mission_digest": manifest.digest, "returns_used": 2,
+            "os_isolation_verified": True,
+            "test_execution": "docker-readonly-no-network:sha256:" + ("c" * 64),
             "attempts": [{
                 "number": num, "status": "CODEX_REPROVOU",
                 "sha256": self.data["code_sha256"],
@@ -101,6 +111,7 @@ class PublicationTests(unittest.TestCase):
         self.context = {
             "who": {"login": "hallanbrito"},
             "repository": {"permissions": {"push": True}},
+            "base_commit": {"sha": "a" * 40, "tree": {"sha": "d" * 40}},
             "issue": {
                 "id": "I_id_mock", "number": 85, "state": "OPEN",
                 "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
@@ -118,12 +129,31 @@ class PublicationTests(unittest.TestCase):
         }
         self.context["approval_history"] = [self.context["approval"]]
         self.audit = []
+        reservation_patch = patch.object(pub, "_reservation_store")
+        self.addCleanup(reservation_patch.stop)
+        self.reservations = reservation_patch.start()
+        self.reservations.return_value.claim.return_value = "e" * 40
+        self.guard_reservation = pub._verify_reservation_protection
+        protection_patch = patch.object(pub, "_verify_reservation_protection")
+        self.addCleanup(protection_patch.stop)
+        self.gate = protection_patch.start()
+        self.verify_attestation = pub._verify_attestation
+        attestation_patch = patch.object(pub, "_verify_attestation")
+        self.addCleanup(attestation_patch.stop)
+        self.attestation = attestation_patch.start()
+        self.attestation.return_value = {"producer_run": "isolated-test", "producer_sha": "e" * 40}
 
     def _outbox(self):
         return pub._eligible_outbox(self.outbox)
 
     def _plan(self):
         return pub.build_publication_plan(self._outbox(), self.context)
+
+    def _legacy_plan(self):
+        plan = self._plan()
+        plan.pop("reservation_protocol")
+        plan.pop("digest")
+        return {**plan, "digest": pub._digest(plan)}
 
     def _apply(self, plan=None, reader=None, poster=None, answer=None):
         """Somente simulacao offline; habilitacao temporaria no escopo do teste."""
@@ -230,6 +260,35 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
             self._apply(plan, poster=lambda *_: self.fail("POST desautorizado"))
         self.assertFalse(self.audit)
+
+    def test_revogacao_editada_em_comentario_antigo_bloqueia(self):
+        self.context["approval_history"].insert(0, {
+            "id": self.approval_id - 1,
+            "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                     + self.data["execution_id"]),
+            "user": {"login": "hallanbrito"},
+            "updated_at": "2026-11-15T14:00:00Z",
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "revogada"):
+            self._plan()
+
+    def test_baseline_issue_divergente_bloqueia(self):
+        self.context["issue"]["body"] = issue_body().replace("a" * 40, "b" * 40)
+        with self.assertRaisesRegex(pub.PublicationError, "Baseline Git"):
+            self._plan()
+
+    def test_baseline_truncado_nao_e_aprovacao_suficiente(self):
+        self.context["issue"]["body"] = issue_body().replace("a" * 40, "a" * 12)
+        with self.assertRaisesRegex(pub.PublicationError, "Baseline Git"):
+            self._plan()
+
+    def test_baseline_exige_objeto_git_correspondente(self):
+        self.assertEqual(self._plan()["base_tree"], "d" * 40)
+        for commit in (None, {"sha": "b" * 40}, {"sha": "a" * 40, "tree": {"sha": "d"}}):
+            with self.subTest(commit=commit):
+                self.context["base_commit"] = commit
+                with self.assertRaisesRegex(pub.PublicationError, "Objeto .* base Git"):
+                    self._plan()
 
     def test_intake_out_of_scope_nao_publica(self):
         self.context["issue"]["labels"] = []
@@ -358,6 +417,58 @@ class PublicationTests(unittest.TestCase):
                          list(pub.EVIDENCE_FILES_TESTS_REPROVADOS))
         self.assertEqual(self._plan()["action"], "POST_COMMENT")
 
+    def test_proveniencia_sem_isolamento_docker_nao_e_publicavel(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["test_execution"] = "host"
+        state["os_isolation_verified"] = False
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Docker isolada"):
+            self._outbox()
+
+    def test_f6_host_preserva_integridade_sem_liberar_publicacao_f7(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["test_execution"] = "host"
+        state["os_isolation_verified"] = False
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        self.assertEqual(
+            verify_provenance(self.root, self.data),
+            self.data["provenance"])
+        with self.assertRaisesRegex(ValueError, "Docker isolada"):
+            self._outbox()
+
+    def test_proveniencia_sem_flag_isolamento_nao_publica(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["os_isolation_verified"] = False
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Docker isolada"):
+            self._outbox()
+
+    def test_outbox_com_json_duplicado_falha_fechado(self):
+        original = self.outbox.read_text(encoding="utf-8")
+        self.outbox.write_text(
+            original.replace('"schema":', '"schema": "LEGADA", "schema":', 1),
+            encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            self._outbox()
+
+    def test_estado_execucao_json_duplicado_falha_fechado(self):
+        record_path = self.root / "execucao.json"
+        original = record_path.read_text(encoding="utf-8")
+        record_path.write_text(
+            original.replace('"status":', '"status":"AGUARDANDO_PO","status":', 1),
+            encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            self._outbox()
+
     def test_prova_de_proveniencia_detecta_log_adulterado(self):
         (self.root / "attempt-01" / "testes.log").write_text(
             "log falsificado", encoding="utf-8")
@@ -420,6 +531,189 @@ class PublicationTests(unittest.TestCase):
                 plan, poster=lambda *_: self.fail("retry duplicado"))
         self.assertEqual(self.audit[-1]["event"], "PENDENTE_PUBLICACAO")
 
+    def test_ruleset_ausente_bloqueia_reserva_e_post(self):
+        self.gate.side_effect = self.guard_reservation
+        with patch.object(pub, "_gh_json", return_value=[]):
+            with self.assertRaisesRegex(pub.PublicationError, "imutabilidade"):
+                self._apply(poster=lambda *_: self.fail("POST sem ruleset"))
+        self.reservations.assert_not_called()
+
+    def test_preflight_exige_ruleset_pinado_e_autor_sem_bypass(self):
+        self.gate.side_effect = self.guard_reservation
+        rule = {
+            "id": pub.RESERVATION_RULESET_ID, "source_type": "Repository",
+            "source": pub.REPO, "target": "tag", "enforcement": "active",
+            "bypass_actors": [], "current_user_can_bypass": "never",
+            "conditions": {"ref_name": {"include": [NAMESPACE + "*"], "exclude": []}},
+            "rules": [{"type": "update"}, {"type": "deletion"}],
+        }
+        po = {"id": pub.PO_GITHUB_ID, "login": pub.OWNER}
+        repo = {"full_name": pub.REPO, "permissions": {"push": True}}
+        with patch.object(pub, "_gh_json", side_effect=[rule, po, repo]):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(pub.main(["--verify-reservation-policy"]), 0)
+            self.assertEqual(json.loads(output.getvalue())["ruleset_id"], pub.RESERVATION_RULESET_ID)
+        for changed in ({"current_user_can_bypass": "always"}, {"bypass_actors": None},
+                        {"id": 123}, {"rules": [{"type": "deletion"}]}):
+            with self.subTest(changed=changed):
+                with patch.object(pub, "_gh_json", return_value={**rule, **changed}):
+                    with self.assertRaisesRegex(pub.PublicationError, "imutabilidade"):
+                        self.guard_reservation()
+        with patch.object(pub, "_gh_json", side_effect=[rule, {**po, "id": 123}, repo]):
+            with self.assertRaisesRegex(pub.PublicationError, "Identidade"):
+                self.guard_reservation()
+
+    def test_sem_atestacao_bloqueia_reserva_e_post(self):
+        self.attestation.side_effect = self.verify_attestation
+        with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": ""}):
+            with self.assertRaisesRegex(ValueError, "Chave confiavel"):
+                self._apply(poster=lambda *_: self.fail("POST sem atestacao"))
+        self.reservations.assert_not_called()
+
+    def test_atestacao_openssh_rejeita_dossie_adulterado_e_assinante_local(self):
+        self.attestation.side_effect = self.verify_attestation
+        producer_sha = "e" * 40
+        origin = "ci-f7:issuer-receipt-1"
+        with tempfile.TemporaryDirectory() as isolated_issuer:
+            trusted, untrusted = (Path(isolated_issuer) / name for name in ("trusted", "local"))
+            for key in (trusted, untrusted):
+                subprocess.run(
+                    ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+                    capture_output=True, check=True)
+            key = " ".join(trusted.with_suffix(".pub").read_text(encoding="ascii").split()[:2])
+            path = self.root / "f7-attestation.json"
+
+            def sign(statement, signer):
+                signed = subprocess.run(
+                    ["ssh-keygen", "-Y", "sign", "-n", SSH_NAMESPACE, "-f", str(signer)],
+                    input=statement_bytes(statement), capture_output=True, check=True)
+                signature = signed.stdout.decode("ascii").replace("\r\n", "\n")
+                path.write_text(json.dumps({"statement": statement, "signature": signature}),
+                                encoding="ascii")
+
+            def observe():
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    code = pub.main(["--outbox", str(self.outbox), "--verify-attestation"])
+                return code, output.getvalue()
+
+            with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": key,
+                                         "CH_F7_TRUSTED_RUNNER_SHA": producer_sha}):
+                original = execution_statement(
+                    self._outbox(), producer_sha=producer_sha, producer_run=origin)
+                sign(original, trusted)
+                code, result = observe()
+                self.assertEqual(code, 0)
+                self.assertEqual(json.loads(result)["producer_run"], origin)
+
+                (self.root / "attempt-02" / "testes.log").write_text(
+                    "Log alterado e hashes locais recalculados", encoding="utf-8")
+                self.data["provenance"] = create_provenance(self.root)
+                self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+                with contextlib.redirect_stderr(io.StringIO()) as error:
+                    self.assertEqual(observe()[0], 1)
+                self.assertIn("diverge do dossie", error.getvalue())
+
+                sign(execution_statement(self._outbox(), producer_sha=producer_sha,
+                                         producer_run=origin), untrusted)
+                with contextlib.redirect_stderr(io.StringIO()) as error:
+                    self.assertEqual(observe()[0], 1)
+                self.assertIn("nao corresponde ao produtor", error.getvalue())
+
+    def test_reserva_git_real_sobrevive_post_inconclusivo_e_troca_de_executor(self):
+        if os.name == "nt" and "#!sandbox." in str(self.root):
+            self.skipTest("sandbox Windows bloqueia o processo Git receive-pack")
+        plan = self._plan()
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            remote = root / "remote.git"
+            subprocess.run(
+                ["git", "init", "--bare", "--template=", str(remote)],
+                check=True, capture_output=True)
+            hook = remote / "hooks" / "pre-receive"
+            hook.parent.mkdir(exist_ok=True)
+            hook.write_text(
+                "#!/bin/sh\nwhile read old new ref; do\n"
+                "  case \"$ref\" in\n"
+                "    refs/tags/chdevflow-f7-publication/*)\n"
+                "      [ \"$old\" = 0000000000000000000000000000000000000000 ] || exit 1 ;;\n"
+                "  esac\ndone\n", encoding="ascii", newline="\n")
+            hook.chmod(0o755)
+            outboxes = [
+                shutil.copytree(self.root, root / name) / self.outbox.name
+                for name in ("executor-a", "executor-b", "executor-c")
+            ]
+            barrier = threading.Barrier(2, timeout=20)
+            posts = []
+
+            class ConcurrentStore(GitReservationStore):
+                def claim(self, value):
+                    barrier.wait()
+                    return super().claim(value)
+
+            self.reservations.side_effect = lambda: ConcurrentStore(remote.as_posix())
+
+            def timeout(issue, body):
+                posts.append((issue, body))
+                raise TimeoutError("resposta HTTP perdida")
+
+            def attempt(outbox):
+                try:
+                    pub.apply_publication_plan(
+                        outbox, plan, plan["digest"], reader=lambda *_: self.context,
+                        poster=timeout, audit=lambda _: None,
+                        human_prompt=lambda _: "APROVO F7 PUBLICAR " + plan["digest"][:12])
+                except pub.PublicationPending as exc:
+                    return str(exc)
+                self.fail("A publicacao com timeout nao pode terminar confirmada")
+
+            with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True):
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    outcomes = list(pool.map(attempt, outboxes[:2]))
+                self.assertTrue(any("nenhum POST autorizado" in item for item in outcomes))
+                self.assertTrue(any("Envio inconclusivo" in item for item in outcomes))
+                self.assertEqual(posts, [(plan["issue"], plan["body"])])
+
+                store = GitReservationStore(remote.as_posix())
+                self.reservations.side_effect = lambda: store
+                receipt = pub.reconcile_pending_publication(
+                    outboxes[2], plan, reader=lambda *_: self.context)
+                self.assertEqual(receipt["status"], "COMENTARIO_NAO_OBSERVADO")
+                self.assertEqual(receipt["reservation_sha"], store.read(plan))
+                self.assertFalse(receipt["retry_allowed"])
+                self.assertIn("nenhum POST autorizado", attempt(outboxes[2]))
+                self.assertEqual(len(posts), 1)
+
+            ref = NAMESPACE + plan["execution_id"]
+            deletion = subprocess.run(
+                ["git", "--git-dir", str(remote), "push", str(remote), ":" + ref],
+                capture_output=True, check=False)
+            self.assertNotEqual(deletion.returncode, 0)
+            self.assertIn(b"pre-receive hook declined", deletion.stdout + deletion.stderr)
+            self.assertEqual(receipt["reservation_sha"], store.read(plan))
+            with self.assertRaisesRegex(ReservationError, "outro plano"):
+                store.read({**plan, "digest": "f" * 64})
+
+            class LostAcknowledgmentStore(GitReservationStore):
+                def _git(self, directory, *args, **kwargs):
+                    output = super()._git(directory, *args, **kwargs)
+                    if args[0] == "push":
+                        raise ReservationError("resposta da reserva perdida")
+                    return output
+
+            another = {**plan, "execution_id": "d" * 32}
+            with self.assertRaisesRegex(ReservationError, "nao confirmada"):
+                LostAcknowledgmentStore(remote.as_posix()).claim(another)
+            self.assertRegex(store.read(another), r"^[0-9a-f]{40}$")
+            with self.assertRaisesRegex(ReservationError, "nao confirmada"):
+                store.claim(another)
+            replacement = store.read(another)
+            mutation = subprocess.run(
+                ["git", "--git-dir", str(remote), "push", "--force", str(remote),
+                 replacement + ":" + ref], capture_output=True, check=False)
+            self.assertIn(b"pre-receive hook declined", mutation.stdout + mutation.stderr)
+            self.assertNotEqual(mutation.returncode, 0)
+            self.assertEqual(receipt["reservation_sha"], store.read(plan))
+
     def test_project_existente_preserva_campos_manuais(self):
         project = {
             "items": [{
@@ -462,40 +756,94 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "Plano/digest"):
             self._apply(plan, reader=lambda *_: self.fail("GH chamado"))
 
-    def test_gh_bytes_windows_unicode_sem_locale(self):
-        response = subprocess.CompletedProcess(
-            ["gh"], 0, b'{"title":"A\xc3\xa7\xc3\xa3o"}', b"")
-        with patch.object(pub.subprocess, "run", return_value=response) as call:
-            parsed = pub._gh_json("issue", "view", "85")
-        self.assertEqual(parsed["title"], "Ação")
-        self.assertNotIn("text", call.call_args.kwargs)
-        self.assertNotIn("encoding", call.call_args.kwargs)
+    def test_reconciliacao_pendente_read_only_nao_reexecuta_post(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        original = lock.read_bytes()
+        result = pub.reconcile_pending_publication(
+            self.outbox, plan, reader=lambda *_: self.context)
+        self.assertEqual(result["status"], "COMENTARIO_NAO_OBSERVADO")
+        self.assertFalse(result["retry_allowed"])
+        self.assertTrue(result["requires_po_decision"])
+        self.assertEqual(result["remote_writes"], 0)
+        self.assertEqual(lock.read_bytes(), original)
 
-    def test_gh_bytes_invalidos_falha_fechado(self):
-        response = subprocess.CompletedProcess(["gh"], 0, b'{"x":"' + bytes([0x9d]) + b'"}', b"")
-        with patch.object(pub.subprocess, "run", return_value=response):
-            with self.assertRaisesRegex(pub.PublicationError, "UTF-8"):
-                pub._gh_json("api", "user")
+        self.context["comments"].append({
+            "id": 7711, "body": plan["body"],
+            "user": {"login": "hallanbrito"},
+            "updated_at": "2026-11-15T15:00:00Z",
+        })
+        found = pub.reconcile_pending_publication(
+            self.outbox, plan, reader=lambda *_: self.context)
+        self.assertEqual(found["status"], "COMENTARIO_REMOTO_ENCONTRADO")
+        self.assertEqual(found["comment_id"], 7711)
+        self.assertEqual(found["remote_writes"], 0)
+        self.assertEqual(lock.read_bytes(), original)
 
-    def test_gh_erro_remoto_nao_exibe_token(self):
-        response = subprocess.CompletedProcess(
-            ["gh"], 1, b"", b"github_pat_SENSIVEL_TOKEN")
-        with patch.object(pub.subprocess, "run", return_value=response):
-            with self.assertRaises(pub.PublicationError) as ctx:
-                pub._gh_json("api", "user")
-        self.assertNotIn("SENSIVEL_TOKEN", str(ctx.exception))
+    def test_reconciliacao_apos_revogacao_e_issue_closed(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        self.context["issue"]["state"] = "CLOSED"
+        self.context["approval"]["body"] = "REVOGADA"
+        self.context["comments"].append({
+            "id": 9090, "body": plan["body"],
+            "user": {"login": "hallanbrito"},
+        })
+        result = pub.reconcile_pending_publication(
+            self.outbox, plan, reader=lambda *_: self.context)
+        self.assertEqual(result["comment_id"], 9090)
+        self.assertEqual(result["remote_writes"], 0)
+        self.assertFalse(result["retry_allowed"])
 
-    def test_default_legado_so_exibe_nao_publicavel(self):
-        self.data.pop("schema")
-        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
-        with patch.object(pub.subprocess, "run",
-                          side_effect=AssertionError("gh proibido")):
-            with contextlib.redirect_stdout(io.StringIO()) as output:
-                code = pub.main(["--outbox", str(self.outbox)])
-        self.assertEqual(code, 0)
+    def test_reconciliacao_journal_divergente_bloqueia(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": "f" * 64,
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(pub.PublicationError, "Journal divergente"):
+            pub.reconcile_pending_publication(
+                self.outbox, plan, reader=lambda *_: self.fail("GH acionado"))
+
+    def test_reconciliacao_cli_mock_sem_post_e_sem_escrita_local(self):
+        plan = self._legacy_plan()
+        plan_path = self.root / "recon-plan.json"
+        plan_path.write_text(json.dumps(plan), encoding="utf-8")
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        with patch.object(pub, "_reconciliation_context", return_value=self.context):
+            with patch.object(pub, "_post_comment",
+                              side_effect=AssertionError("POST proibido")):
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    exit_code = pub.main([
+                        "--outbox", str(self.outbox),
+                        "--reconcile-plan", str(plan_path),
+                    ])
+        self.assertEqual(exit_code, 0)
         status = json.loads(output.getvalue())
-        self.assertEqual(status["status"], "OUTBOX_LEGADA_NAO_PUBLICAVEL")
-        self.assertEqual(status["writes"], 0)
+        self.assertEqual(status["status"], "COMENTARIO_NAO_OBSERVADO")
+        self.assertEqual(status["remote_writes"], 0)
+        self.assertFalse(status["retry_allowed"])
 
     def test_api_apply_bloqueia_callback_remoto_com_gate_off(self):
         """Nao basta barrar CLI e _post_comment: a API tambem deve bloquear."""
@@ -536,6 +884,70 @@ class PublicationTests(unittest.TestCase):
         self.assertFalse(audit_path.exists())
         self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
 
+    def test_gh_bytes_windows_unicode_sem_locale(self):
+        response = subprocess.CompletedProcess(
+            ["gh"], 0, b'{"title":"A\xc3\xa7\xc3\xa3o"}', b"")
+        with patch.object(pub.subprocess, "run", return_value=response) as call:
+            parsed = pub._gh_json("issue", "view", "85")
+        self.assertEqual(parsed["title"], "Ação")
+        self.assertNotIn("text", call.call_args.kwargs)
+        self.assertNotIn("encoding", call.call_args.kwargs)
+
+    def test_gh_json_com_chaves_duplicadas_falha_fechado(self):
+        response = subprocess.CompletedProcess(
+            ["gh"], 0, b'{"id":1,"id":2}', b"")
+        with patch.object(pub.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(pub.PublicationError, "JSON/UTF-8"):
+                pub._gh_json("api", "user")
+
+    def test_local_json_duplicado_falha_fechado(self):
+        path = self.root / "duplicate-plan.json"
+        path.write_text('{"digest":"a","digest":"b"}', encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "duplicada"):
+            pub._read_local_json(path)
+
+    def test_json_nao_finito_bloqueia_entrada_e_digests(self):
+        from chdevflow.core.po_escalation import _json_unique
+        for invalid in ("NaN", "Infinity", "-Infinity", "1e999", "-1e999"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "nao finit"):
+                    _json_unique('{"nested":{"value":' + invalid + '}}')
+
+    def test_outbox_json_nao_finito_falha_antes_da_publicacao(self):
+        original = self.outbox.read_text(encoding="utf-8")
+        replacement = original.replace(
+            '"attempts": 3', '"attempts": 3, "extra": NaN', 1)
+        self.assertNotEqual(original, replacement)
+        self.outbox.write_text(replacement, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "nao finita"):
+            self._outbox()
+
+    def test_gh_bytes_invalidos_falha_fechado(self):
+        response = subprocess.CompletedProcess(["gh"], 0, b'{"x":"' + bytes([0x9d]) + b'"}', b"")
+        with patch.object(pub.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(pub.PublicationError, "UTF-8"):
+                pub._gh_json("api", "user")
+
+    def test_gh_erro_remoto_nao_exibe_token(self):
+        response = subprocess.CompletedProcess(
+            ["gh"], 1, b"", b"github_pat_SENSIVEL_TOKEN")
+        with patch.object(pub.subprocess, "run", return_value=response):
+            with self.assertRaises(pub.PublicationError) as ctx:
+                pub._gh_json("api", "user")
+        self.assertNotIn("SENSIVEL_TOKEN", str(ctx.exception))
+
+    def test_default_legado_so_exibe_nao_publicavel(self):
+        self.data.pop("schema")
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with patch.object(pub.subprocess, "run",
+                          side_effect=AssertionError("gh proibido")):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                code = pub.main(["--outbox", str(self.outbox)])
+        self.assertEqual(code, 0)
+        status = json.loads(output.getvalue())
+        self.assertEqual(status["status"], "OUTBOX_LEGADA_NAO_PUBLICAVEL")
+        self.assertEqual(status["writes"], 0)
+
     def test_cli_apply_sem_digest_ou_auditoria_bloqueia(self):
         target = self.root / "plan.json"
         pub._write_json_once(target, self._plan())
@@ -553,6 +965,8 @@ class PublicationTests(unittest.TestCase):
         plan = self._plan()
         pub._write_json_once(target, plan)
         audit = self.root / "auditoria.jsonl"
+        # Simula unicamente o caminho de escrita autorizado em laboratorio:
+        # o gate de producao continua desativado por default.
         with (patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True),
               patch.object(pub, "apply_publication_plan",
                            side_effect=pub.PublicationPending("post inconclusivo"))):
@@ -658,6 +1072,65 @@ class PublicationTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "Link/reparse"):
                 self._outbox()
+
+    def test_junction_ancestral_da_raiz_bloqueia_dossie(self):
+        from chdevflow.core import po_escalation as bridge
+        with patch.object(
+            bridge, "_is_link", side_effect=lambda p: p == self.root.parent
+        ):
+            with self.assertRaisesRegex(ValueError, "ancestral"):
+                self._outbox()
+
+    def test_evidencia_com_travessia_rejeitada(self):
+        from chdevflow.core import po_escalation as bridge
+        with self.assertRaisesRegex(ValueError, "fora do dossie"):
+            bridge._safe_file_within(self.root, "../fora.txt")
+
+    def test_leitor_rejeita_substituicao_entre_stat_e_open(self):
+        from chdevflow.core import po_escalation as bridge
+
+        target = self.root / "original.txt"
+        target.write_bytes(b"original")
+        replacement = self.root / "replacement.txt"
+        replacement.write_bytes(b"substituido")
+        real_open = os.open
+
+        def replace_on_open(path, flags, *args, **kwargs):
+            if path in (target, target.name):
+                replacement.replace(target)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch.object(bridge.os, "open", side_effect=replace_on_open):
+            with self.assertRaisesRegex(ValueError, "substituido"):
+                bridge._read_evidence_bytes(target)
+
+    def test_leitor_rejeita_link_real_em_ancestral(self):
+        from chdevflow.core import po_escalation as bridge
+
+        directory = self.root / "evidencia"
+        directory.mkdir()
+        (directory / "log").write_bytes(b"evidencia")
+        link = self.root / "link"
+        if os.name == "nt":
+            result = subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(directory)],
+                capture_output=True, check=False)
+            if result.returncode and os.environ.get("GITHUB_ACTIONS") != "true":
+                self.skipTest("mklink /J indisponivel neste ambiente Windows")
+            self.assertEqual(result.returncode, 0, result.stderr)
+        else:
+            link.symlink_to(directory, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "Link/reparse"):
+            bridge._read_evidence_bytes(link / "log")
+
+    @unittest.skipUnless(os.name == "nt", "prefixo de caminho Windows")
+    def test_leitor_aceita_prefixo_de_caminho_windows(self):
+        from chdevflow.core import po_escalation as bridge
+
+        target = self.root / "evidence.log"
+        target.write_bytes(b"evidencia")
+        extended = Path("\\\\?\\" + str(target))
+        self.assertEqual(bridge._read_evidence_bytes(extended), b"evidencia")
 
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"

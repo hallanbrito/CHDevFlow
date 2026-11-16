@@ -1,0 +1,29 @@
+name: F7 - Produtor de qualificacao da custodia
+
+on: workflow_dispatch
+permissions:
+  contents: read
+
+jobs:
+  produce:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/main' &&
+      github.sha == vars.CH_F7_TRUSTED_RUNNER_SHA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Executar qualificacao Docker sem agente ou publicacao
+        run: |
+          docker pull python:3.12-slim
+          python scripts/f7_custody_probe.py produce "$RUNNER_TEMP/f7-evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: f7-custody-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/f7-evidence
+          if-no-files-found: error
+          retention-days: 7

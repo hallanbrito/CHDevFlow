@@ -291,6 +291,10 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                 test_command, cwd=root, stdin=None,
                 timeout=min(60, remaining))
             _write_process_log(directory / "testes.log", tests)
+            # Somente uma invocacao efetiva do executor Docker pode fornecer
+            # evidencias F7 elegiveis; o modo host jamais atesta isolamento.
+            if isolated_tests and not tests.timed_out:
+                result.os_isolation_verified = True
             if tests.timed_out:
                 raise ValueError("Timeout nos testes")
             test_output = tests.stdout + tests.stderr
