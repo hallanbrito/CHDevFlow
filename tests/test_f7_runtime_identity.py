@@ -52,16 +52,31 @@ class RuntimeIdentityTests(unittest.TestCase):
                 yield
 
     def test_checkout_real_e_modulos_f7_carregados_batem_com_git(self):
-        # Smoke independente usando os modulos de producao, sem GH remoto.
-        from chdevflow.core import po_escalation_publication as publication
-        self.assertFalse(publication.REMOTE_PUBLICATION_ENABLED)
+        # Interprete limpo. Outros testes da suite podem ter feito monkeypatch
+        # de modulos globais; isso deve ser detectado, nao confundido com um
+        # checkout de producao comprometido ou o baseline do importador.
+        script = (
+            "import re, sys\\n"
+            "from pathlib import Path\\n"
+            "root = Path(sys.argv[1])\\n"
+            "sys.path.insert(0, str(root / 'src'))\\n"
+            "from chdevflow.core import po_escalation_publication as pub\\n"
+            "from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules\\n"
+            "assert pub.REMOTE_PUBLICATION_ENABLED is False\\n"
+            "print(verify_loaded_f7_modules(root, sys.argv[2]))\\n"
+        )
         head = subprocess.run(
             ["git", "-C", str(ROOT), "rev-parse", "--verify", "HEAD"],
             stdin=subprocess.DEVNULL, capture_output=True, check=False)
         self.assertEqual(head.returncode, 0)
-        digest = runtime.verify_loaded_f7_modules(
-            ROOT, head.stdout.decode("ascii").strip())
-        self.assertRegex(digest, r"^[0-9a-f]{64}$")
+        child = subprocess.run(
+            [sys.executable, "-I", "-c", script, str(ROOT),
+             head.stdout.decode("ascii").strip()],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
+            check=False, timeout=40,
+        )
+        self.assertEqual(child.returncode, 0, child.stderr[-2000:])
+        self.assertRegex(child.stdout.strip(), r"^[0-9a-f]{64}$")
 
     def test_blobs_e_funcoes_carregadas_idempotentes(self):
         with self.loaded():
