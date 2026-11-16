@@ -43,11 +43,18 @@ O produtor executa a qualificação Docker em `main` e publica apenas evidência
    | --- | --- |
    | `CH_F7_TRUSTED_RUNNER_PUBKEY` | Dois campos da chave pública verificada, no formato `ssh-ed25519 <base64>` |
    | `CH_F7_TRUSTED_RUNNER_SHA` | SHA completo revisado do produtor em `main` |
-   | `CH_F7_PRODUCER_WORKFLOW_ID` | ID numérico de `gh workflow view f7-custody-producer.yml --repo hallanbrito/CHDevFlow --json id --jq .id` |
+   | `CH_F7_PRODUCER_WORKFLOW_ID` | ID numérico consultado via `gh api repos/hallanbrito/CHDevFlow/actions/workflows/f7-custody-producer.yml --jq .id` (`gh workflow view` não aceita `--json`) |
    | `CH_F7_ATTESTOR_SHA` | SHA completo revisado do atestador em `main` |
    | `CH_F7_REVOKED_RUNNER_FINGERPRINTS` | `NONE` inicialmente, ou fingerprints OpenSSH `SHA256:…` separados por espaços |
 
    Uma mudança no HEAD de `main` exige nova auditoria automatizada, conferência manual e registro de decisão do PO antes de atualizar os SHAs. Os jobs bloqueiam execuções cujo SHA difere da política.
+
+## Provas operacionais observadas (15/11/2026)
+
+- **Produtor de qualificação**, run [#43782606042](https://github.com/hallanbrito/CHDevFlow/actions/runs/43782606042): job `produce` success no commit `ce939630363f8f762d0f0810a78735fe6975f7ff`; artefato `f7-custody-evidence-43782606042-1` (ID 14189245139, SHA256 `395c702f43ef39e16947bbac626c11d2e65f2420dc2dd631607e4c15808c5aed`).
+- **Atestador e verificador** [#43782675357](https://github.com/hallanbrito/CHDevFlow/actions/runs/43782675357): jobs `sign` e `verify` success; ambos relataram `CUSTODY_VERIFIED` para o mesmo run de produtor. Artefato público `f7-custody-public-1` (ID 14188803542, SHA256 `77a59365505a718feb651692e73cbdb6e22ca74bc9c9196f033299e2b208d92a`). Não foi publicado secret privado.
+- A política de branch `main` e a regra de tags F7 foram consultadas separadamente. **A configuração administrativa LIVE do Environment (incluindo bypass) e o isolamento negativo de secrets não foram auditados pela conexão GitHub**; a UI pode ser revisada pelo PO, com evidência sanitizada.
+- Regression de negativas em desenvolvimento na [Draft PR #93](https://github.com/hallanbrito/CHDevFlow/pull/93). **Não converter essa prova positiva em PASS automático:** Gate 1 permanece pendente até evidência negativa suficiente e decisão explícita de aceite.
 
 ## Prova para aceite
 
