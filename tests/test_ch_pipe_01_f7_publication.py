@@ -111,7 +111,7 @@ class PublicationTests(unittest.TestCase):
             " ACTION=COMMENT_ONLY"
         )
         self.context = {
-            "who": {"login": "hallanbrito"},
+            "who": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "repository": {"permissions": {"push": True}},
             "base_commit": {"sha": "a" * 40, "tree": {"sha": "d" * 40}},
             "f7_commit": {
@@ -129,7 +129,7 @@ class PublicationTests(unittest.TestCase):
                 "id": self.approval_id, "issue_url":
                     "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
                 "body": statement, "updated_at": "2026-11-15T12:00:00Z",
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             },
             "comments": [],
         }
@@ -202,7 +202,7 @@ class PublicationTests(unittest.TestCase):
             with self.subTest(altered=altered), self.assertRaises(pub.PublicationError):
                 self._plan()
             self.context["approval"].update({
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 "issue_url": "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
                 "body": ("CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
                          "EXECUTION#" + self.data["execution_id"] + " "
@@ -212,6 +212,54 @@ class PublicationTests(unittest.TestCase):
             " F7_AUDITED_SHA=" + self.f7_sha +
             " ACTION=COMMENT_ONLY"),
             })
+
+    def test_gate3_po_id_numerico_no_aprovador_bloqueia_sem_id_ou_trocado(self):
+        original = copy.deepcopy(self.context["approval"]["user"])
+        for invalid in ({"login": pub.OWNER},
+                        {"login": pub.OWNER, "id": 999},
+                        {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(invalid=invalid):
+                self.context["approval"]["user"] = invalid
+                with self.assertRaisesRegex(pub.PublicationError, "Autor"):
+                    self._plan()
+        self.context["approval"]["user"] = original
+
+    def test_gate3_po_id_numerico_no_historico_aprovacao_bloqueia(self):
+        original = self.context["approval_history"][0]
+        try:
+            for invalid in ({"login": pub.OWNER},
+                            {"login": pub.OWNER, "id": 999},
+                            {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+                with self.subTest(invalid=invalid):
+                    fake = copy.deepcopy(self.context["approval"])
+                    fake["user"] = invalid
+                    self.context["approval_history"][0] = fake
+                    with self.assertRaisesRegex(pub.PublicationError, "historico LIVE"):
+                        self._plan()
+        finally:
+            self.context["approval_history"][0] = original
+
+    def test_gate3_po_id_numerico_na_sessao_bloqueia(self):
+        original = copy.deepcopy(self.context["who"])
+        for invalid in ({"login": pub.OWNER},
+                        {"login": pub.OWNER, "id": 999},
+                        {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(invalid=invalid):
+                self.context["who"] = invalid
+                with self.assertRaisesRegex(pub.PublicationError, "Identidade/ACL"):
+                    self._plan()
+        self.context["who"] = original
+
+    def test_gate3_po_id_numerico_em_revogacao_suspeita_bloqueia(self):
+        self.context["approval_history"].append({
+            "id": self.approval_id + 1001,
+            "body": "CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                    + self.data["execution_id"],
+            "user": {"login": pub.OWNER, "id": 999},
+            "updated_at": "2026-11-16T15:00:00Z",
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "Identidade numerica"):
+            self._plan()
 
     def test_revogacao_no_ultimo_snapshot_live_bloqueia_post(self):
         plan = self._plan()
@@ -223,7 +271,7 @@ class PublicationTests(unittest.TestCase):
                     "id": self.approval_id + 99,
                     "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                              + self.data["execution_id"]),
-                    "user": {"login": "hallanbrito"},
+                    "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 })
             return self.context
         with self.assertRaises(pub.PublicationPending):
@@ -240,7 +288,7 @@ class PublicationTests(unittest.TestCase):
             "id": self.approval_id + 1,
             "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                      + self.data["execution_id"] + " ACTION=COMMENT_ONLY"),
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15T13:00:00Z",
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
@@ -262,7 +310,7 @@ class PublicationTests(unittest.TestCase):
             "id": self.approval_id + 3,
             "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                      + self.data["execution_id"]),
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
             self._apply(plan, poster=lambda *_: self.fail("POST desautorizado"))
@@ -273,7 +321,7 @@ class PublicationTests(unittest.TestCase):
             "id": self.approval_id - 1,
             "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                      + self.data["execution_id"]),
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15T14:00:00Z",
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
@@ -343,7 +391,7 @@ class PublicationTests(unittest.TestCase):
     def test_comment_existente_eh_idempotente(self):
         plan = self._plan()
         self.context["comments"].append({
-            "id": 99, "body": plan["body"], "user": {"login": "hallanbrito"},
+            "id": 99, "body": plan["body"], "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15",
         })
         existing = self._plan()
@@ -358,7 +406,7 @@ class PublicationTests(unittest.TestCase):
         for index in (30, 31):
             self.context["comments"].append({
                 "id": index, "body": plan["body"],
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             })
         with self.assertRaisesRegex(pub.PublicationError, "Colisao"):
             self._plan()
@@ -370,7 +418,7 @@ class PublicationTests(unittest.TestCase):
             if len(calls) == 2:
                 self.context["comments"].append({
                     "id": 200, "body": "Alterado externamente",
-                    "user": {"login": "hallanbrito"},
+                    "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 })
             return self.context
         with self.assertRaisesRegex(pub.PublicationError, "Corrida"):
@@ -505,7 +553,7 @@ class PublicationTests(unittest.TestCase):
         def poster(issue, body):
             calls.append((issue, body))
             self.context["comments"].append({
-                "id": 1234, "body": body, "user": {"login": "hallanbrito"},
+                "id": 1234, "body": body, "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             })
             return {"id": 1234}
         result = self._apply(poster=poster)
@@ -783,7 +831,7 @@ class PublicationTests(unittest.TestCase):
 
         self.context["comments"].append({
             "id": 7711, "body": plan["body"],
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15T15:00:00Z",
         })
         found = pub.reconcile_pending_publication(
@@ -806,7 +854,7 @@ class PublicationTests(unittest.TestCase):
         self.context["approval"]["body"] = "REVOGADA"
         self.context["comments"].append({
             "id": 9090, "body": plan["body"],
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
         })
         result = pub.reconcile_pending_publication(
             self.outbox, plan, reader=lambda *_: self.context)
@@ -1008,7 +1056,7 @@ class PublicationTests(unittest.TestCase):
             calls.append(("POST_SIMULADO", issue))
             self.context["comments"].append({
                 "id": 987654, "body": body,
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 "updated_at": "2026-11-15T14:00:00Z",
             })
             return {"id": 987654}
@@ -1196,7 +1244,7 @@ class PublicationTests(unittest.TestCase):
         plan = self._plan()
         def poster(_issue, body):
             self.context["comments"].append({
-                "id": 1290, "body": body, "user": {"login": "hallanbrito"},
+                "id": 1290, "body": body, "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 "updated_at": "2026-11-16T15:00:00Z",
             })
             self.context["f7_commit"]["git_commit"]["tree"]["sha"] = "f" * 40
