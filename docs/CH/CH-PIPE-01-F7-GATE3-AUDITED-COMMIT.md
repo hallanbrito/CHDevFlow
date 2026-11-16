@@ -12,7 +12,7 @@ O Gate 3 só admite um plano de publicação quando **todos** os elementos se re
 2. **Pin externo administrado pelo PO:** após conferir um parecer favorável e os riscos, fixar `CH_F7_AUDITED_COMMIT_SHA` em *Settings → Secrets and variables → Actions → Variables* do repositório, com **o SHA exato do checkout auditado**. O código da F7 consulta esse valor pela **API LIVE** do GitHub. Ausente, inválido ou não resolvível, o planejamento falha fechado.
 3. **Checkout executado:** `git rev-parse --verify HEAD` deve igualar o pin. `git status --porcelain --untracked-files=all` deve estar vazio. Worktree modificada, commit diferente ou Git indisponível bloqueiam.
 4. **Commit remoto:** `GET /repos/hallanbrito/CHDevFlow/git/commits/<SHA>` deve retornar `sha` exatamente igual ao pin e `tree.sha` Git completa. A comparação não aceita prefixos abreviados nem SHAs de outro repositório.
-5. **Autorização LIVE individual do PO:** a declaração exata na Issue de origem ou de governança inclui, além dos campos já exigidos, **`F7_AUDITED_SHA=<40-hex>`**, com o SHA aprovado. Sem campo, com SHA antigo, com outra pessoa ou com texto extra: rejeição.
+5. **Autorização LIVE individual do PO:** A autoria é conferida por **login + `user.id` fixo do PO** no comentário, no histórico e na sessão com ACL.  a declaração exata na Issue de origem ou de governança inclui, além dos campos já exigidos, **`F7_AUDITED_SHA=<40-hex>`**, com o SHA aprovado. Sem campo, com SHA antigo, com outra pessoa ou com texto extra: rejeição.
 6. **Plano pinado:** os campos `f7_audited_sha` e `f7_audited_tree` entram no plano e no digest; o comentário de escalonamento também expõe o SHA F7 para auditoria. A reconsulta LIVE nos snapshots de preflight, pré-reserva e pré-POST revalida a identidade, a política externa e a autorização. Política alterada ou checkout divergente: sem novo POST.
 7. **Auditoria de tentativa:** o evento `ATTEMPT_POST` (somente em testes mockados enquanto o publicador está desligado) registra o SHA F7 auditado.
 
@@ -23,6 +23,14 @@ CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#<ISSUE> EXECUTION#<32hex> CODE_SHA256=<64h
 ~~~
 
 Não publique esse exemplo na Issue como se fosse autorização. O campo `BASE_SHA` identifica o repositório da **missão**; `F7_AUDITED_SHA` identifica o commit do **publicador**.
+
+## Auditoria independente — primeira rodada BLOQUEADA (16/11/2026)
+
+O Codex CLI auditou estaticamente o commit `32228452dcf2ad5f36b6e8dd8bedd2b0b18841f8` e retornou `VEREDITO: BLOQUEADO`, com 1 achado crítico, 6 altos e 3 médios. O auditor declarou que não executou testes nem consultou GitHub; seu parecer não invalida automaticamente as provas operacionais anteriores da sonda Gate 1 e da reserva Gate 2, mas **bloqueia o aceite do Gate 3**. Achados classificados e tarefas na [Issue #95](https://github.com/hallanbrito/CHDevFlow/issues/95).
+
+Após o parecer, a PR foi atualizada para exigir também **ID GitHub numérico fixo do PO** (não apenas login) em aprovação, histórico e sessão, com negativas. O script de auditoria também passou a incluir os módulos de custódia, reserva, a sonda e os workflows do GitHub que não foram fornecidos na primeira execução. Os outros riscos, sobretudo o **SHA do checkout não garantir o código carregado/executado**, **continuam abertos**. Não afirmar correção completa nem reutilizar o parecer para um HEAD diferente.
+
+A próxima auditoria deve analisar o **novo commit exato** depois da CI e o mecanismo de identidade do artefato executado. A variável administrativa `CH_F7_AUDITED_COMMIT_SHA` **não deve ser cadastrada** antes de veredito e aprovação específica do PO.
 
 ## Evidências exigidas para homologar Gate 3
 
