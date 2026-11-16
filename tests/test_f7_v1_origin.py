@@ -102,6 +102,28 @@ class V1OriginTests(unittest.TestCase):
                 with self.assertRaisesRegex(origin.ProducerOriginError, "Run"):
                     self.check(run={**self.run, **update})
 
+    def test_troca_de_tentativa_na_segunda_consulta_bloqueia(self):
+        calls = []
+        def api(endpoint):
+            calls.append(endpoint)
+            if endpoint.endswith(f"/actions/artifacts/{self.artifact_id}"):
+                return copy.deepcopy(self.artifact)
+            data = copy.deepcopy(self.run)
+            if calls.count(f"repos/{origin.REPO}/actions/runs/{self.run_id}") == 2:
+                data["run_attempt"] = 3
+            return data
+        with self.assertRaisesRegex(origin.ProducerOriginError, "alterada"):
+            origin.verify_v1_producer_origin(
+                self.receipt_origin, producer_sha=self.producer_sha,
+                workflow_id=self.workflow_id, api=api,
+                archive=lambda _: self.archive_bytes)
+
+    def test_ids_booleanos_nao_valem_como_inteiros(self):
+        with self.assertRaisesRegex(origin.ProducerOriginError, "Run"):
+            self.check(run={**self.run, "run_attempt": True})
+        with self.assertRaisesRegex(origin.ProducerOriginError, "Artefato"):
+            self.check(artifact={**self.artifact, "id": True})
+
     def test_artifact_de_outro_run_ou_digest_bloqueado(self):
         cases = (
             {"name": "f7-v1-evidence-forjado"},
