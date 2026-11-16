@@ -5,6 +5,7 @@ imutavel, nem substitui um runner isolado e um build reproduzivel auditado.
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import inspect
 import marshal
@@ -67,7 +68,14 @@ def _runtime_functions(module: Any) -> dict[str, CodeType]:
         if inspect.isfunction(obj) and obj.__module__ == module.__name__:
             found[obj.__qualname__] = obj.__code__
         elif inspect.isclass(obj) and obj.__module__ == module.__name__:
-            for member in vars(obj).values():
+            synthesized = dataclasses.is_dataclass(obj)
+            for member_name, member in vars(obj).items():
+                # Dataclasses sintetizam metodos no runtime; seus bytecodes nao
+                # aparecem na compilacao da fonte e nao sao codigo do autor.
+                if (synthesized and member_name in {
+                        "__init__", "__repr__", "__eq__", "__hash__",
+                        "__setattr__", "__delattr__"}):
+                    continue
                 if isinstance(member, (staticmethod, classmethod)):
                     member = member.__func__
                 if (isinstance(member, FunctionType)
