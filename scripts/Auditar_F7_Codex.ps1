@@ -23,6 +23,7 @@ if ($LASTEXITCODE -ne 0 -or $gitDirty.Count -gt 0) {
 }
 $items = @(
     "src/chdevflow/core/po_escalation_publication.py",
+    "src/chdevflow/core/po_escalation_runtime.py",
     "src/chdevflow/core/po_escalation_attestation.py",
     "src/chdevflow/core/po_escalation_reservation.py",
     "src/chdevflow/core/po_escalation_provenance.py",
@@ -32,6 +33,7 @@ $items = @(
     ".github/workflows/f7-custody-producer.yml",
     ".github/workflows/f7-custody-attestor.yml",
     "tests/test_f7_custody_live.py",
+    "tests/test_f7_runtime_identity.py",
     "src/chdevflow/core/intake.py",
     "src/chdevflow/core/generic_cycle.py",
     "scripts/ch_project_sync.py",
@@ -54,6 +56,7 @@ Verifique criticamente:
 4. Corridas e duplicidade: host unico vs varios hosts, lock e readback.
 5. Falha/timeout APOS POST, recibo PENDENTE_PUBLICACAO e idempotencia.
 6. Entrada nao confiavel: JSON, GitHub CLI, comentarios, Unicode, segredos.
+9. Identidade do runtime F7: blobs SHA do commit, importacao de modulos,\n   bytecode carregado, origem dos executaveis e dependencias externas.\n   Verificar se o mecanismo e apenas verificacao in-process ou representa\n   artefato executor independente e imutavel; marcar o risco residual.
 7. Acoplamento com Intake F1, Project #2 e KSYNC-03; default sem escrita.
 8. Testes ausentes e falsos positivos, compatibilidade Windows e Linux.
 
