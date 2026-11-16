@@ -91,6 +91,52 @@ class RuntimeIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(runtime.RuntimeIdentityError, "Blob"):
                 runtime.verify_loaded_f7_modules(self.root, self.commit)
 
+    def test_funcao_substituida_por_objeto_callable_bloqueia(self):
+        class FakeCallable:
+            def __call__(self):
+                return 123
+        with self.loaded():
+            self.module.check = FakeCallable()
+            with self.assertRaisesRegex(
+                    runtime.RuntimeIdentityError, "Funcao exportada F7 substituida"):
+                runtime.verify_loaded_f7_modules(self.root, self.commit)
+
+    def test_metodo_substituido_por_callable_bloqueia(self):
+        self.path.write_text(
+            "class Guard:\n    def check(self):\n        return 123\n",
+            encoding="utf-8",
+        )
+        # Commit de laboratorio independente do repositorio real.
+        git_args = [
+            ["git", "-C", str(self.root), "add", self.relative],
+            ["git", "-C", str(self.root), "-c", "user.name=CH Tests",
+             "-c", "user.email=ch-tests@users.noreply.github.com",
+             "commit", "-qm", "guard test"],
+        ]
+        for command in git_args:
+            finished = subprocess.run(
+                command, capture_output=True, check=False,
+                stdin=subprocess.DEVNULL)
+            self.assertEqual(finished.returncode, 0, finished.stderr)
+        commit = subprocess.run(
+            ["git", "-C", str(self.root), "rev-parse", "HEAD"],
+            capture_output=True, check=False)
+        self.assertEqual(commit.returncode, 0)
+        self.module = types.ModuleType(self.name)
+        self.module.__file__ = str(self.path)
+        exec(compile(self.path.read_text(encoding="utf-8"),
+                     str(self.path), "exec", dont_inherit=True),
+             self.module.__dict__)
+        class CallableMethod:
+            def __call__(self):
+                return 123
+        self.module.Guard.check = CallableMethod()
+        with self.loaded():
+            with self.assertRaisesRegex(
+                    runtime.RuntimeIdentityError, "Metodo F7 substituido"):
+                runtime.verify_loaded_f7_modules(
+                    self.root, commit.stdout.decode("ascii").strip())
+
     def test_bytecode_alterado_com_fonte_git_intacta_bloqueia(self):
         with self.loaded():
             self.module.check.__code__ = (lambda: -1).__code__
