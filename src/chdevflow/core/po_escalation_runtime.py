@@ -5,6 +5,7 @@ imutavel, nem substitui um runner isolado e um build reproduzivel auditado.
 """
 from __future__ import annotations
 
+import ast
 import dataclasses
 import hashlib
 import inspect
@@ -116,8 +117,34 @@ def _verify_module_code(module: Any, filename: Path) -> str:
         with tokenize.open(filename) as stream:
             source = stream.read()
         expected = _nested_compiled(compile(source, str(filename), "exec", dont_inherit=True))
+        syntax = ast.parse(source, filename=str(filename))
     except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
         raise RuntimeIdentityError("Fonte Python F7 nao recompilavel") from exc
+    # As funcoes declaradas na fonte precisam continuar sendo Python
+    # functions. Caso contrario, um callable criado dinamicamente poderia
+    # substituir o nome exportado sem entrar em _runtime_functions.
+    for node in syntax.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            exported = vars(module).get(node.name)
+            if (not isinstance(exported, FunctionType)
+                    or exported.__module__ != module.__name__):
+                raise RuntimeIdentityError(
+                    "Funcao exportada F7 substituida: " + node.name)
+        elif isinstance(node, ast.ClassDef):
+            cls = vars(module).get(node.name)
+            if not isinstance(cls, type) or cls.__module__ != module.__name__:
+                raise RuntimeIdentityError(
+                    "Classe F7 substituida: " + node.name)
+            for member in node.body:
+                if not isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                method = vars(cls).get(member.name)
+                if isinstance(method, (staticmethod, classmethod)):
+                    method = method.__func__
+                if (not isinstance(method, FunctionType)
+                        or method.__module__ != module.__name__):
+                    raise RuntimeIdentityError(
+                        "Metodo F7 substituido: " + node.name + "." + member.name)
     runtime = _runtime_functions(module)
     # Decorators podem manter o simbolo exportado como wrapper nao FunctionType.
     # A ausencia da exportacao falha fechado; o bytecode Python direto ainda
