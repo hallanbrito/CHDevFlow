@@ -740,6 +740,8 @@ class PublicationTests(unittest.TestCase):
             name = endpoint.rsplit("/", 1)[-1]
             return {"name": name, "value": vars_[name]}
         with (patch.object(pub, "_gh_json", side_effect=api) as get,
+              patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
+                           pub.validate_trusted_key(key, "NONE")),
               patch.dict(os.environ, {
                   "CH_F7_TRUSTED_RUNNER_PUBKEY": "chave-forjada",
                   "CH_F7_TRUSTED_RUNNER_SHA": "f" * 40,
@@ -777,7 +779,9 @@ class PublicationTests(unittest.TestCase):
                         return {"full_name": pub.REPO, "id": pub.F7_REPOSITORY_ID}
                     name = endpoint.rsplit("/", 1)[-1]
                     return {"name": name, "value": data[name]}
-                with patch.object(pub, "_gh_json", side_effect=api):
+                with (patch.object(pub, "_gh_json", side_effect=api),
+                      patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
+                                   pub.validate_trusted_key(key, "NONE"))):
                     with self.assertRaises(pub.PublicationError):
                         pub._f7_remote_trust_policy()
         with patch.object(pub, "_gh_json",
@@ -785,6 +789,31 @@ class PublicationTests(unittest.TestCase):
             with self.assertRaisesRegex(pub.PublicationError, "repositorio"):
                 pub._f7_remote_trust_policy()
             gh.assert_called_once()
+
+    def test_trust_key_de_repo_nega_sem_pin_versionado(self):
+        import base64
+        key_blob = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"x" * 32
+        key = "ssh-ed25519 " + base64.b64encode(key_blob).decode("ascii")
+        vals = {
+            "CH_F7_TRUSTED_RUNNER_PUBKEY": key,
+            "CH_F7_TRUSTED_RUNNER_SHA": "e" * 40,
+            "CH_F7_REVOKED_RUNNER_FINGERPRINTS": "NONE",
+            "CH_F7_PRODUCER_WORKFLOW_ID": "42",
+            "CH_F7_V1_PRODUCER_WORKFLOW_ID": "4242",
+        }
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint == f"repos/{pub.REPO}":
+                return {"full_name": pub.REPO, "id": pub.F7_REPOSITORY_ID}
+            name = endpoint.rsplit("/", 1)[-1]
+            return {"name": name, "value": vals[name]}
+        with patch.object(pub, "_gh_json", side_effect=api):
+            with self.assertRaisesRegex(pub.PublicationError, "politica F7 remota"):
+                pub._f7_remote_trust_policy()
+            with patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
+                              "SHA256:" + "x" * 43):
+                with self.assertRaisesRegex(pub.PublicationError, "politica F7 remota"):
+                    pub._f7_remote_trust_policy()
 
     def test_reserva_git_real_sobrevive_post_inconclusivo_e_troca_de_executor(self):
         if os.name == "nt" and "#!sandbox." in str(self.root):
