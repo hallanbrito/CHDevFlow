@@ -98,6 +98,22 @@ def _gh_json(*args: str, expected_type: type = dict) -> Any:
     return parsed
 
 
+def _gh_archive(endpoint: str) -> bytes:
+    """Bytes do artefato via GitHub API autenticada, com limite de tamanho."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", endpoint],
+            capture_output=True, stdin=subprocess.DEVNULL,
+            check=False, timeout=35,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PublicationError("ZIP GitHub V1 indisponivel") from exc
+    if (result.returncode != 0 or not isinstance(result.stdout, bytes)
+            or not 0 < len(result.stdout) <= 2_000_000):
+        raise PublicationError("ZIP GitHub V1 ausente ou excessivo")
+    return result.stdout
+
+
 def _issue_comments(issue: int) -> list[dict]:
     comments: list[dict] = []
     for page in range(1, MAX_COMMENT_PAGES + 1):
@@ -187,6 +203,7 @@ def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
             producer_sha=policy["producer_sha"],
             workflow_id=policy["v1_workflow_id"],
             api=lambda endpoint: _gh_json("api", endpoint),
+            archive=_gh_archive,
         )
     except (ProducerOriginError, KeyError) as exc:
         raise PublicationError("Atestacao V1 nao vinculada ao run/artefato GH LIVE") from exc
