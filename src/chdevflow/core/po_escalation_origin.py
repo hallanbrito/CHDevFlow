@@ -49,15 +49,17 @@ def verify_v1_producer_origin(
         raise ProducerOriginError("Run GitHub V1 nao verificavel")
     source = run.get("repository")
     head_source = run.get("head_repository")
-    if (run.get("id") != run_id
-            or run.get("workflow_id") != workflow_id
+    if (type(run.get("id")) is not int or run["id"] != run_id
+            or type(run.get("workflow_id")) is not int
+            or run["workflow_id"] != workflow_id
             or run.get("path") not in (V1_PRODUCER_PATH, V1_PRODUCER_PATH + "@refs/heads/main")
             or run.get("event") != "workflow_dispatch"
             or run.get("head_branch") != "main"
             or run.get("head_sha") != producer_sha
             or run.get("status") != "completed"
             or run.get("conclusion") != "success"
-            or run.get("run_attempt") != attempt
+            or type(run.get("run_attempt")) is not int
+            or run["run_attempt"] != attempt
             or not isinstance(source, dict) or source.get("id") != REPOSITORY_ID
             or not isinstance(head_source, dict) or head_source.get("id") != REPOSITORY_ID):
         raise ProducerOriginError("Run V1 diverge de workflow, SHA ou tentativa autorizados")
@@ -66,11 +68,13 @@ def verify_v1_producer_origin(
         raise ProducerOriginError("Artefato V1 nao verificavel")
     binding = artifact.get("workflow_run")
     if (not isinstance(binding, dict)
-            or artifact.get("id") != artifact_id
+            or type(artifact.get("id")) is not int
+            or artifact["id"] != artifact_id
             or artifact.get("name") != f"f7-v1-evidence-{run_id}-{attempt}"
             or artifact.get("digest") != digest
             or artifact.get("expired") is not False
-            or binding.get("id") != run_id
+            or type(binding.get("id")) is not int
+            or binding["id"] != run_id
             or binding.get("head_branch") != "main"
             or binding.get("head_sha") != producer_sha
             or binding.get("repository_id") != REPOSITORY_ID
@@ -82,11 +86,14 @@ def verify_v1_producer_origin(
         raise ProducerOriginError("ZIP do artefato V1 diverge do digest GitHub")
     # Segunda consulta: run_attempt pode mudar durante o readback.
     repeated = api(f"repos/{REPO}/actions/runs/{run_id}")
+    critical = ("id", "workflow_id", "path", "event", "head_branch",
+                "head_sha", "run_attempt", "status", "conclusion")
     if (not isinstance(repeated, dict)
-            or repeated.get("run_attempt") != attempt
-            or repeated.get("head_sha") != producer_sha
-            or repeated.get("status") != "completed"
-            or repeated.get("conclusion") != "success"):
+            or any(repeated.get(field) != run.get(field) for field in critical)
+            or not isinstance(repeated.get("repository"), dict)
+            or repeated["repository"].get("id") != REPOSITORY_ID
+            or not isinstance(repeated.get("head_repository"), dict)
+            or repeated["head_repository"].get("id") != REPOSITORY_ID):
         raise ProducerOriginError("Origem V1 alterada durante verificacao")
     return {
         "run_id": run_id, "run_attempt": attempt, "artifact_id": artifact_id,
