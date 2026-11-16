@@ -84,6 +84,28 @@ def _runtime_functions(module: Any) -> dict[str, CodeType]:
     return found
 
 
+def _semantic_code_digest(code: CodeType) -> str:
+    """Hash do codigo executavel sem metadados de caminho/linhas.
+
+    co_filename, co_linetable e co_firstlineno sao informacoes de debug.
+    A origem fisica e seu blob Git ja sao validados separadamente.
+    """
+    def normalize(value: Any) -> Any:
+        if isinstance(value, CodeType):
+            return ("code", value.co_name, value.co_qualname,
+                    value.co_argcount, value.co_posonlyargcount,
+                    value.co_kwonlyargcount, value.co_nlocals,
+                    value.co_stacksize, value.co_flags, value.co_code,
+                    tuple(normalize(item) for item in value.co_consts),
+                    value.co_names, value.co_varnames,
+                    value.co_freevars, value.co_cellvars,
+                    value.co_exceptiontable)
+        if isinstance(value, (tuple, list)):
+            return tuple(normalize(item) for item in value)
+        return value
+    return hashlib.sha256(marshal.dumps(normalize(code))).hexdigest()
+
+
 def _verify_module_code(module: Any, filename: Path) -> str:
     """Compara code objects reais aos produzidos pela origem versionada.
 
@@ -106,12 +128,12 @@ def _verify_module_code(module: Any, filename: Path) -> str:
         raise RuntimeIdentityError("Funcao Python F7 ausente no runtime: " + missing[0])
     for name, code in runtime.items():
         baseline = expected.get(name)
-        if baseline is None or marshal.dumps(code) != marshal.dumps(baseline):
+        if baseline is None or _semantic_code_digest(code) != _semantic_code_digest(baseline):
             raise RuntimeIdentityError("Bytecode Python carregado diverge: " + module.__name__ + ":" + name)
     digest = hashlib.sha256()
     for name, code in sorted(runtime.items()):
         digest.update(name.encode("utf-8"))
-        digest.update(marshal.dumps(code))
+        digest.update(_semantic_code_digest(code).encode("ascii"))
     return digest.hexdigest()
 
 
