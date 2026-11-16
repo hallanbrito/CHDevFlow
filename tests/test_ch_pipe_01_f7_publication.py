@@ -487,6 +487,40 @@ class PublicationTests(unittest.TestCase):
                          list(pub.EVIDENCE_FILES_TESTS_REPROVADOS))
         self.assertEqual(self._plan()["action"], "POST_COMMENT")
 
+    def test_e3b_string_e_flag_sozinhas_nao_atestam_missao_f7(self):
+        from chdevflow.core import attested_executor as e3b
+        from chdevflow.core import po_escalation_runtime_receipt as external
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["test_execution"] = "docker-attested-e3b-sigstore:" + e3b.IMAGE_ID
+        state["os_isolation_verified"] = True
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.data["provenance"] = create_provenance(self.root)
+        self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+        with self.assertRaisesRegex(
+                external.ExternalRuntimeReceiptError, "nao esta pinado"):
+            self._outbox()
+        # Mesmo sem alterar SHA do codigo, prova de build nao basta.
+        with patch(
+                "chdevflow.core.po_escalation_provenance.verify_runtime_receipt",
+                return_value={"schema": external.SCHEMA}) as verified:
+            self.assertEqual(self._outbox()["execution_id"], self.data["execution_id"])
+            verified.assert_called_once()
+
+    def test_e3b_imagem_falsa_ou_flag_false_bloqueia_f7(self):
+        state_path = self.root / "execucao.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        for image, flag in (("sha256:" + "f" * 64, True),
+                            ("sha256:" + "e" * 64, False)):
+            with self.subTest(image=image, flag=flag):
+                state["test_execution"] = "docker-attested-e3b-sigstore:" + image
+                state["os_isolation_verified"] = flag
+                state_path.write_text(json.dumps(state), encoding="utf-8")
+                self.data["provenance"] = create_provenance(self.root)
+                self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Docker isolada"):
+                    self._outbox()
+
     def test_proveniencia_sem_isolamento_docker_nao_e_publicavel(self):
         state_path = self.root / "execucao.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
