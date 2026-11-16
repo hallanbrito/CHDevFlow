@@ -1,0 +1,92 @@
+name: F7 E3-C2 - Mission authorization tests (no agents)
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3c2-mission-gate-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3c2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  mission-gate-tests:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3c2-mission-gate-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout exact SHA without persisted credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Execute positive/negative authorization tests with no network
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_v1_mission_gate.py -v
+          python -I scripts/f7_v1_mission_gate.py --help >/dev/null
+          echo "E3C2_AUTHORIZATION_GATES_TESTED_NO_AGENTS"
+      - name: Confirm actual GH push-run cannot impersonate a V1 producer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -I - <<'PY'
+          import os
+          import sys
+          sys.path.insert(0, "scripts")
+          import f7_v1_mission_gate as gate
+          rid = int(os.environ["GITHUB_RUN_ID"])
+          run = gate._gh(f"repos/{gate.REPO}/actions/runs/{rid}")
+          assert run["id"] == rid
+          assert run["head_sha"] == os.environ["GITHUB_SHA"]
+          assert run["event"] == "push"
+          assert run["head_branch"] == "feat/ch-pipe-01-f7-e3c2-mission-gate-20261116"
+          mission = {
+              "schema": gate.SCHEMA,
+              "repository": gate.REPO,
+              "mission_id": "F7-LIVE-NEGATIVE-001",
+              "issue": 95,
+              "producer_sha": run["head_sha"],
+              "baseline_sha": "ce939630363f8f762d0f0810a78735fe6975f7ff",
+              "executor_tar_sha256": "b7b912afad6422f134501fd997eb13cc1bf70de8aa88de43e0988841a84b0242",
+              "allowed_path": "src/frete.py",
+              "prompt_path": "docs/mission.txt",
+              "timeout_seconds": 480,
+              "cost_brl": 0,
+              "nonce": "f" * 32,
+          }
+          comment = {
+              "id": 12, "user": {"login": gate.PO_LOGIN, "id": gate.PO_ID},
+              "body": gate.expected_approval(mission),
+              "created_at": "2026-11-16T18:30:00Z",
+              "updated_at": "2026-11-16T18:30:00Z",
+          }
+          try:
+              gate.validate_live(
+                  mission, approval_id=12,
+                  actor={"login": gate.PO_LOGIN, "id": gate.PO_ID},
+                  repository={"full_name": gate.REPO, "id": gate.REPO_ID},
+                  issue={"number":95,"state":"open"},
+                  comments=[comment],
+                  workflow_sha=run["head_sha"], run=run, run_id=rid,
+              )
+          except gate.MissionAuthorizationError as exc:
+              assert "Disparo da missão V1" in str(exc), str(exc)
+          else:
+              raise AssertionError("Push de branch foi autorizado como V1")
+          print("E3C2_GITHUB_LIVE_PUSH_RUN_REJECTED")
+          PY
+

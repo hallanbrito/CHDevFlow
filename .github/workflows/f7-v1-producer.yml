@@ -1,0 +1,65 @@
+name: F7 V1 Producer - explicit mission admission only (BLOCKED)
+
+"on":
+  workflow_dispatch:
+    inputs:
+      manifest_path:
+        description: Path of an individually reviewed mission manifest within the pinned commit
+        required: true
+        type: string
+      approval_comment_id:
+        description: Exact GH issue comment ID from the PO authorization
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-v1-producer-singleton
+  cancel-in-progress: false
+
+jobs:
+  admission-only:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor_id == '113695320' &&
+      github.sha == vars.CH_F7_APPROVED_V1_PRODUCER_SHA
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: read
+    steps:
+      - name: Checkout exact audited SHA with no persisted token
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Admit only the exact mission and PO approval in GitHub LIVE
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MISSION_MANIFEST_PATH: ${{ inputs.manifest_path }}
+          APPROVAL_COMMENT_ID: ${{ inputs.approval_comment_id }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          [[ "$MISSION_MANIFEST_PATH" =~ ^docs/CH/missions/[A-Za-z0-9_.-]+\.json$ ]]
+          [[ "$APPROVAL_COMMENT_ID" =~ ^[1-9][0-9]{0,18}$ ]]
+          test ! -L "$MISSION_MANIFEST_PATH"
+          test -f "$MISSION_MANIFEST_PATH"
+          python scripts/f7_v1_mission_gate.py \
+            --manifest "$MISSION_MANIFEST_PATH" \
+            --approval-comment-id "$APPROVAL_COMMENT_ID" \
+            --workflow-sha "$GITHUB_SHA" \
+            --run-id "$GITHUB_RUN_ID"
+      - name: Fail closed until a separately audited genuine AGY and Codex executor exists
+        shell: bash
+        run: |
+          echo 'CH_F7_V1_PRODUCER_BLOCKED: approval gate is not execution'
+          echo 'Missing: protected executor with real AGY, tests and Codex; independent signed V1 outbox'
+          echo 'No GitHub artifact f7-v1-evidence-* was created'
+          exit 42
