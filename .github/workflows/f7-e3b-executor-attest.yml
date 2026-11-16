@@ -1,0 +1,159 @@
+name: F7 E3-B - Build and independently attest test executor
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3b-attested-executor-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3b-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3b-attested-executor-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout exact Git SHA without persisting credentials
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify source identity and Python executor tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git diff --quiet
+          python -m py_compile scripts/f7_executor_v1.py
+          python -m unittest discover -s tests -p test_f7_executor_v1.py -v
+      - name: Pull exact upstream base manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 \
+            python:3.12-slim@sha256:05a994d2344eb364cc186910f4fc8786a38215f39f00d0acc25bff33a08f4177
+      - name: Build runnable Docker executor with network disabled
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --pull=false --network=none \
+            --build-arg SOURCE_SHA="$GITHUB_SHA" \
+            -f docker/f7-e3b/Dockerfile \
+            -t "chdevflow-f7-e3b:$GITHUB_SHA" .
+          test "$(docker image inspect "chdevflow-f7-e3b:$GITHUB_SHA" \
+            --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "chdevflow-f7-e3b:$GITHUB_SHA" --format '{{.Config.User}}')" = "65534:65534"
+      - name: Execute true positive and true negative in isolated Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="chdevflow-f7-e3b:$GITHUB_SHA"
+          ARGS=(--rm --pull=never --network=none --read-only
+            --cap-drop=ALL --security-opt=no-new-privileges
+            --pids-limit=64 --memory=256m --cpus=1
+            --user=65534:65534
+            --tmpfs=/tmp:rw,nosuid,nodev,noexec,size=32m)
+          docker run "${ARGS[@]}" "$IMAGE" --self-check
+          docker run "${ARGS[@]}" \
+            --mount "type=bind,source=$PWD/scripts/f7_e3b_fixtures/pass,target=/work,readonly" \
+            --workdir=/work "$IMAGE" --run-tests
+          set +e
+          docker run "${ARGS[@]}" \
+            --mount "type=bind,source=$PWD/scripts/f7_e3b_fixtures/fail,target=/work,readonly" \
+            --workdir=/work "$IMAGE" --run-tests
+          EXIT_CODE=$?
+          set -e
+          test "$EXIT_CODE" -eq 12
+          echo "E3B_DOCKER_POSITIVE_AND_NEGATIVE_VERIFIED"
+      - name: Save executable image tar and immutable digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          docker save -o dist/f7-e3b-executor.tar "chdevflow-f7-e3b:$GITHUB_SHA"
+          sha256sum dist/f7-e3b-executor.tar | tee dist/f7-e3b-executor.tar.sha256
+          docker image inspect "chdevflow-f7-e3b:$GITHUB_SHA" \
+            --format '{{.Id}}' | tee dist/f7-e3b-image-id.txt
+          test -s dist/f7-e3b-executor.tar
+      - name: Sign real TAR provenance using GitHub OIDC and Sigstore
+        id: attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/f7-e3b-executor.tar
+          create-storage-record: false
+      - name: Preserve build artifact for independent job
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: f7-e3b-executor-${{ github.sha }}
+          path: dist/
+          retention-days: 7
+          compression-level: 0
+          if-no-files-found: error
+
+  verify:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Download artifact on a different GitHub runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: f7-e3b-executor-${{ github.sha }}
+          path: dist/
+      - name: Check TAR bytes and signature bound to workflow and exact SHA
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha256sum --check dist/f7-e3b-executor.tar.sha256
+          gh attestation verify dist/f7-e3b-executor.tar \
+            -R hallanbrito/CHDevFlow \
+            --signer-workflow hallanbrito/CHDevFlow/.github/workflows/f7-e3b-executor-attest.yml \
+            --source-digest "$GITHUB_SHA" \
+            --source-ref "$GITHUB_REF" \
+            --deny-self-hosted-runners
+          cp dist/f7-e3b-executor.tar "$RUNNER_TEMP/f7-e3b-tampered.tar"
+          printf 'alterado\n' >> "$RUNNER_TEMP/f7-e3b-tampered.tar"
+          if gh attestation verify "$RUNNER_TEMP/f7-e3b-tampered.tar" \
+              -R hallanbrito/CHDevFlow \
+              --signer-workflow hallanbrito/CHDevFlow/.github/workflows/f7-e3b-executor-attest.yml \
+              --source-digest "$GITHUB_SHA" \
+              --source-ref "$GITHUB_REF" \
+              --deny-self-hosted-runners; then
+            echo "TAR adulterado foi autenticado: BLOQUEIO"
+            exit 1
+          fi
+          echo "E3B_SIGSTORE_ATTESTATION_VERIFIED_AND_TAMPER_REJECTED"
+      - name: Load attested image and verify independent executable identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker load -i dist/f7-e3b-executor.tar
+          IMAGE="chdevflow-f7-e3b:$GITHUB_SHA"
+          test "$(docker image inspect "$IMAGE" --format '{{.Config.User}}')" = "65534:65534"
+          test "$(docker image inspect "$IMAGE" \
+            --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+          test "$(docker image inspect "$IMAGE" --format '{{.Id}}')" = "$(cat dist/f7-e3b-image-id.txt)"
+          docker run --rm --pull=never --network=none --read-only \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --pids-limit=64 --memory=256m --cpus=1 \
+            --user=65534:65534 \
+            --tmpfs=/tmp:rw,nosuid,nodev,noexec,size=32m \
+            "$IMAGE" --self-check
+          echo "E3B_EXECUTOR_TAR_INDEPENDENTLY_VERIFIED"
