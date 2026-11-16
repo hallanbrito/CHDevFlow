@@ -12,8 +12,9 @@
 | 2 | [`docs/STATUS.md`](../STATUS.md) | O que está mesmo na `main` e o que continua bloqueado? |
 | 3 | [`docs/CH/DECISOES.md`](DECISOES.md) | Quais decisões do PO e precedências são vinculantes? |
 | 4 | [`docs/CH/CHDEVFLOW-EVIDENCIAS.md`](CHDEVFLOW-EVIDENCIAS.md) | O que já foi testado, com qual tipo de evidência? |
-| 5 | [`docs/RFC-CH-DEVFLOW.md`](../RFC-CH-DEVFLOW.md) | Papéis, contrato de governança, fonte de verdade e objetivo bootstrap |
-| 6 | [`.agents/skills/chdevflow/SKILL.md`](../../.agents/skills/chdevflow/SKILL.md) | Como agir como arquiteto especialista sem reinventar componentes |
+| 5 | [`docs/CH/CHDEVFLOW-MAPA-TESTES.md`](CHDEVFLOW-MAPA-TESTES.md) | Onde estão as suítes já existentes e os workflows? |
+| 6 | [`docs/RFC-CH-DEVFLOW.md`](../RFC-CH-DEVFLOW.md) | Papéis, contrato de governança, fonte de verdade e objetivo bootstrap |
+| 7 | [`.agents/skills/chdevflow/SKILL.md`](../../.agents/skills/chdevflow/SKILL.md) | Como agir como arquiteto especialista sem reinventar componentes |
 
 Em seguida, ler a **Issue atual e comentários**, a PR e seu HEAD exato, os **arquivos de código que implementam o comportamento**, os testes correspondentes e a documentação da fatia específica. Documentos antigos podem conter status de “proposta” que foi superado por merges posteriores. Não inferir implementação do nome da Issue.
 
