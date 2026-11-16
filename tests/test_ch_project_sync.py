@@ -213,6 +213,38 @@ class CommandTests(unittest.TestCase):
         self.stage_probe.start()
         self.addCleanup(self.stage_probe.stop)
 
+    def test_gh_utf8_windows_cp1252_sem_unicode_decode_error(self):
+        # Regressao real F7: Windows cp1252 falhava na thread subprocess.
+        payload = '{"title":"Ação – Cotação 🏭"}'.encode("utf-8")
+        completed = sync.subprocess.CompletedProcess(
+            ["gh", "issue", "view"], 0, stdout=payload, stderr=b"")
+        with mock.patch.object(sync.subprocess, "run", return_value=completed) as run:
+            parsed = sync.gh_json("issue", "view", "85")
+        self.assertEqual(parsed["title"], "Ação – Cotação 🏭")
+        kwargs = run.call_args.kwargs
+        self.assertTrue(kwargs["capture_output"])
+        self.assertFalse(kwargs["check"])
+        self.assertNotIn("text", kwargs)
+        self.assertNotIn("encoding", kwargs)
+
+    def test_gh_nao_utf8_bloqueia_antes_de_parsear_json(self):
+        completed = sync.subprocess.CompletedProcess(
+            ["gh", "project", "view"], 0,
+            stdout=b'{"title":"bad-' + bytes([0x9d]) + b'"}',
+            stderr=b"")
+        with mock.patch.object(sync.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "UTF-8 valido"):
+                sync.gh_json("project", "view", "2")
+
+    def test_gh_erro_cli_redige_credencial_em_bytes(self):
+        completed = sync.subprocess.CompletedProcess(
+            ["gh", "api"], 1, stdout=b"",
+            stderr=b"github_pat_FAKESECRETXYZ: forbidden")
+        with mock.patch.object(sync.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "CREDENCIAL_OCULTADA") as ctx:
+                sync.gh("api", "rate_limit")
+        self.assertNotIn("FAKESECRETXYZ", str(ctx.exception))
+
     @mock.patch.object(sync.shutil, "which", return_value="/usr/bin/gh")
     @mock.patch.object(sync, "gh")
     @mock.patch.object(sync, "issue_state", return_value="OPEN")

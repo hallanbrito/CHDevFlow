@@ -222,6 +222,9 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     if not agy or not codex:
         raise ValueError("CLIs locais AGY e Codex ausentes")
     evidence.mkdir(mode=0o700)
+    # Copia canonica do manifesto fica SOMENTE no dossie local (nao publica
+    # paths privados); vincula cada tentativa ao plano Git pinado.
+    (evidence / "manifesto_missao.json").write_bytes(mission.canonical())
     result = GenericResult(
         "INICIADO", uuid4().hex, mission.mission_id, mission.issue, mission.digest)
     if isolated_tests:
@@ -349,14 +352,36 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             if number == MAX_ATTEMPTS:
                 result.status = "AGUARDANDO_PO"
                 result.findings.append("Tres reprovações; nenhuma quarta chamada")
-                (evidence / "escalonamento_po.json").write_text(
-                    json.dumps({
-                        "execution_id": result.execution_id,
-                        "mission_id": mission.mission_id, "issue": mission.issue,
-                        "status": "AGUARDANDO_PO",
-                        "publication_status": "PENDENTE_DE_AUTORIZACAO",
-                        "attempts": 3, "returns": result.returns_used,
-                    }, ensure_ascii=False, indent=2), encoding="utf-8")
+                # Outbox F7 duravel e sem caminhos absolutos/segredos.
+                # NUNCA tenta publicar ou reinicia agentes por falha de GitHub.
+                from chdevflow.core.po_escalation import (
+                    EVIDENCE_FILES, EVIDENCE_FILES_TESTS_REPROVADOS,
+                )
+                files = (EVIDENCE_FILES_TESTS_REPROVADOS
+                         if row["status"] == "TESTES_REPROVADOS" else EVIDENCE_FILES)
+                outbox = {
+                    "schema": "CHDEVFLOW-F7-OUTBOX/1",
+                    "execution_id": result.execution_id,
+                    "mission_id": mission.mission_id, "issue": mission.issue,
+                    "status": "AGUARDANDO_PO",
+                    "publication_status": "PENDENTE_DE_AUTORIZACAO",
+                    "attempts": 3, "returns": result.returns_used,
+                    "code_sha256": sha,
+                    "third_attempt_status": row["status"],
+                    "evidence_files": list(files),
+                }
+                # Concluir/flush o registro primeiro para vincular a
+                # outbox aos hashes dos artefatos de todas as tres tentativas.
+                _persist(evidence, result)
+                from chdevflow.core.po_escalation_provenance import create_provenance
+                outbox["provenance"] = create_provenance(evidence)
+                receipt = evidence / "escalonamento_po.json"
+                temporary = evidence / "escalonamento_po.json.tmp"
+                with temporary.open("x", encoding="utf-8") as handle:
+                    json.dump(outbox, handle, ensure_ascii=False, indent=2)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, receipt)
                 break
             (directory / "feedback_para_agy.md").write_text(
                 _clean(feedback), encoding="utf-8")
