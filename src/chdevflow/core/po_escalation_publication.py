@@ -719,7 +719,11 @@ def apply_publication_plan(
                 or observed["body"] != plan["body"]
                 or observed["snapshot"]["issue"] != plan["snapshot"]["issue"]
                 or observed["snapshot"]["project"] != plan["snapshot"]["project"]
-                or observed["snapshot"]["approval"] != plan["snapshot"]["approval"]):
+                or observed["snapshot"]["approval"] != plan["snapshot"]["approval"]
+                or observed["f7_audited_sha"] != plan["f7_audited_sha"]
+                or observed["f7_audited_tree"] != plan["f7_audited_tree"]
+                or observed["snapshot"]["f7_audited_commit"] !=
+                   plan["snapshot"]["f7_audited_commit"]):
             raise PublicationError("Readback nao confirmou comentario unico")
     except Exception as exc:
         audit({"event": "PENDENTE_PUBLICACAO", "reason": "READBACK_INCONCLUSIVO"})
