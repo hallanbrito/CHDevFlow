@@ -89,8 +89,11 @@ def _verify_module_code(module: Any, filename: Path) -> str:
     except (OSError, UnicodeError, SyntaxError, ValueError) as exc:
         raise RuntimeIdentityError("Fonte Python F7 nao recompilavel") from exc
     runtime = _runtime_functions(module)
+    # Decorators podem manter o simbolo exportado como wrapper nao FunctionType.
+    # A ausencia da exportacao falha fechado; o bytecode Python direto ainda
+    # deve coincidir quando a funcao estiver acessivel como FunctionType.
     missing = [name for name in expected if "<locals>" not in name
-               and name not in runtime and "." not in name]
+               and name not in vars(module) and "." not in name]
     if missing:
         raise RuntimeIdentityError("Funcao Python F7 ausente no runtime")
     for name, code in runtime.items():
