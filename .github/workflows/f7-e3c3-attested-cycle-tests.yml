@@ -1,0 +1,93 @@
+name: F7 E3-C3 - Attested executor integration tests (NO AGENTS)
+
+"on":
+  push:
+    branches:
+      - feat/ch-pipe-01-f7-e3c3-attested-cycle-20261116
+
+permissions:
+  contents: read
+
+concurrency:
+  group: f7-e3c3-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  adapter-and-real-docker:
+    if: >-
+      github.repository == 'hallanbrito/CHDevFlow' &&
+      github.ref == 'refs/heads/feat/ch-pipe-01-f7-e3c3-attested-cycle-20261116'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Checkout exact SHA without persisted token
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Offline regression of Sigstore adapter and F6 F7 integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_f7_attested_executor.py -v
+          env -u GH_TOKEN -u GITHUB_TOKEN python -I -m unittest discover \
+            -s tests -p test_ch_pipe_01_f6_generic_cycle.py -v
+          echo E3C3_OFFLINE_ADAPTER_AND_CYCLE_TESTS_OK
+      - name: Download the exact previously attested E3-B TAR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh run download 43887485901 -R hallanbrito/CHDevFlow \
+            --name f7-e3b-executor-389bcc61342cbcdd3183e291a18eef42ad78f488 \
+            --dir dist
+          sha256sum --check dist/f7-e3b-executor.tar.sha256
+          echo 'b7b912afad6422f134501fd997eb13cc1bf70de8aa88de43e0988841a84b0242  dist/f7-e3b-executor.tar' \
+            | sha256sum --check
+      - name: Preflight Sigstore and run genuine Docker positive/negative
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -I - <<'PY'
+          import json
+          from pathlib import Path
+          import subprocess
+          import sys
+          sys.path.insert(0, "src")
+          from chdevflow.core import attested_executor as runner
+          tar = Path("dist/f7-e3b-executor.tar")
+          assert runner.preflight(tar) == runner.IMAGE_ID
+          for name, expected in (("pass", 0), ("fail", 12)):
+              root = Path("scripts/f7_e3b_fixtures") / name
+              args = runner.build_command(root)
+              assert runner.IMAGE_ID in args and "--network=none" in args
+              done = subprocess.run(args, capture_output=True, text=True,
+                                    timeout=65, check=False)
+              assert done.returncode == expected, (name, done.stdout, done.stderr)
+              excerpt = runner.checked_result(done.stdout, done.returncode,
+                                              done.stderr)
+              assert "Ran 1 test" in excerpt, (name, excerpt)
+              print("E3C3_DOCKER_" + name.upper() + "_VERIFIED", flush=True)
+          tampered = Path("dist/tampered-executor.tar")
+          with tar.open("rb") as src, tampered.open("wb") as dst:
+              for chunk in iter(lambda: src.read(1_048_576), b""):
+                  dst.write(chunk)
+              dst.write(b"tamper")
+          try:
+              runner.verify_tar(tampered)
+          except runner.AttestedExecutorError as exc:
+              assert "SHA-256" in str(exc)
+          else:
+              raise AssertionError("Tampered image was accepted")
+          print("E3C3_ATTESTED_DOCKER_AND_NEGATIVES_VERIFIED", flush=True)
+          PY
