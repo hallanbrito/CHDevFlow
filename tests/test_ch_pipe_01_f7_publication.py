@@ -100,18 +100,25 @@ class PublicationTests(unittest.TestCase):
         self.data["provenance"] = create_provenance(self.root)
         self.outbox.write_text(json.dumps(self.data), encoding="utf-8")
         self.approval_id = 448200
+        self.f7_sha = "b" * 40
         statement = (
             "CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
             "EXECUTION#" + self.data["execution_id"] + " "
             "CODE_SHA256=" + self.data["code_sha256"] + " " +
             "BASE_SHA=" + self.data["provenance"]["base_sha"] + " " +
             "MISSION_DIGEST=" + self.data["provenance"]["mission_digest"] +
+            " F7_AUDITED_SHA=" + self.f7_sha +
             " ACTION=COMMENT_ONLY"
         )
         self.context = {
-            "who": {"login": "hallanbrito"},
+            "who": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "repository": {"permissions": {"push": True}},
             "base_commit": {"sha": "a" * 40, "tree": {"sha": "d" * 40}},
+            "f7_commit": {
+                "policy_sha": self.f7_sha, "local_sha": self.f7_sha,
+                "git_commit": {"sha": self.f7_sha, "tree": {"sha": "c" * 40}},
+                "runtime_digest": "e" * 64,
+            },
             "issue": {
                 "id": "I_id_mock", "number": 85, "state": "OPEN",
                 "url": "https://github.com/hallanbrito/CHDevFlow/issues/85",
@@ -123,7 +130,7 @@ class PublicationTests(unittest.TestCase):
                 "id": self.approval_id, "issue_url":
                     "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
                 "body": statement, "updated_at": "2026-11-15T12:00:00Z",
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             },
             "comments": [],
         }
@@ -196,15 +203,64 @@ class PublicationTests(unittest.TestCase):
             with self.subTest(altered=altered), self.assertRaises(pub.PublicationError):
                 self._plan()
             self.context["approval"].update({
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 "issue_url": "https://api.github.com/repos/hallanbrito/CHDevFlow/issues/63",
                 "body": ("CH-GOV-01 F7 PUBLICAR PROJECT#2 ISSUE#85 "
                          "EXECUTION#" + self.data["execution_id"] + " "
                          "CODE_SHA256=" + self.data["code_sha256"] + " " +
             "BASE_SHA=" + self.data["provenance"]["base_sha"] + " " +
             "MISSION_DIGEST=" + self.data["provenance"]["mission_digest"] +
+            " F7_AUDITED_SHA=" + self.f7_sha +
             " ACTION=COMMENT_ONLY"),
             })
+
+    def test_gate3_po_id_numerico_no_aprovador_bloqueia_sem_id_ou_trocado(self):
+        original = copy.deepcopy(self.context["approval"]["user"])
+        for invalid in ({"login": pub.OWNER},
+                        {"login": pub.OWNER, "id": 999},
+                        {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(invalid=invalid):
+                self.context["approval"]["user"] = invalid
+                with self.assertRaisesRegex(pub.PublicationError, "Autor"):
+                    self._plan()
+        self.context["approval"]["user"] = original
+
+    def test_gate3_po_id_numerico_no_historico_aprovacao_bloqueia(self):
+        original = self.context["approval_history"][0]
+        try:
+            for invalid in ({"login": pub.OWNER},
+                            {"login": pub.OWNER, "id": 999},
+                            {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+                with self.subTest(invalid=invalid):
+                    fake = copy.deepcopy(self.context["approval"])
+                    fake["user"] = invalid
+                    self.context["approval_history"][0] = fake
+                    with self.assertRaisesRegex(pub.PublicationError, "historico LIVE"):
+                        self._plan()
+        finally:
+            self.context["approval_history"][0] = original
+
+    def test_gate3_po_id_numerico_na_sessao_bloqueia(self):
+        original = copy.deepcopy(self.context["who"])
+        for invalid in ({"login": pub.OWNER},
+                        {"login": pub.OWNER, "id": 999},
+                        {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(invalid=invalid):
+                self.context["who"] = invalid
+                with self.assertRaisesRegex(pub.PublicationError, "Identidade/ACL"):
+                    self._plan()
+        self.context["who"] = original
+
+    def test_gate3_po_id_numerico_em_revogacao_suspeita_bloqueia(self):
+        self.context["approval_history"].append({
+            "id": self.approval_id + 1001,
+            "body": "CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
+                    + self.data["execution_id"],
+            "user": {"login": pub.OWNER, "id": 999},
+            "updated_at": "2026-11-16T15:00:00Z",
+        })
+        with self.assertRaisesRegex(pub.PublicationError, "Identidade numerica"):
+            self._plan()
 
     def test_revogacao_no_ultimo_snapshot_live_bloqueia_post(self):
         plan = self._plan()
@@ -216,7 +272,7 @@ class PublicationTests(unittest.TestCase):
                     "id": self.approval_id + 99,
                     "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                              + self.data["execution_id"]),
-                    "user": {"login": "hallanbrito"},
+                    "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 })
             return self.context
         with self.assertRaises(pub.PublicationPending):
@@ -233,7 +289,7 @@ class PublicationTests(unittest.TestCase):
             "id": self.approval_id + 1,
             "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                      + self.data["execution_id"] + " ACTION=COMMENT_ONLY"),
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15T13:00:00Z",
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
@@ -255,7 +311,7 @@ class PublicationTests(unittest.TestCase):
             "id": self.approval_id + 3,
             "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                      + self.data["execution_id"]),
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
             self._apply(plan, poster=lambda *_: self.fail("POST desautorizado"))
@@ -266,7 +322,7 @@ class PublicationTests(unittest.TestCase):
             "id": self.approval_id - 1,
             "body": ("CH-GOV-01 F7 REVOGAR PROJECT#2 ISSUE#85 EXECUTION#"
                      + self.data["execution_id"]),
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15T14:00:00Z",
         })
         with self.assertRaisesRegex(pub.PublicationError, "revogada"):
@@ -336,7 +392,7 @@ class PublicationTests(unittest.TestCase):
     def test_comment_existente_eh_idempotente(self):
         plan = self._plan()
         self.context["comments"].append({
-            "id": 99, "body": plan["body"], "user": {"login": "hallanbrito"},
+            "id": 99, "body": plan["body"], "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15",
         })
         existing = self._plan()
@@ -346,12 +402,26 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(result["status"], "JA_PUBLICADO")
         self.assertEqual(result["remote_writes"], 0)
 
+    def test_comentario_existente_exige_id_numerico_do_po(self):
+        plan = self._plan()
+        for identity in (
+                {"login": pub.OWNER},
+                {"login": pub.OWNER, "id": 12345},
+                {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(identity=identity):
+                self.context["comments"] = [{
+                    "id": 888, "body": plan["body"], "user": identity,
+                }]
+                with self.assertRaisesRegex(pub.PublicationError, "sem autenticidade"):
+                    self._plan()
+        self.context["comments"] = []
+
     def test_duplicado_remoto_bloqueia(self):
         plan = self._plan()
         for index in (30, 31):
             self.context["comments"].append({
                 "id": index, "body": plan["body"],
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             })
         with self.assertRaisesRegex(pub.PublicationError, "Colisao"):
             self._plan()
@@ -363,7 +433,7 @@ class PublicationTests(unittest.TestCase):
             if len(calls) == 2:
                 self.context["comments"].append({
                     "id": 200, "body": "Alterado externamente",
-                    "user": {"login": "hallanbrito"},
+                    "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 })
             return self.context
         with self.assertRaisesRegex(pub.PublicationError, "Corrida"):
@@ -493,12 +563,35 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "causa"):
             self._outbox()
 
+    def test_resposta_post_exige_id_numerico_autentico_do_po(self):
+        # Apenas simulacao de GH; a constante permanece desativada no codigo.
+        forged = [
+            {"id": 900, "user": {"login": pub.OWNER}},
+            {"id": 900, "user": {"login": pub.OWNER, "id": 999}},
+            {"id": 900, "user": {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}},
+            {"id": 900, "user": {"login": "outro", "id": pub.PO_GITHUB_ID}},
+            {"id": 900},
+        ]
+        with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True):
+            for candidate in forged:
+                with self.subTest(candidate=candidate):
+                    with patch.object(pub, "_gh_json", return_value=candidate):
+                        with self.assertRaisesRegex(
+                                pub.PublicationError, "autoria numerica"):
+                            pub._post_comment(85, "teste sem POST real")
+            valid = {"id": 900, "user": {
+                "login": pub.OWNER, "id": pub.PO_GITHUB_ID}}
+            with patch.object(pub, "_gh_json", return_value=valid) as gh:
+                self.assertEqual(
+                    pub._post_comment(85, "teste sem POST real"), valid)
+                gh.assert_called_once()
+
     def test_post_unico_e_readback_verificado(self):
         calls = []
         def poster(issue, body):
             calls.append((issue, body))
             self.context["comments"].append({
-                "id": 1234, "body": body, "user": {"login": "hallanbrito"},
+                "id": 1234, "body": body, "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             })
             return {"id": 1234}
         result = self._apply(poster=poster)
@@ -565,8 +658,9 @@ class PublicationTests(unittest.TestCase):
 
     def test_sem_atestacao_bloqueia_reserva_e_post(self):
         self.attestation.side_effect = self.verify_attestation
-        with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": ""}):
-            with self.assertRaisesRegex(ValueError, "Chave confiavel"):
+        with patch.object(pub, "_f7_remote_trust_policy",
+                          side_effect=pub.PublicationError("Politica F7 remota ausente")):
+            with self.assertRaisesRegex(pub.PublicationError, "Politica F7 remota"):
                 self._apply(poster=lambda *_: self.fail("POST sem atestacao"))
         self.reservations.assert_not_called()
 
@@ -596,14 +690,23 @@ class PublicationTests(unittest.TestCase):
                     code = pub.main(["--outbox", str(self.outbox), "--verify-attestation"])
                 return code, output.getvalue()
 
-            with patch.dict(os.environ, {"CH_F7_TRUSTED_RUNNER_PUBKEY": key,
-                                         "CH_F7_TRUSTED_RUNNER_SHA": producer_sha}):
+            policy = {
+                "trusted_key": key, "producer_sha": producer_sha,
+                "revocations": "NONE", "producer_workflow_id": 42,
+                "source_repo_id": pub.F7_REPOSITORY_ID,
+                "v1_workflow_id": 4242,
+                "key_fingerprint": "SHA256:teste",
+            }
+            with (patch.object(pub, "_f7_remote_trust_policy", return_value=policy),
+                  patch.object(pub, "verify_v1_producer_origin",
+                               return_value={"run_id": 42}) as origin_check):
                 original = execution_statement(
                     self._outbox(), producer_sha=producer_sha, producer_run=origin)
                 sign(original, trusted)
                 code, result = observe()
                 self.assertEqual(code, 0)
                 self.assertEqual(json.loads(result)["producer_run"], origin)
+                origin_check.assert_called()
 
                 (self.root / "attempt-02" / "testes.log").write_text(
                     "Log alterado e hashes locais recalculados", encoding="utf-8")
@@ -618,6 +721,103 @@ class PublicationTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()) as error:
                     self.assertEqual(observe()[0], 1)
                 self.assertIn("nao corresponde ao produtor", error.getvalue())
+
+    def test_politica_remota_f7_nao_herda_chave_do_ambiente(self):
+        import base64
+        key_blob = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"x" * 32
+        key = "ssh-ed25519 " + base64.b64encode(key_blob).decode("ascii")
+        vars_ = {
+            "CH_F7_TRUSTED_RUNNER_PUBKEY": key,
+            "CH_F7_TRUSTED_RUNNER_SHA": "e" * 40,
+            "CH_F7_REVOKED_RUNNER_FINGERPRINTS": "NONE",
+            "CH_F7_PRODUCER_WORKFLOW_ID": "42",
+            "CH_F7_V1_PRODUCER_WORKFLOW_ID": "4242",
+        }
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint == f"repos/{pub.REPO}":
+                return {"full_name": pub.REPO, "id": pub.F7_REPOSITORY_ID}
+            name = endpoint.rsplit("/", 1)[-1]
+            return {"name": name, "value": vars_[name]}
+        with (patch.object(pub, "_gh_json", side_effect=api) as get,
+              patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
+                           pub.validate_trusted_key(key, "NONE")),
+              patch.object(pub, "F7_TRUSTED_PRODUCER_SHA_PIN", "e" * 40),
+              patch.object(pub, "F7_TRUSTED_V1_WORKFLOW_ID_PIN", 4242),
+              patch.dict(os.environ, {
+                  "CH_F7_TRUSTED_RUNNER_PUBKEY": "chave-forjada",
+                  "CH_F7_TRUSTED_RUNNER_SHA": "f" * 40,
+              })):
+            policy = pub._f7_remote_trust_policy()
+        self.assertEqual(policy["trusted_key"], key)
+        self.assertEqual(policy["producer_sha"], "e" * 40)
+        self.assertEqual(policy["producer_workflow_id"], 42)
+        self.assertEqual(get.call_count, 6)
+
+    def test_politica_remota_f7_nega_vars_ausentes_ou_violadas(self):
+        import base64
+        key_blob = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"x" * 32
+        key = "ssh-ed25519 " + base64.b64encode(key_blob).decode("ascii")
+        base = {
+            "CH_F7_TRUSTED_RUNNER_PUBKEY": key,
+            "CH_F7_TRUSTED_RUNNER_SHA": "e" * 40,
+            "CH_F7_REVOKED_RUNNER_FINGERPRINTS": "NONE",
+            "CH_F7_PRODUCER_WORKFLOW_ID": "42",
+            "CH_F7_V1_PRODUCER_WORKFLOW_ID": "4242",
+        }
+        variants = (
+            ("missing", "CH_F7_TRUSTED_RUNNER_PUBKEY", None),
+            ("bad-sha", "CH_F7_TRUSTED_RUNNER_SHA", "curto"),
+            ("bad-workflow", "CH_F7_PRODUCER_WORKFLOW_ID", "0"),
+            ("bad-v1-workflow", "CH_F7_V1_PRODUCER_WORKFLOW_ID", "0"),
+            ("missing-revocation", "CH_F7_REVOKED_RUNNER_FINGERPRINTS", ""),
+        )
+        for label, field, changed in variants:
+            with self.subTest(label=label):
+                data = {**base, field: changed}
+                def api(*args):
+                    endpoint = args[-1]
+                    if endpoint == f"repos/{pub.REPO}":
+                        return {"full_name": pub.REPO, "id": pub.F7_REPOSITORY_ID}
+                    name = endpoint.rsplit("/", 1)[-1]
+                    return {"name": name, "value": data[name]}
+                with (patch.object(pub, "_gh_json", side_effect=api),
+                      patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
+                                   pub.validate_trusted_key(key, "NONE")),
+                      patch.object(pub, "F7_TRUSTED_PRODUCER_SHA_PIN", "e" * 40),
+                      patch.object(pub, "F7_TRUSTED_V1_WORKFLOW_ID_PIN", 4242)):
+                    with self.assertRaises(pub.PublicationError):
+                        pub._f7_remote_trust_policy()
+        with patch.object(pub, "_gh_json",
+                          return_value={"id": 999, "full_name": pub.REPO}) as gh:
+            with self.assertRaisesRegex(pub.PublicationError, "repositorio"):
+                pub._f7_remote_trust_policy()
+            gh.assert_called_once()
+
+    def test_trust_key_de_repo_nega_sem_pin_versionado(self):
+        import base64
+        key_blob = b"\x00\x00\x00\x0bssh-ed25519\x00\x00\x00\x20" + b"x" * 32
+        key = "ssh-ed25519 " + base64.b64encode(key_blob).decode("ascii")
+        vals = {
+            "CH_F7_TRUSTED_RUNNER_PUBKEY": key,
+            "CH_F7_TRUSTED_RUNNER_SHA": "e" * 40,
+            "CH_F7_REVOKED_RUNNER_FINGERPRINTS": "NONE",
+            "CH_F7_PRODUCER_WORKFLOW_ID": "42",
+            "CH_F7_V1_PRODUCER_WORKFLOW_ID": "4242",
+        }
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint == f"repos/{pub.REPO}":
+                return {"full_name": pub.REPO, "id": pub.F7_REPOSITORY_ID}
+            name = endpoint.rsplit("/", 1)[-1]
+            return {"name": name, "value": vals[name]}
+        with patch.object(pub, "_gh_json", side_effect=api):
+            with self.assertRaisesRegex(pub.PublicationError, "Politica F7 remota"):
+                pub._f7_remote_trust_policy()
+            with patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
+                              "SHA256:" + "x" * 43):
+                with self.assertRaisesRegex(pub.PublicationError, "Politica F7 remota"):
+                    pub._f7_remote_trust_policy()
 
     def test_reserva_git_real_sobrevive_post_inconclusivo_e_troca_de_executor(self):
         if os.name == "nt" and "#!sandbox." in str(self.root):
@@ -776,7 +976,7 @@ class PublicationTests(unittest.TestCase):
 
         self.context["comments"].append({
             "id": 7711, "body": plan["body"],
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
             "updated_at": "2026-11-15T15:00:00Z",
         })
         found = pub.reconcile_pending_publication(
@@ -785,6 +985,51 @@ class PublicationTests(unittest.TestCase):
         self.assertEqual(found["comment_id"], 7711)
         self.assertEqual(found["remote_writes"], 0)
         self.assertEqual(lock.read_bytes(), original)
+
+    def test_reconciliacao_readback_exige_id_numerico_do_po(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        for identity in (
+                {"login": pub.OWNER},
+                {"login": pub.OWNER, "id": 12345},
+                {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+            with self.subTest(identity=identity):
+                self.context["comments"] = [{
+                    "id": 992, "body": plan["body"], "user": identity
+                }]
+                with self.assertRaisesRegex(pub.PublicationError, "nao autentico"):
+                    pub.reconcile_pending_publication(
+                        self.outbox, plan, reader=lambda *_: self.context)
+        self.context["comments"] = []
+
+    def test_reconciliacao_exige_sessao_com_id_numerico_po(self):
+        plan = self._legacy_plan()
+        lock = self.root / ("f7-publicacao-" + self.data["execution_id"] + ".lock")
+        lock.write_text(json.dumps({
+            "schema": pub.RECEIPT_SCHEMA,
+            "execution_id": self.data["execution_id"],
+            "digest": plan["digest"],
+            "publication_status": "PENDENTE_PUBLICACAO",
+        }), encoding="utf-8")
+        original = self.context["who"]
+        try:
+            for identity in (
+                    {"login": pub.OWNER},
+                    {"login": pub.OWNER, "id": 12345},
+                    {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}):
+                with self.subTest(identity=identity):
+                    self.context["who"] = identity
+                    with self.assertRaisesRegex(pub.PublicationError, "Identidade LIVE"):
+                        pub.reconcile_pending_publication(
+                            self.outbox, plan, reader=lambda *_: self.context)
+        finally:
+            self.context["who"] = original
 
     def test_reconciliacao_apos_revogacao_e_issue_closed(self):
         plan = self._legacy_plan()
@@ -799,7 +1044,7 @@ class PublicationTests(unittest.TestCase):
         self.context["approval"]["body"] = "REVOGADA"
         self.context["comments"].append({
             "id": 9090, "body": plan["body"],
-            "user": {"login": "hallanbrito"},
+            "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
         })
         result = pub.reconcile_pending_publication(
             self.outbox, plan, reader=lambda *_: self.context)
@@ -1001,7 +1246,7 @@ class PublicationTests(unittest.TestCase):
             calls.append(("POST_SIMULADO", issue))
             self.context["comments"].append({
                 "id": 987654, "body": body,
-                "user": {"login": "hallanbrito"},
+                "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
                 "updated_at": "2026-11-15T14:00:00Z",
             })
             return {"id": 987654}
@@ -1131,6 +1376,167 @@ class PublicationTests(unittest.TestCase):
         target.write_bytes(b"evidencia")
         extended = Path("\\\\?\\" + str(target))
         self.assertEqual(bridge._read_evidence_bytes(extended), b"evidencia")
+
+    def test_gate3_vincula_sha_exato_ao_plano_aprovacao_e_comentario(self):
+        plan = self._plan()
+        self.assertEqual(plan["f7_audited_sha"], self.f7_sha)
+        self.assertEqual(plan["f7_audited_tree"], "c" * 40)
+        self.assertIn("F7_AUDITED_SHA=" + self.f7_sha, self.context["approval"]["body"])
+        self.assertIn("SHA Git F7 auditado/autorizado: " + self.f7_sha, plan["body"])
+        self.assertEqual(plan["digest"], pub._digest({
+            key: value for key, value in plan.items() if key != "digest"}))
+
+    def test_gate3_rejeita_pin_ausente_local_remote_ou_arvore_divergente(self):
+        good = copy.deepcopy(self.context["f7_commit"])
+        cases = [
+            None,
+            {},
+            {**good, "policy_sha": "b" * 39},
+            {**good, "policy_sha": "f" * 40},
+            {**good, "local_sha": "f" * 40},
+            {**good, "git_commit": {"sha": "f" * 40, "tree": {"sha": "c" * 40}}},
+            {**good, "git_commit": {"sha": good["policy_sha"], "tree": {"sha": "c"}}},
+        ]
+        for changed in cases:
+            with self.subTest(changed=changed):
+                self.context["f7_commit"] = changed
+                with self.assertRaisesRegex(pub.PublicationError, "commit F7 auditado|Arvore"):
+                    self._plan()
+        self.context["f7_commit"] = good
+
+    def test_gate3_aprovacao_antiga_ou_sha_diferente_eh_negada(self):
+        body = self.context["approval"]["body"]
+        for bad in (body.replace(" F7_AUDITED_SHA=" + self.f7_sha, ""),
+                    body.replace(self.f7_sha, "f" * 40)):
+            with self.subTest(bad=bad):
+                self.context["approval"]["body"] = bad
+                with self.assertRaisesRegex(pub.PublicationError, "Autorizacao"):
+                    self._plan()
+        self.context["approval"]["body"] = body
+
+    def test_gate3_pin_muda_entre_snapshots_bloqueia_antes_do_post(self):
+        calls = []
+        plan = self._plan()
+        def reader(*_):
+            calls.append("GET")
+            if len(calls) == 2:
+                self.context["f7_commit"]["policy_sha"] = "f" * 40
+                self.context["f7_commit"]["local_sha"] = "f" * 40
+                self.context["f7_commit"]["git_commit"]["sha"] = "f" * 40
+            return self.context
+        with self.assertRaisesRegex(pub.PublicationError, "Autorizacao"):
+            self._apply(plan=plan, reader=reader,
+                        poster=lambda *_: self.fail("POST antes do gate3"))
+        self.assertEqual(calls, ["GET", "GET"])
+        self.assertFalse(list(self.root.glob("f7-publicacao-*.lock")))
+
+    def test_gate3_readback_com_arvore_f7_alterada_nao_confirma_publicacao(self):
+        plan = self._plan()
+        def poster(_issue, body):
+            self.context["comments"].append({
+                "id": 1290, "body": body, "user": {"login": "hallanbrito", "id": pub.PO_GITHUB_ID},
+                "updated_at": "2026-11-16T15:00:00Z",
+            })
+            self.context["f7_commit"]["git_commit"]["tree"]["sha"] = "f" * 40
+            return {"id": 1290}
+        with self.assertRaisesRegex(pub.PublicationPending, "reconciliar LIVE"):
+            self._apply(plan=plan, poster=poster)
+        self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
+
+    def test_gate3_contexto_real_exige_comprovante_runtime(self):
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint.endswith("/CH_F7_AUDITED_COMMIT_SHA"):
+                return {"name": pub.F7_AUDIT_VARIABLE, "value": self.f7_sha}
+            return {"sha": self.f7_sha, "tree": {"sha": "c" * 40}}
+        with (patch.object(pub, "_gh_json", side_effect=api),
+              patch.object(pub, "_local_f7_checkout_sha", return_value=self.f7_sha),
+              patch.object(pub, "verify_loaded_f7_modules",
+                           return_value="e" * 64) as verify):
+            result = pub._f7_audit_context()
+        self.assertEqual(result["runtime_digest"], "e" * 64)
+        verify.assert_called_once()
+
+    def test_gate3_contexto_real_bloqueia_runtime_adulterado(self):
+        def api(*args):
+            endpoint = args[-1]
+            if endpoint.endswith("/CH_F7_AUDITED_COMMIT_SHA"):
+                return {"name": pub.F7_AUDIT_VARIABLE, "value": self.f7_sha}
+            return {"sha": self.f7_sha, "tree": {"sha": "c" * 40}}
+        with (patch.object(pub, "_gh_json", side_effect=api),
+              patch.object(pub, "_local_f7_checkout_sha", return_value=self.f7_sha),
+              patch.object(pub, "verify_loaded_f7_modules",
+                           side_effect=pub.RuntimeIdentityError("adulteracao"))):
+            with self.assertRaisesRegex(pub.PublicationError, "Codigo carregado"):
+                pub._f7_audit_context()
+
+    def test_gate3_runtime_digest_exigido_e_pinado_no_plano(self):
+        plan = self._plan()
+        self.assertEqual(plan["f7_runtime_digest"], "e" * 64)
+        self.assertIn("f7_audited_commit", plan["snapshot"])
+        cases = (None, "curto", "f" * 63, 55)
+        for changed in cases:
+            with self.subTest(changed=changed):
+                self.context["f7_commit"]["runtime_digest"] = changed
+                with self.assertRaisesRegex(pub.PublicationError, "codigo executado"):
+                    self._plan()
+        self.context["f7_commit"]["runtime_digest"] = "e" * 64
+
+    def test_gate3_runtime_drift_entre_snapshots_bloqueia_sem_post(self):
+        plan = self._plan()
+        calls = []
+        def reader(*_):
+            calls.append("GET")
+            if len(calls) == 2:
+                self.context["f7_commit"]["runtime_digest"] = "f" * 64
+            return self.context
+        with self.assertRaisesRegex(pub.PublicationError, "Corrida"):
+            self._apply(plan=plan, reader=reader,
+                        poster=lambda *_: self.fail("POST indevido"))
+        self.assertEqual(calls, ["GET", "GET"])
+        self.reservations.assert_not_called()
+
+    def test_gate3_readback_com_runtime_alterado_nao_confirma(self):
+        plan = self._plan()
+        def poster(_issue, body):
+            self.context["comments"].append({
+                "id": 1291, "body": body,
+                "user": {"login": pub.OWNER, "id": pub.PO_GITHUB_ID},
+                "updated_at": "2026-11-16T16:00:00Z",
+            })
+            self.context["f7_commit"]["runtime_digest"] = "f" * 64
+            return {"id": 1291}
+        with self.assertRaisesRegex(pub.PublicationPending, "reconciliar LIVE"):
+            self._apply(plan=plan, poster=poster)
+        self.assertEqual(self.audit[-1]["reason"], "READBACK_INCONCLUSIVO")
+
+    def test_gate3_plano_antigo_rejeitado_antes_de_reserva_ou_post(self):
+        plan = self._plan()
+        plan.pop("f7_audited_sha")
+        plan["digest"] = pub._digest({key: value for key, value in plan.items()
+                                      if key != "digest"})
+        with self.assertRaisesRegex(pub.PublicationError, "nao pertence"):
+            self._apply(plan=plan, poster=lambda *_: self.fail("POST indevido"))
+        self.reservations.assert_not_called()
+
+    def test_gate3_pin_externo_invalido_falha_antes_de_consulta_commit(self):
+        with patch.object(pub, "_gh_json", return_value={
+                "name": pub.F7_AUDIT_VARIABLE, "value": "curto"}) as gh:
+            with self.assertRaisesRegex(pub.PublicationError, "Pin"):
+                pub._f7_audit_context()
+        gh.assert_called_once()
+
+    def test_gate3_checkout_sujo_ou_git_ausente_falha_fechado(self):
+        def completed(result):
+            return subprocess.CompletedProcess(["git"], 0, result, b"")
+        with patch.object(pub.subprocess, "run",
+                          side_effect=[completed(b"b" * 40 + b"\n"),
+                                       completed(b" M codigo.py\n")]):
+            with self.assertRaisesRegex(pub.PublicationError, "Worktree"):
+                pub._local_f7_checkout_sha()
+        with patch.object(pub.subprocess, "run", side_effect=OSError("sem git")):
+            with self.assertRaisesRegex(pub.PublicationError, "local nao verificavel"):
+                pub._local_f7_checkout_sha()
 
     def test_plan_file_exclusivo(self):
         target = self.root / "plano.json"

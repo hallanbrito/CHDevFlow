@@ -16,9 +16,11 @@ import sys
 from typing import Any, Callable
 
 from chdevflow.core.intake import validate_issue, _fields, _get
-from chdevflow.core.po_escalation_attestation import verify_external_attestation
+from chdevflow.core.po_escalation_attestation import (verify_external_attestation, validate_trusted_key)
 from chdevflow.core.experimental_pilot import _is_link
 from chdevflow.core.po_escalation_provenance import verify_provenance
+from chdevflow.core.po_escalation_runtime import verify_loaded_f7_modules, RuntimeIdentityError
+from chdevflow.core.po_escalation_origin import verify_v1_producer_origin, ProducerOriginError
 from chdevflow.core.po_escalation_reservation import (
     GitReservationStore, NAMESPACE, SCHEMA as RESERVATION_SCHEMA, ReservationError,
 )
@@ -39,6 +41,21 @@ MARKER_PREFIX = "<!-- CHDEVFLOW-F7-EXECUTION:"
 # serializacao entre hosts e reauditoria. Nao habilitar apenas por env.
 REMOTE_PUBLICATION_ENABLED = False
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+F7_AUDIT_VARIABLE = "CH_F7_AUDITED_COMMIT_SHA"
+F7_REPOSITORY_ID = 1424359000
+# Pin versionado, intencionalmente nao provisionado. Exige auditoria do SHA
+# e decisao explicita PO antes de confiar em qualquer pubkey remota.
+F7_TRUST_KEY_FINGERPRINT_PIN = ""
+F7_TRUSTED_PRODUCER_SHA_PIN = ""
+F7_TRUSTED_V1_WORKFLOW_ID_PIN = 0
+F7_TRUST_VARIABLES = (
+    "CH_F7_TRUSTED_RUNNER_PUBKEY",
+    "CH_F7_TRUSTED_RUNNER_SHA",
+    "CH_F7_REVOKED_RUNNER_FINGERPRINTS",
+    "CH_F7_PRODUCER_WORKFLOW_ID",
+    "CH_F7_V1_PRODUCER_WORKFLOW_ID",
+)
 
 
 class PublicationError(ValueError):
@@ -86,6 +103,22 @@ def _gh_json(*args: str, expected_type: type = dict) -> Any:
     return parsed
 
 
+def _gh_archive(endpoint: str) -> bytes:
+    """Bytes do artefato via GitHub API autenticada, com limite de tamanho."""
+    try:
+        result = subprocess.run(
+            ["gh", "api", "--hostname", "github.com", endpoint],
+            capture_output=True, stdin=subprocess.DEVNULL,
+            check=False, timeout=35,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PublicationError("ZIP GitHub V1 indisponivel") from exc
+    if (result.returncode != 0 or not isinstance(result.stdout, bytes)
+            or not 0 < len(result.stdout) <= 2_000_000):
+        raise PublicationError("ZIP GitHub V1 ausente ou excessivo")
+    return result.stdout
+
+
 def _issue_comments(issue: int) -> list[dict]:
     comments: list[dict] = []
     for page in range(1, MAX_COMMENT_PAGES + 1):
@@ -117,13 +150,85 @@ def _reservation_store() -> GitReservationStore:
     return GitReservationStore(f"https://github.com/{REPO}.git", github_cli_credentials=True)
 
 
+def _f7_remote_trust_policy() -> dict:
+    """Consulta LIVE uma politica no repositorio GitHub, nunca no env local.
+
+    Este controle so elimina injeção de CH_F7_TRUSTED_RUNNER_* via host.
+    Variaveis de repositorio podem ser modificadas pelo administrador Solo;
+    politica remota ainda nao equivale a raiz imutavel nem a runner atestado.
+    """
+    repository = _gh_json("api", f"repos/{REPO}")
+    if (not isinstance(repository, dict)
+            or repository.get("full_name") != REPO
+            or type(repository.get("id")) is not int
+            or repository["id"] != F7_REPOSITORY_ID):
+        raise PublicationError("Identidade do repositorio da politica F7 diverge")
+    values: dict[str, str] = {}
+    for name in F7_TRUST_VARIABLES:
+        variable = _gh_json("api", f"repos/{REPO}/actions/variables/{name}")
+        if (not isinstance(variable, dict) or variable.get("name") != name
+                or not isinstance(variable.get("value"), str)
+                or not variable["value"].isascii()
+                or not 0 < len(variable["value"]) <= 4096):
+            raise PublicationError("Variavel de politica F7 LIVE ausente ou invalida")
+        values[name] = variable["value"].strip()
+    try:
+        key = values["CH_F7_TRUSTED_RUNNER_PUBKEY"]
+        revocations = values["CH_F7_REVOKED_RUNNER_FINGERPRINTS"]
+        fingerprint = validate_trusted_key(key, revocations)
+        if (not isinstance(F7_TRUST_KEY_FINGERPRINT_PIN, str)
+                or not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}",
+                                    F7_TRUST_KEY_FINGERPRINT_PIN)
+                or fingerprint != F7_TRUST_KEY_FINGERPRINT_PIN):
+            raise ValueError("Chave remota nao corresponde ao pin versionado")
+        sha = values["CH_F7_TRUSTED_RUNNER_SHA"]
+        workflow = values["CH_F7_PRODUCER_WORKFLOW_ID"]
+        v1_workflow = values["CH_F7_V1_PRODUCER_WORKFLOW_ID"]
+        if (not HEX40.fullmatch(sha)
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", workflow)
+                or not re.fullmatch(r"[1-9][0-9]{0,19}", v1_workflow)
+                or sha != F7_TRUSTED_PRODUCER_SHA_PIN
+                or int(v1_workflow) != F7_TRUSTED_V1_WORKFLOW_ID_PIN):
+            raise ValueError("SHA/workflow V1 nao corresponde ao pin revisado")
+    except (ValueError, KeyError) as exc:
+        raise PublicationError("Politica F7 remota invalida ou revogada") from exc
+    return {
+        "producer_sha": sha, "producer_workflow_id": int(workflow),
+        "v1_workflow_id": int(v1_workflow),
+        "trusted_key": key, "revocations": revocations,
+        "key_fingerprint": fingerprint,
+        "source_repo_id": F7_REPOSITORY_ID,
+    }
+
+
 def _verify_attestation(outbox_path: Path, outbox: dict) -> dict:
-    return verify_external_attestation(
+    policy = _f7_remote_trust_policy()
+    proof = verify_external_attestation(
         outbox_path.parent / "f7-attestation.json", outbox,
-        trusted_key=os.environ.get("CH_F7_TRUSTED_RUNNER_PUBKEY", ""),
-        trusted_producer_sha=os.environ.get("CH_F7_TRUSTED_RUNNER_SHA", ""),
-        revoked_fingerprints=os.environ.get("CH_F7_REVOKED_RUNNER_FINGERPRINTS", ""),
+        trusted_key=policy["trusted_key"],
+        trusted_producer_sha=policy["producer_sha"],
+        revoked_fingerprints=policy["revocations"],
     )
+    try:
+        origin = verify_v1_producer_origin(
+            proof["producer_run"],
+            producer_sha=policy["producer_sha"],
+            workflow_id=policy["v1_workflow_id"],
+            api=lambda endpoint: _gh_json("api", endpoint),
+            archive=_gh_archive,
+        )
+    except (ProducerOriginError, KeyError) as exc:
+        raise PublicationError("Atestacao V1 nao vinculada ao run/artefato GH LIVE") from exc
+    return {
+        **proof, "v1_origin": origin,
+        "trust_policy": {
+            "source_repo_id": policy["source_repo_id"],
+            "producer_workflow_id": policy["producer_workflow_id"],
+            "v1_workflow_id": policy["v1_workflow_id"],
+            "producer_sha": policy["producer_sha"],
+            "key_fingerprint": policy["key_fingerprint"],
+        },
+    }
 
 
 RESERVATION_RULESET_ID = 27322425
@@ -154,11 +259,86 @@ def _verify_reservation_protection() -> dict:
             "namespace": NAMESPACE, "can_bypass": False}
 
 
+
+def _local_f7_checkout_sha() -> str:
+    """Identifica o checkout que efetivamente executa o publicador F7.
+
+    Nunca confia em SHA fornecido por outbox ou argumento CLI. O checkout deve
+    ser o HEAD auditado, sem alteracoes rastreadas ou arquivos nao rastreados.
+    """
+    root = Path(__file__).resolve().parents[3]
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False)
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PublicationError("Commit F7 local nao verificavel; sem escrita") from exc
+    if (head.returncode != 0 or status.returncode != 0 or status.stdout
+            or not isinstance(head.stdout, bytes)):
+        raise PublicationError("Worktree F7 suja ou Git indisponivel; sem escrita")
+    try:
+        sha = head.stdout.decode("ascii").strip()
+    except UnicodeError as exc:
+        raise PublicationError("SHA Git F7 invalido") from exc
+    if not HEX40.fullmatch(sha):
+        raise PublicationError("SHA Git F7 invalido")
+    return sha
+
+
+def _f7_audit_context() -> dict:
+    """Consulta o pin cadastrado pelo PO na API LIVE, nao na outbox local."""
+    variable = _gh_json("api", f"repos/{REPO}/actions/variables/{F7_AUDIT_VARIABLE}")
+    if not isinstance(variable, dict) or variable.get("name") != F7_AUDIT_VARIABLE:
+        raise PublicationError("Politica externa de commit F7 auditado ausente")
+    sha = variable.get("value")
+    if not isinstance(sha, str) or not HEX40.fullmatch(sha):
+        raise PublicationError("Pin do commit F7 auditado ausente ou invalido")
+    local = _local_f7_checkout_sha()
+    if local != sha:
+        raise PublicationError("Checkout F7 nao corresponde ao commit auditado")
+    try:
+        runtime_digest = verify_loaded_f7_modules(
+            Path(__file__).resolve().parents[3], sha)
+    except RuntimeIdentityError as exc:
+        raise PublicationError("Codigo carregado F7 diverge do commit auditado") from exc
+    return {
+        "policy_sha": sha,
+        "local_sha": local,
+        "git_commit": _gh_json("api", f"repos/{REPO}/git/commits/{sha}"),
+        "runtime_digest": runtime_digest,
+    }
+
+
+def _validated_f7_audited_commit(context: dict) -> tuple[str, str]:
+    """Exige o MESMO SHA no pin do PO, no checkout e no objeto Git remoto."""
+    audited = context.get("f7_commit")
+    if not isinstance(audited, dict):
+        raise PublicationError("Evidencia do commit F7 auditado ausente")
+    pinned, local, remote = (
+        audited.get("policy_sha"), audited.get("local_sha"), audited.get("git_commit"))
+    if (not isinstance(pinned, str) or not HEX40.fullmatch(pinned)
+            or local != pinned or not isinstance(remote, dict)
+            or remote.get("sha") != pinned):
+        raise PublicationError("SHA do commit F7 auditado divergente ou ausente")
+    tree = remote.get("tree")
+    tree_sha = tree.get("sha") if isinstance(tree, dict) else None
+    if not isinstance(tree_sha, str) or not HEX40.fullmatch(tree_sha):
+        raise PublicationError("Arvore do commit F7 auditado nao verificavel")
+    runtime_digest = audited.get("runtime_digest")
+    if not isinstance(runtime_digest, str) or not re.fullmatch(r"[0-9a-f]{64}", runtime_digest):
+        raise PublicationError("Comprovante de codigo executado F7 ausente")
+    return pinned, tree_sha, runtime_digest
+
+
 def _live_context(issue: int, approval_comment: int) -> dict:
     if type(issue) is not int or issue < 1 or type(approval_comment) is not int or approval_comment < 1:
         raise PublicationError("Identificadores de consulta invalidos")
     who = _gh_json("api", "user")
-    if who.get("login") != OWNER:
+    if (who.get("login") != OWNER or type(who.get("id")) is not int
+            or who["id"] != PO_GITHUB_ID):
         raise PublicationError("Sessao gh nao pertence ao PO responsavel")
     repository = _gh_json("api", f"repos/{REPO}")
     perms = repository.get("permissions")
@@ -168,6 +348,7 @@ def _live_context(issue: int, approval_comment: int) -> dict:
         raise PublicationError("Permissao LIVE de escrita na Issue nao comprovada")
     target = _live_issue(issue)
     base_commit = _gh_json("api", f"repos/{REPO}/git/commits/{_issue_baseline_sha(target)}")
+    f7_commit = _f7_audit_context()
     project = _gh_json(
         "project", "item-list", str(PROJECT), "--owner", OWNER,
         "--format", "json", "-L", "500")
@@ -188,12 +369,12 @@ def _live_context(issue: int, approval_comment: int) -> dict:
                         else [*_issue_comments(approval_thread_number), *comments])
     return {
         "who": who, "repository": repository, "issue": target, "base_commit": base_commit,
-        "project": project, "approval": approval,
+        "f7_commit": f7_commit, "project": project, "approval": approval,
         "comments": comments, "approval_history": approval_history,
     }
 
 
-def _expected_comment(outbox: dict, approval_id: int) -> str:
+def _expected_comment(outbox: dict, approval_id: int, f7_sha: str) -> str:
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     return (
         "CHDevFlow F7 — Escalonamento para decisao do PO\n\n"
@@ -204,7 +385,8 @@ def _expected_comment(outbox: dict, approval_id: int) -> str:
         f"SHA-256 do codigo AGY: {outbox['code_sha256']}\n"
         f"SHA Git base da missao: {outbox['provenance']['base_sha']}\n"
         f"Digest do manifesto: {outbox['provenance']['mission_digest']}\n"
-        f"Autorizacao especifica: comentario #{approval_id}\n\n"
+        f"Autorizacao especifica: comentario #{approval_id}\n"
+        f"SHA Git F7 auditado/autorizado: {f7_sha}\n\n"
         "Evidencias locais permanecem sob custodia do PO. "
         "Esta publicacao nao autoriza admissao no Project #2, "
         "merge, deploy, execucao de agentes nem alteracao de campos.\n\n"
@@ -213,13 +395,16 @@ def _expected_comment(outbox: dict, approval_id: int) -> str:
 
 
 def _approval_fingerprint(proof: dict, outbox: dict,
-                          history: list[dict]) -> dict:
+                          history: list[dict], f7_sha: str) -> dict:
     if not isinstance(proof, dict):
         raise PublicationError("Comentario PO invalido")
     approval_id = proof.get("id")
     if type(approval_id) is not int or approval_id < 1:
         raise PublicationError("ID de aprovacao invalido")
-    if not isinstance(proof.get("user"), dict) or proof["user"].get("login") != OWNER:
+    if (not isinstance(proof.get("user"), dict)
+            or proof["user"].get("login") != OWNER
+            or type(proof["user"].get("id")) is not int
+            or proof["user"]["id"] != PO_GITHUB_ID):
         raise PublicationError("Autor da aprovacao nao e o PO")
     allowed_urls = {
         f"https://api.github.com/repos/{REPO}/issues/{outbox['issue']}",
@@ -233,6 +418,7 @@ def _approval_fingerprint(proof: dict, outbox: dict,
         f"CODE_SHA256={outbox['code_sha256']} "
         f"BASE_SHA={outbox['provenance']['base_sha']} "
         f"MISSION_DIGEST={outbox['provenance']['mission_digest']} "
+        f"F7_AUDITED_SHA={f7_sha} "
         "ACTION=COMMENT_ONLY"
     )
     body = proof.get("body")
@@ -247,6 +433,8 @@ def _approval_fingerprint(proof: dict, outbox: dict,
                 if comment.get("id") == approval_id]
     if (len(matching) != 1 or matching[0].get("body") != body
             or matching[0].get("user", {}).get("login") != OWNER
+            or type(matching[0].get("user", {}).get("id")) is not int
+            or matching[0]["user"]["id"] != PO_GITHUB_ID
             or matching[0].get("updated_at") != proof.get("updated_at")):
         raise PublicationError("Aprovacao nao confirmada no historico LIVE")
     revoke_prefix = (
@@ -256,15 +444,19 @@ def _approval_fingerprint(proof: dict, outbox: dict,
     for comment in history:
         # Revogacao editada em comentario anterior tambem bloqueia.
         # Uma nova autorizacao para esta mesma execucao nao a reabilita.
-        if (comment["user"].get("login") == OWNER
-                and isinstance(comment.get("body"), str)
-                and any(line.strip().startswith(revoke_prefix)
-                        for line in comment["body"].splitlines())):
-            raise PublicationError("Aprovacao do PO revogada em comentario posterior")
+        if comment["user"].get("login") == OWNER:
+            if (type(comment["user"].get("id")) is not int
+                    or comment["user"]["id"] != PO_GITHUB_ID):
+                raise PublicationError("Identidade numerica PO divergente no historico")
+            if (isinstance(comment.get("body"), str)
+                    and any(line.strip().startswith(revoke_prefix)
+                            for line in comment["body"].splitlines())):
+                raise PublicationError("Aprovacao do PO revogada em comentario posterior")
     return {
         "id": approval_id, "updated_at": proof.get("updated_at"),
         "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
-        "issue_url": proof["issue_url"], "login": OWNER,
+        "issue_url": proof["issue_url"], "login": OWNER, "user_id": PO_GITHUB_ID,
+        "f7_audited_sha": f7_sha,
     }
 
 
@@ -286,7 +478,8 @@ def _comment_snapshot(comments: list[dict]) -> list[dict]:
             raise PublicationError("Comentario com corpo/autor invalido")
         normalized.append({
             "id": ident, "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
-            "author": author.get("login"), "updated_at": comment.get("updated_at"),
+            "author": author.get("login"), "author_id": author.get("id"),
+            "updated_at": comment.get("updated_at"),
         })
     return sorted(normalized, key=lambda c: c["id"])
 
@@ -341,8 +534,10 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
     """Plano puro: bloqueia Intake invalido, duplicidade e autorizacao implicita."""
     if not isinstance(context, dict):
         raise PublicationError("Contexto LIVE ausente")
-    if (context.get("who", {}).get("login") != OWNER or
-            not isinstance(context.get("repository", {}).get("permissions"), dict)
+    if (context.get("who", {}).get("login") != OWNER
+            or type(context.get("who", {}).get("id")) is not int
+            or context["who"]["id"] != PO_GITHUB_ID
+            or not isinstance(context.get("repository", {}).get("permissions"), dict)
             or not any(context["repository"]["permissions"].get(k) is True
                        for k in ("push", "maintain", "admin"))):
         raise PublicationError("Identidade/ACL LIVE de publicacao ausente")
@@ -362,11 +557,12 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
             + " " + ", ".join(diagnosis["reasons"]))
     base_tree = _validate_issue_baseline(
         issue, outbox["provenance"]["base_sha"], context.get("base_commit"))
+    f7_sha, f7_tree, f7_runtime = _validated_f7_audited_commit(context)
     preview = build_escalation_preview(
         outbox, context.get("project"), intake_issue=issue)
     approval = _approval_fingerprint(
-        context.get("approval"), outbox, context.get("approval_history"))
-    comment_text = _expected_comment(outbox, approval["id"])
+        context.get("approval"), outbox, context.get("approval_history"), f7_sha)
+    comment_text = _expected_comment(outbox, approval["id"], f7_sha)
     marker = MARKER_PREFIX + outbox["execution_id"] + " -->"
     normalized = _comment_snapshot(context.get("comments"))
     matches = [c for c in context["comments"] if marker in c["body"]]
@@ -375,8 +571,11 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
     found_id = None
     if matches:
         only = matches[0]
-        if (only.get("body") != comment_text or
-                only.get("user", {}).get("login") != OWNER):
+        if (only.get("body") != comment_text
+                or not isinstance(only.get("user"), dict)
+                or only["user"].get("login") != OWNER
+                or type(only["user"].get("id")) is not int
+                or only["user"]["id"] != PO_GITHUB_ID):
             raise PublicationError("Marcador de execucao reutilizado sem autenticidade")
         found_id = only["id"]
     snapshot = {
@@ -389,8 +588,10 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "comments": _digest(normalized),
         "approval": _digest(approval),
         "approval_history": _digest(_comment_snapshot(context["approval_history"])),
+        "f7_audited_commit": _digest({"sha": f7_sha, "tree": f7_tree,
+                                       "runtime": f7_runtime}),
         "identity": _digest({
-            "who": context["who"].get("login"),
+            "who": context["who"].get("login"), "user_id": context["who"].get("id"),
             "permissions": context["repository"].get("permissions"),
         }),
     }
@@ -401,6 +602,8 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "mission_digest": outbox["provenance"]["mission_digest"],
         "base_sha": outbox["provenance"]["base_sha"],
         "base_tree": base_tree,
+        "f7_audited_sha": f7_sha, "f7_audited_tree": f7_tree,
+        "f7_runtime_digest": f7_runtime,
         "approval_comment": approval["id"],
         "project_state": preview["state"],
         "action": "ALREADY_PUBLISHED" if found_id else "POST_COMMENT",
@@ -416,9 +619,19 @@ def _post_comment(issue: int, body: str) -> dict:
     """Nenhum POST real ate reauditoria de autenticidade e serializacao."""
     if not REMOTE_PUBLICATION_ENABLED:
         raise PublicationError("POST F7 desativado: custodia e executor unico pendentes")
-    return _gh_json(
+    posted = _gh_json(
         "api", "-X", "POST", f"repos/{REPO}/issues/{issue}/comments",
         "-f", "body=" + body)
+    if (not isinstance(posted, dict)
+            or type(posted.get("id")) is not int
+            or not isinstance(posted.get("user"), dict)
+            or posted["user"].get("login") != OWNER
+            or type(posted["user"].get("id")) is not int
+            or posted["user"]["id"] != PO_GITHUB_ID):
+        # O POST pode ter ocorrido mesmo com resposta inesperada.
+        # O chamador mantem PENDENTE_PUBLICACAO, nunca retry automatico.
+        raise PublicationError("Resposta POST sem autoria numerica PO confiavel")
+    return posted
 
 
 def _claim_publication(outbox_path: Path, execution_id: str, digest: str) -> Path:
@@ -513,7 +726,10 @@ def reconcile_pending_publication(
     # Readback de publicacao e diferente de NOVA autorizacao. Deve funcionar
     # inclusive apos Issue CLOSED/revogacao, sem consultar permissoes de POST.
     if (not isinstance(context, dict)
-            or context.get("who", {}).get("login") != OWNER
+            or not isinstance(context.get("who"), dict)
+            or context["who"].get("login") != OWNER
+            or type(context["who"].get("id")) is not int
+            or context["who"]["id"] != PO_GITHUB_ID
             or not isinstance(context.get("issue"), dict)
             or context["issue"].get("number") != outbox["issue"]
             or context["issue"].get("url") !=
@@ -528,7 +744,10 @@ def reconcile_pending_publication(
     if matches:
         item = matches[0]
         if (item.get("body") != plan.get("body")
-                or item["user"].get("login") != OWNER):
+                or not isinstance(item.get("user"), dict)
+                or item["user"].get("login") != OWNER
+                or type(item["user"].get("id")) is not int
+                or item["user"]["id"] != PO_GITHUB_ID):
             raise PublicationError("Marcador remoto nao autentico; bloquear retry")
         status = "COMENTARIO_REMOTO_ENCONTRADO"
         comment_id = item["id"]
@@ -582,6 +801,12 @@ def apply_publication_plan(
             or plan.get("mission_id") != outbox["mission_id"]
             or plan.get("mission_digest") != outbox["provenance"]["mission_digest"]
             or plan.get("base_sha") != outbox["provenance"]["base_sha"]
+            or not isinstance(plan.get("f7_audited_sha"), str)
+            or not HEX40.fullmatch(plan["f7_audited_sha"])
+            or not isinstance(plan.get("f7_audited_tree"), str)
+            or not HEX40.fullmatch(plan["f7_audited_tree"])
+            or not isinstance(plan.get("f7_runtime_digest"), str)
+            or not re.fullmatch(r"[0-9a-f]{64}", plan["f7_runtime_digest"])
             or type(plan.get("approval_comment")) is not int):
         raise PublicationError("Plano nao pertence a outbox")
     def current_plan() -> dict:
@@ -624,6 +849,8 @@ def apply_publication_plan(
             "Revalidacao apos lock inconclusiva; nenhuma repeticao automatica"
         ) from exc
     audit({"event": "ATTEMPT_POST", "execution_id": outbox["execution_id"],
+           "f7_audited_sha": plan["f7_audited_sha"],
+           "f7_runtime_digest": plan["f7_runtime_digest"],
            "reservation_sha": reservation_sha,
            "producer": custody,
            "issue": outbox["issue"], "digest": supplied_digest})
@@ -643,7 +870,12 @@ def apply_publication_plan(
                 or observed["body"] != plan["body"]
                 or observed["snapshot"]["issue"] != plan["snapshot"]["issue"]
                 or observed["snapshot"]["project"] != plan["snapshot"]["project"]
-                or observed["snapshot"]["approval"] != plan["snapshot"]["approval"]):
+                or observed["snapshot"]["approval"] != plan["snapshot"]["approval"]
+                or observed["f7_audited_sha"] != plan["f7_audited_sha"]
+                or observed["f7_audited_tree"] != plan["f7_audited_tree"]
+                or observed["f7_runtime_digest"] != plan["f7_runtime_digest"]
+                or observed["snapshot"]["f7_audited_commit"] !=
+                   plan["snapshot"]["f7_audited_commit"]):
             raise PublicationError("Readback nao confirmou comentario unico")
     except Exception as exc:
         audit({"event": "PENDENTE_PUBLICACAO", "reason": "READBACK_INCONCLUSIVO"})
