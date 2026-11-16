@@ -563,6 +563,29 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(pub.PublicationError, "causa"):
             self._outbox()
 
+    def test_resposta_post_exige_id_numerico_autentico_do_po(self):
+        # Apenas simulacao de GH; a constante permanece desativada no codigo.
+        forged = [
+            {"id": 900, "user": {"login": pub.OWNER}},
+            {"id": 900, "user": {"login": pub.OWNER, "id": 999}},
+            {"id": 900, "user": {"login": pub.OWNER, "id": str(pub.PO_GITHUB_ID)}},
+            {"id": 900, "user": {"login": "outro", "id": pub.PO_GITHUB_ID}},
+            {"id": 900},
+        ]
+        with patch.object(pub, "REMOTE_PUBLICATION_ENABLED", True):
+            for candidate in forged:
+                with self.subTest(candidate=candidate):
+                    with patch.object(pub, "_gh_json", return_value=candidate):
+                        with self.assertRaisesRegex(
+                                pub.PublicationError, "autoria numerica"):
+                            pub._post_comment(85, "teste sem POST real")
+            valid = {"id": 900, "user": {
+                "login": pub.OWNER, "id": pub.PO_GITHUB_ID}}
+            with patch.object(pub, "_gh_json", return_value=valid) as gh:
+                self.assertEqual(
+                    pub._post_comment(85, "teste sem POST real"), valid)
+                gh.assert_called_once()
+
     def test_post_unico_e_readback_verificado(self):
         calls = []
         def poster(issue, body):
