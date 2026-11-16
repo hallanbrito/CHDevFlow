@@ -21,7 +21,7 @@ import time
 from uuid import uuid4
 
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
-from chdevflow.core import docker_acceptance
+from chdevflow.core import docker_acceptance, attested_executor
 from chdevflow.core.experimental_pilot import (
     _agy_response, _clean, _codex_final_message, _executables,
     _is_link, _run_command, _write_process_log,
@@ -203,7 +203,8 @@ def _persist(out: Path, result: GenericResult):
 
 def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                       accepted: bool, timeout: int = 480,
-                      isolated_tests: bool = False) -> GenericResult:
+                      isolated_tests: bool = False,
+                      attested_executor_tar: Path | None = None) -> GenericResult:
     """Execucao real opt-in. No maximo 3 AGY/2 devolucoes, tempo TOTAL."""
     if not accepted:
         raise PermissionError("Exige --i-accept-local-risk")
@@ -214,8 +215,17 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     if (evidence.exists() or evidence.is_symlink() or
             not evidence.parent.is_dir() or evidence.parent.is_symlink()):
         raise ValueError("Dossie deve ser pasta NOVA")
+    if isolated_tests and attested_executor_tar is not None:
+        raise ValueError("Escolha apenas um executor Docker")
     mission, root, target, prompt, snapshot = _preflight(manifest_path)
-    docker_image_id = docker_acceptance.preflight() if isolated_tests else ""
+    # A atestacao do TAR e conferida ANTES de encontrar/invocar AGY/Codex.
+    # Este modo NAO atesta identidade nem autenticacao dos proprios agentes.
+    using_attested = attested_executor_tar is not None
+    docker_image_id = (
+        attested_executor.preflight(attested_executor_tar)
+        if using_attested else
+        docker_acceptance.preflight() if isolated_tests else ""
+    )
     if root in evidence.parents or evidence in root.parents or root == evidence:
         raise ValueError("Dossie deve ficar FORA da worktree")
     agy, codex = _executables()
@@ -227,7 +237,9 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     (evidence / "manifesto_missao.json").write_bytes(mission.canonical())
     result = GenericResult(
         "INICIADO", uuid4().hex, mission.mission_id, mission.issue, mission.digest)
-    if isolated_tests:
+    if using_attested:
+        result.test_execution = "docker-attested-e3b-sigstore:" + docker_image_id
+    elif isolated_tests:
         result.test_execution = "docker-readonly-no-network:" + docker_image_id
     deadline = time.monotonic() + min(timeout, mission.timeout_seconds)
     source_path = root / target
@@ -284,6 +296,7 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             if remaining < 30:
                 raise ValueError("Orcamento sem tempo para testes/Codex")
             test_command = (
+                attested_executor.build_command(root) if using_attested else
                 docker_acceptance.build_command(root) if isolated_tests else
                 [sys.executable, "-I", "-B", "-m", "unittest", "discover",
                  "-s", "tests", "-p", "test_*.py", "-v"])
@@ -291,18 +304,23 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                 test_command, cwd=root, stdin=None,
                 timeout=min(60, remaining))
             _write_process_log(directory / "testes.log", tests)
-            # Somente uma invocacao efetiva do executor Docker pode fornecer
-            # evidencias F7 elegiveis; o modo host jamais atesta isolamento.
-            if isolated_tests and not tests.timed_out:
-                result.os_isolation_verified = True
             if tests.timed_out:
                 raise ValueError("Timeout nos testes")
-            test_output = tests.stdout + tests.stderr
+            # Protocolo E3-B e estrito: nao converter erro de infraestrutura
+            # nem JSON inconclusivo em prova de execucao de tests.
+            test_output = (
+                attested_executor.checked_result(tests.stdout, tests.code, tests.stderr)
+                if using_attested else tests.stdout + tests.stderr
+            )
             if not re.search(r"Ran [1-9][0-9]* tests?", test_output):
                 raise ValueError("Suite nao reportou testes reais")
             _guard(root, target, snapshot, allow_target=True)
             if source_path.read_bytes() != candidate.encode("utf-8"):
                 raise ValueError("Arquivo do teste diverge do codigo AGY auditado")
+            # A flag so vira True DEPOIS de confirmar retorno e codigo
+            # do executor, suite real e worktree imutavel. O host nunca.
+            if isolated_tests or using_attested:
+                result.os_isolation_verified = True
             changed_files = _git(root, "status", "--porcelain", "--untracked-files=all")
             if tests.code:
                 # Nao devolver falhas de instalacao/importacao ou ambiente ao AGY.
@@ -409,14 +427,18 @@ def main(argv=None) -> int:
     parser.add_argument("--evidence-dir", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=480)
     parser.add_argument("--i-accept-local-risk", action="store_true")
-    parser.add_argument("--isolated-tests", action="store_true",
-                        help="Docker Linux sem rede e com bind mount read-only")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--isolated-tests", action="store_true",
+                           help="Docker legado sem atestacao (nao elegivel a V1)")
+    selection.add_argument("--attested-executor-tar", type=Path,
+                           help="E3-B TAR exato validado por Sigstore, hash e image ID")
     args = parser.parse_args(argv)
     try:
         result = run_generic_cycle(
             manifest_path=args.manifest, evidence=args.evidence_dir,
             accepted=args.i_accept_local_risk, timeout=args.timeout,
-            isolated_tests=args.isolated_tests)
+            isolated_tests=args.isolated_tests,
+            attested_executor_tar=args.attested_executor_tar)
         print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
         return 0 if result.status == "APROVADO_AGUARDANDO_CH1" else 1
     except (ValueError, PermissionError, OSError) as exc:
