@@ -222,7 +222,8 @@ def _live_context(issue: int, approval_comment: int) -> dict:
     if type(issue) is not int or issue < 1 or type(approval_comment) is not int or approval_comment < 1:
         raise PublicationError("Identificadores de consulta invalidos")
     who = _gh_json("api", "user")
-    if who.get("login") != OWNER:
+    if (who.get("login") != OWNER or type(who.get("id")) is not int
+            or who["id"] != PO_GITHUB_ID):
         raise PublicationError("Sessao gh nao pertence ao PO responsavel")
     repository = _gh_json("api", f"repos/{REPO}")
     perms = repository.get("permissions")
@@ -285,7 +286,10 @@ def _approval_fingerprint(proof: dict, outbox: dict,
     approval_id = proof.get("id")
     if type(approval_id) is not int or approval_id < 1:
         raise PublicationError("ID de aprovacao invalido")
-    if not isinstance(proof.get("user"), dict) or proof["user"].get("login") != OWNER:
+    if (not isinstance(proof.get("user"), dict)
+            or proof["user"].get("login") != OWNER
+            or type(proof["user"].get("id")) is not int
+            or proof["user"]["id"] != PO_GITHUB_ID):
         raise PublicationError("Autor da aprovacao nao e o PO")
     allowed_urls = {
         f"https://api.github.com/repos/{REPO}/issues/{outbox['issue']}",
@@ -314,6 +318,8 @@ def _approval_fingerprint(proof: dict, outbox: dict,
                 if comment.get("id") == approval_id]
     if (len(matching) != 1 or matching[0].get("body") != body
             or matching[0].get("user", {}).get("login") != OWNER
+            or type(matching[0].get("user", {}).get("id")) is not int
+            or matching[0]["user"]["id"] != PO_GITHUB_ID
             or matching[0].get("updated_at") != proof.get("updated_at")):
         raise PublicationError("Aprovacao nao confirmada no historico LIVE")
     revoke_prefix = (
@@ -323,15 +329,18 @@ def _approval_fingerprint(proof: dict, outbox: dict,
     for comment in history:
         # Revogacao editada em comentario anterior tambem bloqueia.
         # Uma nova autorizacao para esta mesma execucao nao a reabilita.
-        if (comment["user"].get("login") == OWNER
-                and isinstance(comment.get("body"), str)
-                and any(line.strip().startswith(revoke_prefix)
-                        for line in comment["body"].splitlines())):
-            raise PublicationError("Aprovacao do PO revogada em comentario posterior")
+        if comment["user"].get("login") == OWNER:
+            if (type(comment["user"].get("id")) is not int
+                    or comment["user"]["id"] != PO_GITHUB_ID):
+                raise PublicationError("Identidade numerica PO divergente no historico")
+            if (isinstance(comment.get("body"), str)
+                    and any(line.strip().startswith(revoke_prefix)
+                            for line in comment["body"].splitlines())):
+                raise PublicationError("Aprovacao do PO revogada em comentario posterior")
     return {
         "id": approval_id, "updated_at": proof.get("updated_at"),
         "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
-        "issue_url": proof["issue_url"], "login": OWNER,
+        "issue_url": proof["issue_url"], "login": OWNER, "user_id": PO_GITHUB_ID,
         "f7_audited_sha": f7_sha,
     }
 
@@ -354,7 +363,8 @@ def _comment_snapshot(comments: list[dict]) -> list[dict]:
             raise PublicationError("Comentario com corpo/autor invalido")
         normalized.append({
             "id": ident, "body_sha256": hashlib.sha256(body.encode("utf-8")).hexdigest(),
-            "author": author.get("login"), "updated_at": comment.get("updated_at"),
+            "author": author.get("login"), "author_id": author.get("id"),
+            "updated_at": comment.get("updated_at"),
         })
     return sorted(normalized, key=lambda c: c["id"])
 
@@ -409,8 +419,10 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
     """Plano puro: bloqueia Intake invalido, duplicidade e autorizacao implicita."""
     if not isinstance(context, dict):
         raise PublicationError("Contexto LIVE ausente")
-    if (context.get("who", {}).get("login") != OWNER or
-            not isinstance(context.get("repository", {}).get("permissions"), dict)
+    if (context.get("who", {}).get("login") != OWNER
+            or type(context.get("who", {}).get("id")) is not int
+            or context["who"]["id"] != PO_GITHUB_ID
+            or not isinstance(context.get("repository", {}).get("permissions"), dict)
             or not any(context["repository"]["permissions"].get(k) is True
                        for k in ("push", "maintain", "admin"))):
         raise PublicationError("Identidade/ACL LIVE de publicacao ausente")
@@ -460,7 +472,7 @@ def build_publication_plan(outbox: dict, context: dict) -> dict:
         "approval_history": _digest(_comment_snapshot(context["approval_history"])),
         "f7_audited_commit": _digest({"sha": f7_sha, "tree": f7_tree}),
         "identity": _digest({
-            "who": context["who"].get("login"),
+            "who": context["who"].get("login"), "user_id": context["who"].get("id"),
             "permissions": context["repository"].get("permissions"),
         }),
     }
