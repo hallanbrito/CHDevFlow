@@ -808,11 +808,11 @@ class PublicationTests(unittest.TestCase):
             name = endpoint.rsplit("/", 1)[-1]
             return {"name": name, "value": vals[name]}
         with patch.object(pub, "_gh_json", side_effect=api):
-            with self.assertRaisesRegex(pub.PublicationError, "politica F7 remota"):
+            with self.assertRaisesRegex(pub.PublicationError, "Politica F7 remota"):
                 pub._f7_remote_trust_policy()
             with patch.object(pub, "F7_TRUST_KEY_FINGERPRINT_PIN",
                               "SHA256:" + "x" * 43):
-                with self.assertRaisesRegex(pub.PublicationError, "politica F7 remota"):
+                with self.assertRaisesRegex(pub.PublicationError, "Politica F7 remota"):
                     pub._f7_remote_trust_policy()
 
     def test_reserva_git_real_sobrevive_post_inconclusivo_e_troca_de_executor(self):
