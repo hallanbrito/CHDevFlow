@@ -23,8 +23,15 @@ if ($LASTEXITCODE -ne 0 -or $gitDirty.Count -gt 0) {
 }
 $items = @(
     "src/chdevflow/core/po_escalation_publication.py",
+    "src/chdevflow/core/po_escalation_attestation.py",
+    "src/chdevflow/core/po_escalation_reservation.py",
     "src/chdevflow/core/po_escalation_provenance.py",
     "src/chdevflow/core/po_escalation.py",
+    "scripts/f7_custody_live.py",
+    "scripts/f7_custody_probe.py",
+    ".github/workflows/f7-custody-producer.yml",
+    ".github/workflows/f7-custody-attestor.yml",
+    "tests/test_f7_custody_live.py",
     "src/chdevflow/core/intake.py",
     "src/chdevflow/core/generic_cycle.py",
     "scripts/ch_project_sync.py",
@@ -58,6 +65,16 @@ VEREDITO: BLOQUEADO
 Depois liste achados com severidade CRITICO/ALTO/MEDIO/BAIXO,
 arquivo, funcao, trecho/padrao, explorabilidade, risco e correcao objetiva.
 Conclua com GATES FALTANTES para homologar com uma outbox V1 elegivel.
+
+NOTA DE ESCOPO: A revisao inclui agora scripts da custodia, assinatura,
+reserva e workflows confiaveis, antes ausentes na entrada Codex. Nao afirme
+que a custodia ou a reserva sao inexistentes sem analisar esses arquivos.
+Provas externas GitHub ja reportadas por CH-1 mas NAO VERIFICADAS nesta
+sessao Codex: produtor #43782606042, sign/verify #43782675357,
+negativa fora de main #43870850635 e reserva GH013 #43746287761.
+Distinguir controle implementado, prova externa referenciada e prova
+validada pelo proprio auditor. Nenhum teste offline substitui uso real.
+
 Um teste offline com mock GH nao equivale a publicacao real.
 "@
 $segments.Add($brief)
