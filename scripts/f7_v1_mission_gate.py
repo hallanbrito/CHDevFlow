@@ -24,6 +24,7 @@ HEXDIGEST = re.compile(r"[0-9a-f]{64}\Z")
 NONCE = re.compile(r"[0-9a-f]{32}\Z")
 MISSION = re.compile(r"[A-Za-z0-9_.-]{3,80}\Z")
 TARGET = re.compile(r"(?:[A-Za-z0-9_.-]+/){0,5}[A-Za-z0-9_.-]+\.py\Z")
+PROMPT = re.compile(r"(?:[A-Za-z0-9_.-]+/){0,5}[A-Za-z0-9_.-]+\.(?:txt|md)\Z")
 APPROVAL_LIMIT = 10
 REQUIRED_FIELDS = frozenset({
     "schema", "repository", "mission_id", "issue", "producer_sha",
@@ -62,8 +63,9 @@ def validate_manifest(data: dict[str, Any]) -> str:
         raise MissionAuthorizationError("Digest/nonce V1 inválido")
     for key in ("allowed_path", "prompt_path"):
         value = data[key]
-        if (not isinstance(value, str) or not TARGET.fullmatch(value) and key == "allowed_path"
-                or not isinstance(value, str) or not 0 < len(value) <= 200):
+        pattern = TARGET if key == "allowed_path" else PROMPT
+        if (not isinstance(value, str) or not pattern.fullmatch(value)
+                or not 0 < len(value) <= 200):
             raise MissionAuthorizationError("Caminho de missão inválido: " + key)
         p = PurePosixPath(value)
         if (p.is_absolute() or ".." in p.parts or "." in p.parts
@@ -100,11 +102,27 @@ def validate_live(
     manifest: dict[str, Any], *, approval_id: int, actor: dict[str, Any],
     repository: dict[str, Any], issue: dict[str, Any],
     comments: list[dict[str, Any]], workflow_sha: str,
+    run: dict[str, Any], run_id: int,
 ) -> dict[str, Any]:
     digest = validate_manifest(manifest)
     if (not isinstance(workflow_sha, str)
             or workflow_sha != manifest["producer_sha"]):
         raise MissionAuthorizationError("Commit do workflow não coincide com a autorização")
+    if (type(run_id) is not int or run_id < 1
+            or not isinstance(run, dict)
+            or type(run.get("id")) is not int or run["id"] != run_id
+            or run.get("event") != "workflow_dispatch"
+            or run.get("head_branch") != "main"
+            or run.get("head_sha") != workflow_sha
+            or run.get("path") not in (
+                ".github/workflows/f7-v1-producer.yml",
+                ".github/workflows/f7-v1-producer.yml@refs/heads/main",
+            )
+            or not po_identity(run.get("actor"))
+            or not po_identity(run.get("triggering_actor"))
+            or not isinstance(run.get("repository"), dict)
+            or run["repository"].get("id") != REPO_ID):
+        raise MissionAuthorizationError("Disparo da missão V1 não autentica PO/main/workflow")
     if (not po_identity(actor)
             or not isinstance(repository, dict)
             or repository.get("full_name") != REPO
@@ -197,9 +215,12 @@ def _gh(endpoint: str) -> Any:
         raise MissionAuthorizationError("Resposta GH inválida") from exc
 
 
-def fetch_live(manifest: dict[str, Any]) -> tuple[dict, dict, dict, list]:
+def fetch_live(manifest: dict[str, Any], run_id: int) -> tuple[dict, dict, dict, list, dict]:
     issue = manifest["issue"]
-    actor = _gh("user")
+    run = _gh(f"repos/{REPO}/actions/runs/{run_id}")
+    if not isinstance(run, dict):
+        raise MissionAuthorizationError("Run GitHub inválido")
+    actor = run.get("actor")
     repo = _gh(f"repos/{REPO}")
     issue_state = _gh(f"repos/{REPO}/issues/{issue}")
     comments = []
@@ -212,7 +233,7 @@ def fetch_live(manifest: dict[str, Any]) -> tuple[dict, dict, dict, list]:
             break
     else:
         raise MissionAuthorizationError("Histórico GH excedeu limite de páginas")
-    return actor, repo, issue_state, comments
+    return actor, repo, issue_state, comments, run
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,13 +241,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--approval-comment-id", type=int, required=True)
     parser.add_argument("--workflow-sha", required=True)
+    parser.add_argument("--run-id", type=int, required=True)
     args = parser.parse_args(argv)
     manifest = read_manifest(args.manifest)
-    actor, repo, issue, comments = fetch_live(manifest)
+    actor, repo, issue, comments, run = fetch_live(manifest, args.run_id)
     result = validate_live(
         manifest, approval_id=args.approval_comment_id,
         actor=actor, repository=repo, issue=issue, comments=comments,
-        workflow_sha=args.workflow_sha,
+        workflow_sha=args.workflow_sha, run=run, run_id=args.run_id,
     )
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0
