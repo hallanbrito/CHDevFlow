@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import copy
+import hashlib
 import sys
 import unittest
 
@@ -19,7 +20,8 @@ class V1OriginTests(unittest.TestCase):
         self.artifact_id = 777
         self.producer_sha = "a" * 40
         self.workflow_id = 98765
-        self.digest = "sha256:" + "c" * 64
+        self.archive_bytes = b"f7-v1-fixture-zip-archive-bytes"
+        self.digest = "sha256:" + hashlib.sha256(self.archive_bytes).hexdigest()
         self.receipt_origin = (
             f"github-actions:v1:{self.run_id}:{self.attempt}:"
             f"{self.artifact_id}:{self.digest}"
@@ -45,7 +47,7 @@ class V1OriginTests(unittest.TestCase):
             },
         }
 
-    def check(self, *, receipt=None, run=None, artifact=None):
+    def check(self, *, receipt=None, run=None, artifact=None, archive_bytes=None):
         observed = []
         run_record = self.run if run is None else run
         artifact_record = self.artifact if artifact is None else artifact
@@ -59,7 +61,8 @@ class V1OriginTests(unittest.TestCase):
         result = origin.verify_v1_producer_origin(
             self.receipt_origin if receipt is None else receipt,
             producer_sha=self.producer_sha, workflow_id=self.workflow_id,
-            api=api)
+            api=api,
+            archive=lambda _: self.archive_bytes if archive_bytes is None else archive_bytes)
         return result, observed
 
     def test_v1_admite_apenas_run_e_artifact_identicos(self):
@@ -78,6 +81,10 @@ class V1OriginTests(unittest.TestCase):
             with self.subTest(receipt=untrusted):
                 with self.assertRaisesRegex(origin.ProducerOriginError, "Origem"):
                     self.check(receipt=untrusted)
+
+    def test_zip_adulterado_nao_confirma_artefato_v1(self):
+        with self.assertRaisesRegex(origin.ProducerOriginError, "ZIP"):
+            self.check(archive_bytes=b"alterado")
 
     def test_run_de_outro_repo_branch_workflow_ou_tentativa_bloqueado(self):
         cases = (
