@@ -6,6 +6,7 @@ metadados GH e digest. Este modulo NAO cria produtor V1, nem autoriza POST.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Callable
 
@@ -13,6 +14,7 @@ from chdevflow.core.po_escalation import REPO
 
 REPOSITORY_ID = 1424359000
 V1_PRODUCER_PATH = ".github/workflows/f7-v1-producer.yml"
+MAX_ARCHIVE = 2_000_000
 V1_ORIGIN = re.compile(
     r"^github-actions:v1:([1-9][0-9]{0,18}):([1-9][0-9]{0,8}):"
     r"([1-9][0-9]{0,18}):(sha256:[0-9a-f]{64})$"
@@ -25,7 +27,7 @@ class ProducerOriginError(ValueError):
 
 def verify_v1_producer_origin(
     origin: str, *, producer_sha: str, workflow_id: int,
-    api: Callable[[str], dict],
+    api: Callable[[str], dict], archive: Callable[[str], bytes],
 ) -> dict[str, Any]:
     """Compara recibo assinado com execucao e artefato GH ao vivo.
 
@@ -74,6 +76,10 @@ def verify_v1_producer_origin(
             or binding.get("repository_id") != REPOSITORY_ID
             or binding.get("head_repository_id") != REPOSITORY_ID):
         raise ProducerOriginError("Artefato V1 nao corresponde ao produtor LIVE")
+    data = archive(f"repos/{REPO}/actions/artifacts/{artifact_id}/zip")
+    if (not isinstance(data, bytes) or not 0 < len(data) <= MAX_ARCHIVE
+            or "sha256:" + hashlib.sha256(data).hexdigest() != digest):
+        raise ProducerOriginError("ZIP do artefato V1 diverge do digest GitHub")
     # Segunda consulta: run_attempt pode mudar durante o readback.
     repeated = api(f"repos/{REPO}/actions/runs/{run_id}")
     if (not isinstance(repeated, dict)
