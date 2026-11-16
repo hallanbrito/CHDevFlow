@@ -18,6 +18,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Callable
 from uuid import uuid4
 
 from chdevflow.core.manual_pipeline_runner import load_manifest, plan_manual_mission
@@ -203,7 +204,8 @@ def _persist(out: Path, result: GenericResult):
 
 def run_generic_cycle(*, manifest_path: Path, evidence: Path,
                       accepted: bool, timeout: int = 480,
-                      isolated_tests: bool = False) -> GenericResult:
+                      isolated_tests: bool = False,
+                      cancel_check: Callable[[], bool] | None = None) -> GenericResult:
     """Execucao real opt-in. No maximo 3 AGY/2 devolucoes, tempo TOTAL."""
     if not accepted:
         raise PermissionError("Exige --i-accept-local-risk")
@@ -236,6 +238,10 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
     feedback = ""
     _persist(evidence, result)
     for number in range(1, MAX_ATTEMPTS + 1):
+        if cancel_check and cancel_check():
+            result.status = "CANCELADO"
+            result.findings.append("Execucao cancelada pelo operador")
+            break
         remaining = int(deadline - time.monotonic())
         if remaining < 120:
             result.status = "ORCAMENTO_ESGOTADO"
@@ -393,6 +399,11 @@ def run_generic_cycle(*, manifest_path: Path, evidence: Path,
             result.status = "CORRECAO_PENDENTE"
         except (ValueError, OSError, UnicodeError, SyntaxError,
                 subprocess.SubprocessError) as exc:
+            if cancel_check and cancel_check():
+                row["status"] = "CANCELADO"
+                result.status = "CANCELADO"
+                result.findings.append("Execucao cancelada pelo operador")
+                break
             row["status"] = "BLOQUEADO"
             result.status = "BLOQUEADO_INFRA_OU_ESCOPO"
             result.findings.append(stage + ": " + _clean(str(exc)))

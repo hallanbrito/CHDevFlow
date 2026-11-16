@@ -13,6 +13,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 from typing import Mapping, Callable
 
 _DROP_API_KEYS = (
@@ -107,6 +108,40 @@ class LocalProcessResult:
     timed_out: bool = False
 
 
+_ACTIVE_PROCESSES_LOCK = threading.Lock()
+_ACTIVE_PROCESSES: set[subprocess.Popen] = set()
+
+
+def register_active_process(process: subprocess.Popen) -> None:
+    with _ACTIVE_PROCESSES_LOCK:
+        _ACTIVE_PROCESSES.add(process)
+
+
+def unregister_active_process(process: subprocess.Popen) -> None:
+    with _ACTIVE_PROCESSES_LOCK:
+        _ACTIVE_PROCESSES.discard(process)
+
+
+def get_active_processes() -> list[subprocess.Popen]:
+    with _ACTIVE_PROCESSES_LOCK:
+        return list(_ACTIVE_PROCESSES)
+
+
+def terminate_all_active_processes(*, platform: str | None = None) -> int:
+    """Interrompe forcadamente todos os subprocessos ativos e suas arvores filhas."""
+    system = platform or sys.platform
+    with _ACTIVE_PROCESSES_LOCK:
+        procs = list(_ACTIVE_PROCESSES)
+    terminated = 0
+    for proc in procs:
+        try:
+            _kill_tree(proc, platform=system)
+            terminated += 1
+        except Exception:
+            pass
+    return terminated
+
+
 def _kill_tree(process: subprocess.Popen, *, platform: str) -> None:
     if process.poll() is not None:
         return
@@ -154,6 +189,7 @@ def run_local_command(command: list[str], *, cwd: Path, stdin: str | None,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         creationflags=flags, start_new_session=(system != "win32"),
     )
+    register_active_process(process)
     try:
         stdout, stderr = process.communicate(input=stdin, timeout=timeout)
         return LocalProcessResult(process.returncode, stdout or "", stderr or "")
@@ -166,6 +202,8 @@ def run_local_command(command: list[str], *, cwd: Path, stdin: str | None,
     except BaseException:
         _kill_tree(process, platform=system)
         raise
+    finally:
+        unregister_active_process(process)
 
 
 def _executables() -> tuple[list[str], list[str]]:

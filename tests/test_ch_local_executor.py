@@ -133,5 +133,22 @@ class LocalExecutorTests(unittest.TestCase):
             ])
 
 
+    def test_registro_e_interrupcao_de_processos_ativos(self):
+        from unittest.mock import MagicMock
+        fake_proc = MagicMock()
+        fake_proc.poll.return_value = None
+
+        local.register_active_process(fake_proc)
+        self.assertIn(fake_proc, local.get_active_processes())
+
+        with patch.object(local, "_kill_tree") as mock_kill:
+            terminados = local.terminate_all_active_processes()
+            mock_kill.assert_called_with(fake_proc, platform=sys.platform)
+            self.assertEqual(terminados, 1)
+
+        local.unregister_active_process(fake_proc)
+        self.assertNotIn(fake_proc, local.get_active_processes())
+
+
 if __name__ == "__main__":
     unittest.main()

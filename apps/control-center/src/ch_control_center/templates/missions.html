@@ -42,6 +42,117 @@
   </form>
 </div>
 
+<!-- Painel de Despacho e Execução Local Autorizada (CC-DESPACHO-01 / Issue #121) -->
+<div class="card" style="margin-bottom: 1.25rem; padding: 1.25rem; border-left: 4px solid var(--primary, #2563eb);">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;">
+    <div>
+      <h2 style="font-size: 1.1rem; font-weight: 700; margin: 0; color: var(--text-primary);">Execução Local Autorizada de Missão (CC-DESPACHO-01)</h2>
+      <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">
+        Ponte direta com o motor <code>run_generic_cycle</code> (AGY &rarr; Testes &rarr; Codex). Host local (127.0.0.1) &bull; Worktree descartável &bull; Custo R$0 comprovado.
+      </p>
+    </div>
+    <span class="badge-status" style="background: rgba(37, 99, 235, 0.1); color: #2563eb; font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px;">
+      UMA MISSÃO ATIVA
+    </span>
+  </div>
+
+  <!-- Formulário de Despacho de Missão -->
+  <form id="form-despacho-missao" style="display: flex; flex-direction: column; gap: 0.75rem;" onsubmit="despacharMissao(event)">
+    <input type="hidden" id="dispatch-csrf-token" name="csrf_token" value="{{ csrf_token }}">
+
+    <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+      <div style="flex: 2; min-width: 280px;">
+        <label for="manifest-path-input" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+          CAMINHO ABSOLUTO DO MANIFESTO PRÉ-PREPARADO (.json):
+        </label>
+        <input type="text" id="manifest-path-input" name="manifest_path" placeholder="Ex: /home/usuario/CHDevFlow-Labs/manifesto.json" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+      </div>
+
+      <div style="flex: 1; min-width: 130px;">
+        <label for="timeout-input" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+          TIMEOUT TOTAL (SEG):
+        </label>
+        <input type="number" id="timeout-input" name="timeout" value="480" min="120" max="900" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+      </div>
+
+      <div style="display: flex; align-items: center; padding-bottom: 0.25rem;">
+        <button type="submit" id="btn-despachar" class="btn btn-primary" style="white-space: nowrap;">
+          Disparar Missão Local
+        </button>
+      </div>
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
+      <input type="checkbox" id="confirmacao-po-input" name="confirmacao_po" required style="cursor: pointer;">
+      <label for="confirmacao-po-input" style="font-size: 0.8rem; color: var(--text-primary); cursor: pointer;">
+        <strong>Confirmo explicitamente a autorização de execução</strong> em worktree descartável <code>CH-Lab-*</code> com custo R$0 comprovado e sem publicação automática.
+      </label>
+    </div>
+  </form>
+
+  <div id="mensagem-alerta-despacho" style="display: none; margin-top: 0.75rem; padding: 0.6rem; border-radius: 4px; font-size: 0.85rem;" role="alert"></div>
+
+  <!-- Painel Ativo de Monitoramento e Polling da Execução -->
+  <div id="painel-monitoramento" style="display: none; margin-top: 1rem; padding: 1rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <span id="badge-status-execucao" class="badge-status badge-elegivel" style="font-size: 0.8rem;">INICIADO</span>
+        <strong id="titulo-missao-execucao" style="font-size: 0.9rem; color: var(--text-primary);">Missão em Execução</strong>
+        <span id="tempo-decorrido-execucao" style="font-size: 0.75rem; color: var(--text-muted);">(0s)</span>
+      </div>
+      <div>
+        <button type="button" id="btn-cancelar-execucao" class="btn btn-sm" style="background: #dc2626; color: white;" onclick="cancelarExecucaoAtiva()">
+          Cancelar Execução
+        </button>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.85rem;">
+      <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+        <div><strong>ID da Execução:</strong> <code id="exec-id-display">-</code></div>
+        <div><strong>Tentativas AGY:</strong> <span id="tentativas-display">0/3</span></div>
+        <div><strong>Devoluções:</strong> <span id="devolucoes-display">0/2</span></div>
+        <div><strong>Veredito Codex:</strong> <span id="veredito-display">Pendente</span></div>
+      </div>
+
+      <!-- Achados e Diagnósticos -->
+      <div id="container-achados" style="display: none; background: rgba(0,0,0,0.03); padding: 0.5rem; border-radius: 4px;">
+        <strong>Achados / Diagnósticos:</strong>
+        <ul id="lista-achados" style="margin: 0.25rem 0 0 1.25rem; padding: 0; font-size: 0.8rem;"></ul>
+      </div>
+
+      <!-- Dossiê e Relatório -->
+      <div id="container-dossie" style="margin-top: 0.25rem;">
+        <strong>Pasta de Dossiê:</strong> <code id="dossie-path-display">-</code>
+      </div>
+
+      <!-- Abas colapsáveis para Patch e Logs -->
+      <details style="margin-top: 0.5rem;">
+        <summary style="cursor: pointer; font-weight: 600; color: #2563eb;">Ver Último Patch de Código (.patch)</summary>
+        <pre id="visualizador-patch" style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px; overflow-x: auto; font-size: 0.75rem; max-height: 250px;">Nenhum patch gerado ainda.</pre>
+      </details>
+
+      <details style="margin-top: 0.25rem;">
+        <summary style="cursor: pointer; font-weight: 600; color: #2563eb;">Ver Saída dos Testes (Log)</summary>
+        <pre id="visualizador-testes" style="margin-top: 0.25rem; padding: 0.5rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px; overflow-x: auto; font-size: 0.75rem; max-height: 250px;">Nenhum log de testes disponível.</pre>
+      </details>
+
+      <!-- Seção de Registro de Decisão do PO -->
+      <div id="secao-decisao-po" style="display: none; margin-top: 0.75rem; padding: 0.75rem; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px;">
+        <strong style="display: block; margin-bottom: 0.4rem; color: var(--text-primary);">Decisão Humana do PO (Aceite Local):</strong>
+        <div style="display: flex; gap: 1rem; align-items: center; margin-bottom: 0.5rem;">
+          <label style="cursor: pointer; font-size: 0.85rem;"><input type="radio" name="radio_decisao_po" value="APROVADO"> Aprovar</label>
+          <label style="cursor: pointer; font-size: 0.85rem;"><input type="radio" name="radio_decisao_po" value="AJUSTES"> Ajustes</label>
+          <label style="cursor: pointer; font-size: 0.85rem;"><input type="radio" name="radio_decisao_po" value="REPROVADO"> Reprovar</label>
+        </div>
+        <textarea id="justificativa-po-input" placeholder="Justificativa da decisão do PO (opcional)..." style="width: 100%; padding: 0.4rem; border-radius: 4px; border: 1px solid var(--border-color); font-size: 0.8rem; background: var(--bg-primary); color: var(--text-primary); margin-bottom: 0.5rem;"></textarea>
+        <button type="button" class="btn btn-sm btn-primary" onclick="registrarDecisaoPO()">Registrar Decisão PO</button>
+        <span id="msg-decisao-registrada" style="display: none; margin-left: 0.5rem; font-size: 0.8rem; color: #16a34a; font-weight: 600;">Decisão registrada com sucesso!</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Tabela Completa de Missões -->
 <div class="card">
   <div class="card-header">
@@ -198,9 +309,9 @@
                   </div>
 
                   <div style="background-color: var(--bg-primary); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); margin-top: 0.5rem;">
-                    <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Aviso de Governança CH-1 (Somente Leitura):</div>
+                    <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Governança de Execução CHDevFlow:</div>
                     <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.2rem;">
-                      Na fatia CC-01, este painel opera exclusivamente em modo leitura. Nenhum botão de despacho ou execução está disponível até a homologação da fatia CC-02 pelo PO.
+                      A tabela e os detalhes acima refletem a consulta somente-leitura ao GitHub/Sentinela. Para executar esta missão localmente pelo motor CCC-01 (AGY &rarr; Testes &rarr; Codex), utilize o painel de despacho com o manifesto pré-preparado correspondente e confirmação explícita de custo R$0.
                     </div>
                   </div>
                 </div>
@@ -214,4 +325,249 @@
   </div>
   <p id="mensagem-busca-vazia" role="status" style="display:none;margin-top:0.75rem;color:var(--text-secondary);">Nenhuma missão corresponde à busca. Limpe o campo ou use Filtrar para consultar novamente.</p>
 </div>
+
+<script>
+let activeExecutionId = null;
+let pollingInterval = null;
+
+function exibirAlertaDespacho(mensagem, tipo = 'erro') {
+  const alerta = document.getElementById('mensagem-alerta-despacho');
+  alerta.style.display = 'block';
+  alerta.textContent = mensagem;
+  if (tipo === 'erro') {
+    alerta.style.background = '#fee2e2';
+    alerta.style.color = '#991b1b';
+    alerta.style.border = '1px solid #f87171';
+  } else {
+    alerta.style.background = '#dcfce7';
+    alerta.style.color = '#166534';
+    alerta.style.border = '1px solid #86efac';
+  }
+}
+
+async function despacharMissao(event) {
+  event.preventDefault();
+  const alerta = document.getElementById('mensagem-alerta-despacho');
+  alerta.style.display = 'none';
+
+  const manifestPath = document.getElementById('manifest-path-input').value.trim();
+  const confirmacaoPo = document.getElementById('confirmacao-po-input').checked;
+  const timeoutVal = parseInt(document.getElementById('timeout-input').value, 10) || 480;
+  const csrfToken = document.getElementById('dispatch-csrf-token').value;
+
+  if (!manifestPath) {
+    exibirAlertaDespacho('Caminho do manifesto pré-preparado é obrigatório.');
+    return;
+  }
+  if (!confirmacaoPo) {
+    exibirAlertaDespacho('É obrigatório confirmar a autorização explícita de execução.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-despachar');
+  btn.disabled = true;
+  btn.textContent = 'Despachando...';
+
+  try {
+    const resp = await fetch('/api/missoes/executar', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({
+        manifest_path: manifestPath,
+        confirmacao_po: confirmacaoPo,
+        timeout_segundos: timeoutVal,
+        csrf_token: csrfToken
+      })
+    });
+
+    const data = await resp.json();
+    if (!resp.ok) {
+      exibirAlertaDespacho(data.detail || 'Falha ao despachar missão local.');
+      btn.disabled = false;
+      btn.textContent = 'Disparar Missão Local';
+      return;
+    }
+
+    activeExecutionId = data.execution_id;
+    exibirAlertaDespacho('Missão iniciada com sucesso no host local!', 'sucesso');
+    document.getElementById('painel-monitoramento').style.display = 'block';
+    atualizarPainelMonitoramento(data);
+    iniciarPolling(activeExecutionId);
+  } catch (err) {
+    exibirAlertaDespacho('Erro de conexão ao despachar missão: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Disparar Missão Local';
+  }
+}
+
+function iniciarPolling(executionId) {
+  if (pollingInterval) clearInterval(pollingInterval);
+  pollingInterval = setInterval(async () => {
+    try {
+      const resp = await fetch('/api/missoes/execucoes/' + executionId);
+      if (!resp.ok) {
+        clearInterval(pollingInterval);
+        return;
+      }
+      const data = await resp.json();
+      atualizarPainelMonitoramento(data);
+
+      const status = data.status || '';
+      if (!['INICIADO', 'EM_EXECUCAO'].includes(status)) {
+        clearInterval(pollingInterval);
+        document.getElementById('btn-despachar').disabled = false;
+        document.getElementById('btn-despachar').textContent = 'Disparar Missão Local';
+        document.getElementById('btn-cancelar-execucao').style.display = 'none';
+
+        if (['APROVADO_AGUARDANDO_CH1', 'AGUARDANDO_PO'].includes(status)) {
+          document.getElementById('secao-decisao-po').style.display = 'block';
+        }
+      }
+    } catch (err) {
+      console.error('Falha no polling da execução:', err);
+    }
+  }, 2000);
+}
+
+function atualizarPainelMonitoramento(data) {
+  document.getElementById('painel-monitoramento').style.display = 'block';
+  document.getElementById('exec-id-display').textContent = data.execution_id || '-';
+  document.getElementById('titulo-missao-execucao').textContent = 'Missão: ' + (data.mission_id || '-') + ' (Issue #' + (data.issue || '-') + ')';
+  document.getElementById('tempo-decorrido-execucao').textContent = '(' + (data.elapsed_seconds || 0) + 's decorridos)';
+
+  const badge = document.getElementById('badge-status-execucao');
+  const status = data.status || 'DESCONHECIDO';
+  badge.textContent = status;
+  if (status === 'APROVADO_AGUARDANDO_CH1') {
+    badge.className = 'badge-status badge-concluida';
+  } else if (status === 'EM_EXECUCAO' || status === 'INICIADO') {
+    badge.className = 'badge-status badge-elegivel';
+  } else if (status === 'AGUARDANDO_PO') {
+    badge.className = 'badge-status badge-ciclo';
+  } else {
+    badge.className = 'badge-status badge-bloqueada';
+  }
+
+  const attempts = data.attempts || [];
+  document.getElementById('tentativas-display').textContent = attempts.length + '/3';
+  document.getElementById('devolucoes-display').textContent = (data.returns_used || 0) + '/2';
+  document.getElementById('veredito-display').textContent = data.codex_verdict || (attempts.length ? attempts[attempts.length - 1].codex_verdict : 'Pendente');
+  document.getElementById('dossie-path-display').textContent = data.evidence_dir || '-';
+
+  if (data.patch) {
+    document.getElementById('visualizador-patch').textContent = data.patch;
+  }
+  if (data.testes_log_tail) {
+    document.getElementById('visualizador-testes').textContent = data.testes_log_tail;
+  }
+
+  const findings = data.findings || [];
+  const containerAchados = document.getElementById('container-achados');
+  const listaAchados = document.getElementById('lista-achados');
+  if (findings.length > 0) {
+    containerAchados.style.display = 'block';
+    listaAchados.innerHTML = '';
+    findings.forEach(item => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      listaAchados.appendChild(li);
+    });
+  } else {
+    containerAchados.style.display = 'none';
+  }
+}
+
+async function cancelarExecucaoAtiva() {
+  if (!activeExecutionId) return;
+  const csrfToken = document.getElementById('dispatch-csrf-token').value;
+  const btn = document.getElementById('btn-cancelar-execucao');
+  btn.disabled = true;
+  btn.textContent = 'Cancelando...';
+
+  try {
+    const resp = await fetch('/api/missoes/execucoes/' + activeExecutionId + '/cancelar', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({ csrf_token: csrfToken })
+    });
+    const data = await resp.json();
+    atualizarPainelMonitoramento(data);
+    exibirAlertaDespacho('Execução cancelada com sucesso.', 'erro');
+    if (pollingInterval) clearInterval(pollingInterval);
+    document.getElementById('btn-despachar').disabled = false;
+    document.getElementById('btn-despachar').textContent = 'Disparar Missão Local';
+    btn.style.display = 'none';
+  } catch (err) {
+    alert('Erro ao cancelar: ' + err.message);
+    btn.disabled = false;
+    btn.textContent = 'Cancelar Execução';
+  }
+}
+
+async function registrarDecisaoPO() {
+  if (!activeExecutionId) return;
+  const radios = document.getElementsByName('radio_decisao_po');
+  let selecionada = null;
+  for (const r of radios) {
+    if (r.checked) {
+      selecionada = r.value;
+      break;
+    }
+  }
+  if (!selecionada) {
+    alert('Selecione uma decisão (Aprovar, Ajustes ou Reprovar).');
+    return;
+  }
+
+  const justificativa = document.getElementById('justificativa-po-input').value.trim();
+  const csrfToken = document.getElementById('dispatch-csrf-token').value;
+
+  try {
+    const resp = await fetch('/api/missoes/execucoes/' + activeExecutionId + '/decisao', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({
+        decisao: selecionada,
+        justificativa: justificativa,
+        csrf_token: csrfToken
+      })
+    });
+    if (resp.ok) {
+      document.getElementById('msg-decisao-registrada').style.display = 'inline';
+    } else {
+      const err = await resp.json();
+      alert('Erro ao registrar decisão: ' + (err.detail || 'desconhecido'));
+    }
+  } catch (err) {
+    alert('Erro de conexão ao registrar decisão: ' + err.message);
+  }
+}
+
+window.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const resp = await fetch('/api/missoes/execucoes/ativa');
+    if (resp.ok) {
+      const data = await resp.json();
+      if (data && data.execution_id && ['INICIADO', 'EM_EXECUCAO'].includes(data.status)) {
+        activeExecutionId = data.execution_id;
+        document.getElementById('btn-despachar').disabled = true;
+        document.getElementById('btn-despachar').textContent = 'Em Execução...';
+        atualizarPainelMonitoramento(data);
+        iniciarPolling(activeExecutionId);
+      }
+    }
+  } catch (e) {
+    // Modo offline / sem execução ativa
+  }
+});
+</script>
 {% endblock %}
