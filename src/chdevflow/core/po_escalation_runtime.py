@@ -122,16 +122,15 @@ def verify_loaded_f7_modules(root: Path, commit_sha: str) -> str:
             raise RuntimeIdentityError("Modulo F7 nao carregado")
         # Não seguir symlinks ou junctions de ancestrais na origem do modulo.
         path = Path(module.__file__)
-        if path.absolute() != expected_path.absolute():
-            raise RuntimeIdentityError("Modulo F7 carregado de origem inesperada")
         for ancestor in (path, *path.parents):
             if ancestor == root.parent:
                 break
-            if ancestor.is_symlink():
+            if (ancestor.is_symlink()
+                    or (hasattr(ancestor, "is_junction") and ancestor.is_junction())):
                 raise RuntimeIdentityError("Modulo F7 atravessa link simbolico")
         try:
             if path.resolve(strict=True) != expected_path.resolve(strict=True):
-                raise RuntimeIdentityError("Modulo F7 redirecionado")
+                raise RuntimeIdentityError("Modulo F7 carregado de origem inesperada")
             if not path.is_file():
                 raise RuntimeIdentityError("Fonte F7 nao encontrada")
         except OSError as exc:
