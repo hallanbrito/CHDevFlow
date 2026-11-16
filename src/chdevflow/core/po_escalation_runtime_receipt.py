@@ -26,12 +26,15 @@ REPO = "hallanbrito/CHDevFlow"
 REPO_ID = 1424359000
 SIGNER = "hallanbrito/CHDevFlow/.github/workflows/f7-v1-attestor.yml"
 WORKFLOW_PATH = ".github/workflows/f7-v1-attestor.yml"
+PRODUCER_WORKFLOW_PATH = ".github/workflows/f7-v1-producer.yml"
 RECEIPT_FILE = "f7-runtime-receipt.json"
 SHA40 = re.compile(r"[0-9a-f]{40}\Z")
 SHA64 = re.compile(r"[0-9a-f]{64}\Z")
 # Apenas PO, apos workflow V1 real, auditoria Codex e aprovacao de pins.
 ATTESTOR_SHA_PIN = ""
 ATTESTOR_WORKFLOW_ID_PIN = 0
+PRODUCER_SHA_PIN = ""
+PRODUCER_WORKFLOW_ID_PIN = 0
 REQUIRED = frozenset({
     "schema", "repository", "repository_id", "execution_id", "mission_id",
     "mission_digest", "producer_run_id", "producer_run_attempt",
@@ -66,6 +69,10 @@ def _live_attestor_run(run_id: int) -> dict:
     return response
 
 
+def _live_producer_run(run_id: int) -> dict:
+    return _live_attestor_run(run_id)
+
+
 def _verify_sigstore(payload: bytes, *, sha: str) -> None:
     """Verifica assinatura de bytes congelados em pasta privada, nao path mutavel."""
     with TemporaryDirectory(prefix="ch-f7-e3c4-") as temp:
@@ -94,7 +101,11 @@ def verify_runtime_receipt(root: Path, outbox: dict, provenance: dict) -> dict:
     """
     if (not isinstance(ATTESTOR_SHA_PIN, str) or not SHA40.fullmatch(ATTESTOR_SHA_PIN)
             or type(ATTESTOR_WORKFLOW_ID_PIN) is not int
-            or ATTESTOR_WORKFLOW_ID_PIN < 1):
+            or ATTESTOR_WORKFLOW_ID_PIN < 1
+            or not isinstance(PRODUCER_SHA_PIN, str)
+            or not SHA40.fullmatch(PRODUCER_SHA_PIN)
+            or type(PRODUCER_WORKFLOW_ID_PIN) is not int
+            or PRODUCER_WORKFLOW_ID_PIN < 1):
         raise ExternalRuntimeReceiptError("Atestador V1 nao esta pinado/autorizado")
     try:
         raw = _read_evidence_bytes(_safe_file_within(root, RECEIPT_FILE), cap=32000)
@@ -128,6 +139,26 @@ def verify_runtime_receipt(root: Path, outbox: dict, provenance: dict) -> dict:
                 "attestor_run_id", "attestor_run_attempt"):
         if type(receipt.get(key)) is not int or receipt[key] < 1:
             raise ExternalRuntimeReceiptError("Run/tentativa invalido no recibo")
+    producer_run = _live_producer_run(receipt["producer_run_id"])
+    if (not isinstance(producer_run, dict)
+            or type(producer_run.get("id")) is not int
+            or producer_run["id"] != receipt["producer_run_id"]
+            or type(producer_run.get("workflow_id")) is not int
+            or producer_run["workflow_id"] != PRODUCER_WORKFLOW_ID_PIN
+            or producer_run.get("path") not in (
+                PRODUCER_WORKFLOW_PATH,
+                PRODUCER_WORKFLOW_PATH + "@refs/heads/main")
+            or producer_run.get("head_sha") != PRODUCER_SHA_PIN
+            or producer_run.get("head_branch") != "main"
+            or producer_run.get("event") != "workflow_dispatch"
+            or producer_run.get("status") != "completed"
+            or producer_run.get("conclusion") != "success"
+            or type(producer_run.get("run_attempt")) is not int
+            or producer_run["run_attempt"] != receipt["producer_run_attempt"]
+            or not isinstance(producer_run.get("repository"), dict)
+            or producer_run["repository"].get("id") != REPO_ID):
+        raise ExternalRuntimeReceiptError(
+            "Run produtor V1 nao corresponde a workflow/SHA GH LIVE")
     attestor_run = _live_attestor_run(receipt["attestor_run_id"])
     if (type(attestor_run.get("id")) is not int
             or attestor_run["id"] != receipt["attestor_run_id"]
