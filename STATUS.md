@@ -1,22 +1,27 @@
 # STATUS — CHDevFlow
 
-**Atualizado em:** 17/11/2026 (America/Fortaleza).  
-**Último marco homologado pelo PO:** CC-DESPACHO-01 — ponte Control Center → F6, **somente funcional em laboratório** ([PR #123](https://github.com/hallanbrito/CHDevFlow/pull/123)).
+**Atualizado:** 17/11/2026 (America/Fortaleza)  
+**Referência:** [`main`](https://github.com/hallanbrito/CHDevFlow/tree/main) protegida. O GitHub é a fonte de verdade para HEAD, CI, PRs e Issues em andamento.
 
-## Estado integrado e marcos
-- **Implementação homologada:** commit `9c509182dd74d003abc3a2cb7592a7b6db740d15`, branch `agy/cc-despacho-01`. PR **Draft**, **não integrada à main**.
-- **CI:** [run 44137628819](https://github.com/hallanbrito/CHDevFlow/actions/runs/44137628819), `success`, `python-checks` e `f7-windows` passaram; dois jobs de custódia pulados.
-- **Regressão local:** 142 testes do Control Center passaram (1 aviso); correção P1 mantém lock e devolve HTTP 409 em `crash → cancelar → despacho B`.
-- **Primeiro piloto real pela interface:** missão `PILOTO-CC-123`, AGY 1 tentativa, 0 devoluções, testes Python **3/3**, Codex textual `APROVAR_LAB`, dossiê `APROVADO_AGUARDANDO_CH1`. SHA256 confirmado no arquivo pelo PO; apenas `calculadora.py` alterado.
-- **Homologação PO:** concedida expressamente em 17/11/2026 para **escopo funcional de laboratório**; não substitui autorização específica para merge/deploy.
+## ✅ Última entrega integrada
+**CC-DESPACHO-01 — [PR #123](https://github.com/hallanbrito/CHDevFlow/pull/123) integrada à `main` em 17/11/2026**, por squash commit [`80dff4fc`](https://github.com/hallanbrito/CHDevFlow/commit/80dff4fcd694bbe5d7e07e5d9cb1468b6bbb3c96).
 
-## Riscos e bloqueios
-- `cost_verified=false`, `os_isolation_verified=false`, `test_execution=host`: custo R$0 e isolamento do sistema operacional **não verificados**.
-- Codex auditou textualmente; não reexecutou testes nem validou hash/Git por conta própria.
-- Crash preserva `active_execution.lock` (fail-closed); recuperação operacional manual. Cancelamento avançado via UI adiado.
-- Nenhum merge na `main`, deploy, automação de produção ou escrita no Project #2 nesta entrega.
+- **Produto:** Control Center local pode despachar missão por manifesto e acompanhar F6 → AGY → testes Python → Codex → dossiê, com autorização individual do PO e bloqueio fail-closed após crash.
+- **Homologação:** funcional **somente em laboratório**. Piloto `PILOTO-CC-123`: 1 tentativa AGY, 0 devoluções, 3/3 testes de aceite, Codex textual `APROVAR_LAB`, integridade SHA256 e escopo Git conferidos pelo PO.
+- **Qualidade:** 142 testes locais do Control Center aprovados (1 aviso); [CI pós-merge da `main`](https://github.com/hallanbrito/CHDevFlow/actions/runs/44152759648) concluída com `success`.
 
-## Próxima decisão do PO
-Autorizar ou não **merge em decisão separada**, após conferência da CI do HEAD documental e das proteções da branch. Isolamento e verificação de custo ficam fora desta homologação.
+## ⚠️ Limites atuais
+- **Não é ferramenta pronta para uso cotidiano:** exige preparar `CH-Lab-*`, prompt, testes independentes e manifesto JSON manualmente.
+- `cost_verified=false`; `os_isolation_verified=false`; `test_execution=host`: não declarar custo zero nem isolamento de SO comprovado.
+- Codex no piloto fez auditoria textual; o parecer não equivale a execução independente dos testes.
+- Recuperação após crash exige intervenção humana segura; cancelamento avançado pela interface adiado.
+- Sem liberação para produção, deploy, merge automático ou execução de agentes sem confirmação.
 
-**Evidências:** [RUC do piloto](docs/control-center/RUC-CC-DESPACHO-01-PILOTO-20261117.md) · [PR #123](https://github.com/hallanbrito/CHDevFlow/pull/123).
+## 🎯 Próxima melhoria
+**[Issue #124 — CC-USO-01](https://github.com/hallanbrito/CHDevFlow/issues/124):** preparar e validar missões úteis diretamente pela interface, sem edição manual de manifesto nem cópia de caminhos. **Backlog, implementação futura dependente de novo aceite do PO.**
+
+## 📌 Regra permanente do STATUS.md
+1. **Atualizar este arquivo na mesma PR que altera o estado do produto**, antes do merge; não deixar o status para uma PR corretiva posterior.
+2. Registrar apenas **entregas integradas, limitações reais e próximo passo**. Uma PR ainda aberta não é descrita como entregue na `main`.
+3. Após cada merge, conferir coerência entre `STATUS.md`, PR e CI; corrigir qualquer divergência pelo fluxo de PR da `main`, sem escrita direta ou bypass.
+4. Evitar diário extenso: detalhes, logs e histórico permanecem nas Issues/PRs e no [RUC do piloto](docs/control-center/RUC-CC-DESPACHO-01-PILOTO-20261117.md).
