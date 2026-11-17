@@ -196,6 +196,8 @@ async def cancel_execution_api(
         return resultado
     except ExecutionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    except ExecutionConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
 
 
 @router.post("/api/missoes/execucoes/{execution_id}/decisao", response_class=JSONResponse)

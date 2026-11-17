@@ -240,18 +240,6 @@ class ExecutionService:
             # Fail-closed estrito: JAMAIS remove self.lock_file automaticamente na inicialização!
             # O lock DEVE permanecer no disco bloqueando qualquer novo despacho até intervenção manual.
 
-    def liberar_trava_manual(self, justificativa: str = "Intervenção manual do operador") -> bool:
-        """Permite liberação manual explícita da trava pelo operador após verificação de processos."""
-        with self._lock:
-            if not self.lock_file.exists():
-                return False
-            self._active_execution_id = None
-            try:
-                self.lock_file.unlink(missing_ok=True)
-                return True
-            except OSError:
-                return False
-
     def _clean_lock_file_if_owned(self, execution_id: str) -> None:
         """Remove o arquivo de lock apenas se ele pertencer à execução especificada."""
         if not self.lock_file.exists():
@@ -567,6 +555,13 @@ class ExecutionService:
                 if not registro_path.exists():
                     raise ExecutionNotFoundError(f"Execução '{execution_id}' não encontrada.")
                 record = ExecutionRecord(**json.loads(registro_path.read_text(encoding="utf-8")))
+
+            # Recusa cancelamento quando em INTERROMPIDO_CRASH preservando integralmente o lock e o estado
+            if record.status == "INTERROMPIDO_CRASH":
+                raise ExecutionConflictError(
+                    f"Execução '{execution_id}' está em estado INTERROMPIDO_CRASH. "
+                    "Cancelamento recusado para preservar a integridade da trava e o estado da execução (fail-closed)."
+                )
 
             # Se já estiver em estado terminal e sem processos ativos, não há o que cancelar
             if record.status in ("CONCLUIDO", "BLOQUEADO_INFRA_OU_ESCOPO", "REPROVADO_CH1"):

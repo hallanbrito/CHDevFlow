@@ -481,7 +481,7 @@ def test_recuperacao_segura_crash_restart(lab_env):
     assert registro_recuperado["status"] == "INTERROMPIDO_CRASH"
     assert any("Queda/reinício do servidor detectada com trava ativa" in f for f in registro_recuperado["findings"])
 
-    # Nova execução DEVE ser rejeitada com 409 Conflict enquanto o lock não for liberado manualmente
+    # Nova execução DEVE ser rejeitada com 409 Conflict enquanto houver lock remanescente
     app = create_app()
     app.dependency_overrides[get_execution_service] = lambda: novo_svc
     client = TestClient(app, base_url="http://127.0.0.1:8000")
@@ -499,16 +499,94 @@ def test_recuperacao_segura_crash_restart(lab_env):
     assert resp.status_code == 409
     assert "Trava local detectada em disco" in resp.json()["detail"] or "Já existe uma missão ativa" in resp.json()["detail"]
 
-    # Após intervenção manual explícita pelo operador (liberação segura da trava), nova missão pode prosseguir
-    assert novo_svc.liberar_trava_manual("Operador verificou ausência de subprocessos órfãos")
-    assert not lock_file.exists()
-
-    resp_pos = client.post("/api/missoes/executar", json={
+    # Comprova que o lock remanescente mantém a missão B bloqueada com HTTP 409
+    resp_b = client.post("/api/missoes/executar", json={
         "manifest_path": str(lab_env["manifest_path"]),
         "confirmacao_po": True,
         "csrf_token": token,
     }, headers=headers)
-    assert resp_pos.status_code == 202
+    assert resp_b.status_code == 409
+    assert "Trava local detectada em disco" in resp_b.json()["detail"] or "Já existe uma missão ativa" in resp_b.json()["detail"]
+    assert lock_file.exists()
+
+
+def test_recuperacao_crash_post_cancelar_recusado_mantem_lock_bloqueia_b(lab_env):
+    """Comprova fail-closed estrito: crash -> POST cancelar retorna 409, mantém lock e despacho B recebe 409."""
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    lock_file = data_dir / "active_execution.lock"
+    exec_dir = data_dir / "executions"
+    exec_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Simula estado prévio deixado por crash com lock ativo
+    crash_id = "exec-crash-cancel-check"
+    lock_file.write_text(json.dumps({
+        "execution_id": crash_id,
+        "mission_id": "MISSAO-CRASH",
+        "pid": 987654,
+        "started_at": "2026-11-16T10:00:00Z",
+    }), encoding="utf-8")
+    (exec_dir / f"{crash_id}.json").write_text(json.dumps({
+        "execution_id": crash_id,
+        "mission_id": "MISSAO-CRASH",
+        "issue": 121,
+        "status": "EM_EXECUCAO",
+        "manifest_path": str(lab_env["manifest_path"]),
+        "worktree": str(lab_env["worktree"]),
+        "evidence_dir": str(lab_env["labs_root"] / "crash-dossier"),
+        "started_at": "2026-11-16T10:00:00Z",
+        "timeout_seconds": 480,
+    }), encoding="utf-8")
+
+    # 2. Inicialização do serviço detecta o crash e preserva o lock de forma fail-closed
+    novo_svc = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=fake_cycle_runner_success,
+    )
+    assert lock_file.exists()
+    registro_recuperado = novo_svc.obter_execucao(crash_id)
+    assert registro_recuperado["status"] == "INTERROMPIDO_CRASH"
+
+    # Verificação direta em nível de serviço: cancelar_execucao deve recusar com ExecutionConflictError
+    with pytest.raises(ExecutionConflictError) as exc_info:
+        novo_svc.cancelar_execucao(crash_id)
+    assert "INTERROMPIDO_CRASH" in str(exc_info.value)
+    assert lock_file.exists()
+
+    # 3. Via HTTP: POST cancelar deve retornar 409 Conflict sem indicar cancelamento concluído
+    app = create_app()
+    app.dependency_overrides[get_execution_service] = lambda: novo_svc
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+    token = obter_csrf_token()
+    headers = {
+        "Origin": "http://127.0.0.1:8000",
+        "Referer": "http://127.0.0.1:8000/missoes",
+        "X-CSRF-Token": token,
+    }
+
+    resp_cancel = client.post(
+        f"/api/missoes/execucoes/{crash_id}/cancelar",
+        json={"csrf_token": token},
+        headers=headers,
+    )
+    assert resp_cancel.status_code == 409
+    assert "INTERROMPIDO_CRASH" in resp_cancel.json()["detail"]
+
+    # Comprova que o status da execução e a trava permanecem intactos após POST cancelar
+    registro_pos_cancel = novo_svc.obter_execucao(crash_id)
+    assert registro_pos_cancel["status"] == "INTERROMPIDO_CRASH"
+    assert lock_file.exists()
+
+    # 4. Novo despacho B DEVE ser bloqueado com HTTP 409 devido à trava remanescente
+    resp_b = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_b.status_code == 409
+    assert "Trava local detectada em disco" in resp_b.json()["detail"] or "Já existe uma missão ativa" in resp_b.json()["detail"]
+    assert lock_file.exists()
 
 
 def test_sanitizacao_logs_e_segredos(lab_env):
