@@ -155,7 +155,8 @@ def validar_requisicao_post_segura(request: Request, csrf_token: str | None = No
     validar_origem_e_referer(request)
 
     # 3. Exigência incondicional de Token CSRF válido
-    if not validar_csrf_token(csrf_token):
+    token_efetivo = csrf_token or request.headers.get("x-csrf-token")
+    if not validar_csrf_token(token_efetivo):
         raise HTTPException(
             status_code=403,
             detail="Token CSRF inválido ou ausente (AUD-02.1).",
