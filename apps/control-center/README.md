@@ -1,6 +1,6 @@
 # CHDevFlow Control Center — MVP v0.2 (Fatia CC-01)
 
-> **Primeira Interface Funcional de Supervisão e Governança de IA (Modo Somente Leitura)**
+> **CC-01: supervisão somente leitura; PR #123: despacho local experimental opt-in (CC-DESPACHO-01)**
 > **Conformidade Canônica:** Decisões D01, D05, D06, D07, RFC-CH-DEVFLOW-001, ADR-CC02-01, ADR-CC02-02, ADR-CC02-03.
 
 ---
@@ -9,10 +9,10 @@
 
 O **CHDevFlow Control Center** é a central de observabilidade, inteligência de missões e governança visual do ecossistema CHDevFlow.
 
-Na presente fatia **CC-01**, o painel opera **estritamente em modo somente leitura (CH-1)**:
-- **Zero Despacho Executivo:** Não inicia agentes autônomos nem executa scripts mutativos.
+Na fatia original **CC-01**, a supervisão permanece somente leitura. A [PR #123](https://github.com/hallanbrito/CHDevFlow/pull/123) adiciona **despacho local experimental opt-in por manifesto pré-preparado**, com confirmação individual do PO:
+- **Despacho não automático:** a interface invoca F6 (AGY → testes → Codex) somente em laboratório descartável, com trava exclusiva persistente.
 - **Segurança de Rede Local (RNF-01):** Conexão vinculada exclusivamente ao loopback (`127.0.0.1:8000`). Recusa formalmente vinculações externas como `0.0.0.0`.
-- **Custo R$ 0,00 (D01):** Sem consumo de APIs comerciais faturáveis de IA.
+- **Custo e isolamento da execução real NÃO verificados:** o piloto utilizou AGY/Codex autenticados, `cost_verified=false`, `os_isolation_verified=false`, testes no host; o modo consulta não comprova custo zero de agentes.
 - **Decisão D05 Preservada:** Inicialização manual sob demanda, sem daemons permanentes e sem polling contínuo da rede.
 - **Princípio Fail-Closed (D06):** Qualquer ciclo, dependência órfã ou dado corrompido bloqueia a tarefa em vez de tentar adivinhar a intenção do desenvolvedor.
 
@@ -26,7 +26,7 @@ Na presente fatia **CC-01**, o painel opera **estritamente em modo somente leitu
 4. **Central de Missões e Fatias W:** Tabela com busca textual instantânea, filtros por status e esteira (AGY, Codex, ChatGPT) e modal de inspeção detalhada.
 5. **Modo Estudante Didático (ADR-CC02-03):** Glossário contextual do Método C.H., diagrama explicativo dos 9 estados da máquina de governança e detalhamento das 5 invariantes inegociáveis.
 6. **Modo Demonstração Offline (RF-06):** Alternância transparente com um clique entre o snapshot de demonstração offline (`DEMO_OFFLINE`) e o GitHub Project #2 (`LIVE_GITHUB`), com banner de aviso explícito.
-7. **Suíte de Testes Automatizados (100% Offline):** 53 testes dedicados do Control Center cobrindo o motor DAG, serviços, fachada da Sentinela, cabeçalhos de CSP defensiva inicial/local, proteção CSRF com token obrigatório e rotas somente leitura, complementando os 77 testes do repositório raiz e os 67 testes do motor da Sentinela (total de 197 testes locais aprovados; 77 testes validados no GitHub Actions).
+7. **Testes da versão atual:** suíte Control Center **142 passed, 1 warning** em 17/11/2026, regressão P1 aprovada; piloto real CC-123 com **3/3** testes independentes, Codex textual `APROVAR_LAB`; CI da implementação verde.
 
 ---
 
@@ -42,17 +42,13 @@ Na raiz do repositório ou da worktree:
 
 ```bash
 # 1. Exportar os módulos no PYTHONPATH
-export PYTHONPATH="apps/control-center/src:apps/bootstrap/sentinela/src"
+export PYTHONPATH="$PWD/src:$PWD/apps/control-center/src:$PWD/apps/bootstrap/sentinela/src"
 
 # 2. Iniciar o servidor local (loopback 127.0.0.1:8000)
-.venv/bin/python -m ch_control_center
+python -m ch_control_center
 ```
 
-Ou execute o script utilitário:
-
-```bash
-./scripts/iniciar_control_center.sh
-```
+Utilize um ambiente Python em que as dependências do Control Center estejam instaladas. O script utilitário legado `./scripts/iniciar_control_center.sh` pode exigir ajuste do `PYTHONPATH`. **Não executar missão com segredos, dados pessoais ou código de produção.** [Relatório de homologação do piloto](../../docs/control-center/RUC-CC-DESPACHO-01-PILOTO-20261117.md).
 
 ### Acesso no Navegador (Firefox / Chromium)
 
@@ -75,20 +71,18 @@ Rotas navegáveis:
 Para rodar toda a suíte de testes do Control Center em modo 100% offline:
 
 ```bash
-export PYTHONPATH="apps/control-center/src:apps/bootstrap/sentinela/src"
+export PYTHONPATH="$PWD/src:$PWD/apps/control-center/src:$PWD/apps/bootstrap/sentinela/src"
 .venv/bin/python -m pytest apps/control-center/tests -v
 ```
 
 Para rodar a suíte completa de todo o repositório (Sentinela + Control Center):
 
 ```bash
-export PYTHONPATH="apps/control-center/src:apps/bootstrap/sentinela/src"
+export PYTHONPATH="$PWD/src:$PWD/apps/control-center/src:$PWD/apps/bootstrap/sentinela/src"
 .venv/bin/python -m pytest apps/control-center/tests apps/bootstrap/sentinela/tests tests -v
 ```
 
-> **Execução Local vs. Verificação em CI (AUD-06.1):**
-> - **Local (197 testes executados):** Execução 100% offline via virtualenv local cobrindo 53 testes do Control Center, 67 testes da Sentinela Python e 77 testes da suíte raiz (total de 197 testes com 100% de aprovação), com custo R$ 0,00 e sem dependência de rede.
-> - **CI / GitHub Actions (77 testes executados):** O workflow atual (`.github/workflows/w1-checks.yml`) executa os 77 testes históricos da raiz do repositório (`python -m unittest discover -s tests -v`), comprovadamente aprovados com sucesso. Os 53 testes do Control Center e os 67 testes da Sentinela ainda não foram integrados ao pipeline remoto do CI, permanecendo para expansão do workflow em fatias futuras.
+> **Evidências recentes (17/11/2026):** 142 testes do Control Center passaram localmente (1 aviso Starlette), inclusive regressão `crash → cancelar → despacho B`; piloto real com 3/3 testes Python e Codex `APROVAR_LAB` **textual**. [GitHub Actions #44137628819](https://github.com/hallanbrito/CHDevFlow/actions/runs/44137628819) — `success` (`python-checks` e `f7-windows` passaram; 2 jobs de custódia pulados). Isso não atesta custo R$0 nem isolamento de SO.
 
 ---
 
@@ -125,6 +119,7 @@ apps/control-center/
 │       │   ├── demo.py                # POST /demo/alternar e GET /api/demo/status
 │       │   └── projects.py            # POST /projetos/alternar e GET /api/projetos
 │       ├── services/
+│       │   ├── execution_service.py    # Despacho, lock e dossiê (PR #123)
 │       │   ├── mission_service.py     # Orquestrador de missões e estados
 │       │   └── project_service.py     # Gerenciador de perfis multi-projeto
 │       ├── static/

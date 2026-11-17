@@ -9,6 +9,8 @@ O **CHDevFlow** organiza o trabalho de Hallan (Product Owner), ChatGPT (orquestr
 
 ---
 
+**Estado atual e marcos homologados:** [STATUS.md](STATUS.md). A ponte experimental [CC-DESPACHO-01 / PR #123](https://github.com/hallanbrito/CHDevFlow/pull/123) foi homologada pelo PO **somente no escopo funcional de laboratório**, sem merge ou deploy. [Evidências do piloto](docs/control-center/RUC-CC-DESPACHO-01-PILOTO-20261117.md).
+
 ## CHDevFlow CLI (`ch`)
 
 A partir da versão v0.1 (Épico #32), o CHDevFlow pode ser instalado localmente como ferramenta de linha de comando (`ch`).
