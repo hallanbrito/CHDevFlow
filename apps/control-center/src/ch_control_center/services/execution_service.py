@@ -493,8 +493,9 @@ class ExecutionService:
                     "accepted": True,
                     "timeout": timeout,
                     "isolated_tests": isolated_tests,
-                    "cancel_check": cancel_check,
                 }
+                if _runner_accepts_param(self.cycle_runner, "cancel_check"):
+                    kwargs["cancel_check"] = cancel_check
                 if _runner_accepts_param(self.cycle_runner, "execution_id"):
                     kwargs["execution_id"] = record.execution_id
 

@@ -447,7 +447,7 @@ function iniciarPolling(executionId) {
         const btnCancel = document.getElementById('btn-cancelar-execucao');
         if (btnCancel) {
           btnCancel.disabled = true;
-          btnCancel.textContent = 'Cancelando...';
+          btnCancel.style.display = 'none';
         }
       }
     } catch (err) {
@@ -468,27 +468,20 @@ function atualizarPainelMonitoramento(data) {
   badge.textContent = status;
   if (status === 'APROVADO_AGUARDANDO_CH1') {
     badge.className = 'badge-status badge-concluida';
-    if (btnCancel) btnCancel.style.display = 'none';
   } else if (status === 'EM_EXECUCAO' || status === 'INICIADO') {
     badge.className = 'badge-status badge-elegivel';
-    if (btnCancel) {
-      btnCancel.style.display = 'inline-block';
-      btnCancel.disabled = false;
-      btnCancel.textContent = 'Cancelar Execução';
-    }
   } else if (status === 'CANCELAMENTO_PENDENTE') {
     badge.className = 'badge-status badge-ciclo';
-    if (btnCancel) {
-      btnCancel.style.display = 'inline-block';
-      btnCancel.disabled = true;
-      btnCancel.textContent = 'Cancelando...';
-    }
   } else if (status === 'AGUARDANDO_PO') {
     badge.className = 'badge-status badge-ciclo';
-    if (btnCancel) btnCancel.style.display = 'none';
   } else {
     badge.className = 'badge-status badge-bloqueada';
-    if (btnCancel) btnCancel.style.display = 'none';
+  }
+
+  // Cancelamento via UI estritamente desabilitado e oculto em todos os estados no MVP KISS
+  if (btnCancel) {
+    btnCancel.style.display = 'none';
+    btnCancel.disabled = true;
   }
 
   const attempts = data.attempts || [];

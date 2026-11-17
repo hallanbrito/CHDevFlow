@@ -12,6 +12,7 @@ Verifica integralmente os requisitos aprovados pelo PO:
 """
 from __future__ import annotations
 
+import functools
 import json
 import os
 from pathlib import Path
@@ -1521,6 +1522,78 @@ def test_adversarial_p2_contexto_thread_local_nao_vaza_apos_erro_no_motor(lab_en
                 accepted=True,
             )
     assert get_current_execution_id() is None, "Invocação do motor F6 não pode vazar execution_id"
+
+
+def test_adversarial_p1_assinatura_real_f6_sem_cancel_check_ou_retry(lab_env):
+    """P1: Comprova que o ExecutionService despacha para o run_generic_cycle real (F6) sem erro de assinatura."""
+    import inspect
+    from chdevflow.core.generic_cycle import run_generic_cycle
+    reset_services()
+    data_dir = lab_env["data_dir"]
+
+    # 1. Validação estrita da assinatura do F6 original de origin/main:
+    # generic_cycle.run_generic_cycle NÃO aceita cancel_check nem execution_id
+    sig = inspect.signature(run_generic_cycle)
+    assert "cancel_check" not in sig.parameters, "F6 original não deve ter cancel_check"
+    assert "execution_id" not in sig.parameters, "F6 original não deve ter execution_id"
+
+    calls = 0
+    @functools.wraps(run_generic_cycle)
+    def spy_runner(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return run_generic_cycle(*args, **kwargs)
+
+    exec_svc = ExecutionService(
+        data_dir=data_dir,
+        labs_root=lab_env["labs_root"],
+        cycle_runner=spy_runner,
+    )
+
+    # Mocka preflight interno e _run_command para falhar de modo controlado ANTES de chamar agentes reais
+    with patch("chdevflow.core.generic_cycle._executables", return_value=(["fake-agy.exe"], ["fake-codex.exe"])), \
+         patch("chdevflow.core.generic_cycle._run_command", side_effect=ValueError("Parada controlada antes do AGY real")):
+        res = exec_svc.executar_missao(
+            manifest_path=lab_env["manifest_path"],
+            confirmacao_po=True,
+        )
+        exec_id = res["execution_id"]
+        thread = exec_svc._threads.get(exec_id)
+        if thread:
+            thread.join(timeout=3.0)
+
+    detalhes = exec_svc.obter_execucao(exec_id)
+
+    # Asserções críticas P1:
+    # 1. O spy_runner com a assinatura real do F6 foi chamado exatamente uma vez
+    assert calls == 1, f"run_generic_cycle deveria ser chamado exatamente 1 vez, mas foi {calls}"
+    # 2. NÃO ocorreu TypeError de argumento inesperado (cancel_check ou execution_id)
+    assert not any("unexpected keyword argument" in f for f in detalhes["findings"]), f"Erro inesperado de argumento: {detalhes['findings']}"
+    # 3. Status bloqueado com o erro controlado retornado pelo motor original
+    assert detalhes["status"] == "BLOQUEADO_INFRA_OU_ESCOPO"
+    assert any("Parada controlada antes do AGY real" in f for f in detalhes["findings"])
+
+
+def test_adversarial_p2_ui_transicao_estados_mantem_cancelamento_desabilitado_e_oculto():
+    """P2: Comprova que em todas as transições de estado na UI o cancelamento permanece oculto e desabilitado."""
+    template_path = Path(__file__).resolve().parent.parent / "src" / "ch_control_center" / "templates" / "missions.html"
+    assert template_path.exists(), "Template missions.html deve existir"
+    html_content = template_path.read_text(encoding="utf-8")
+
+    # 1. Validação no markup HTML inicial:
+    assert 'id="btn-cancelar-execucao"' in html_content
+    assert 'display: none' in html_content
+    assert "disabled" in html_content
+    assert "Cancelamento UI: Adiado (MVP KISS)" in html_content
+
+    # 2. Validação nas rotinas JavaScript de atualização de estado:
+    # Garante que NENHUMA linha de JS configure display: 'inline-block' ou disabled = false para btnCancel
+    assert "btnCancel.style.display = 'inline-block'" not in html_content, "btnCancel não pode ser reexibido via JS"
+    assert "btnCancel.disabled = false" not in html_content, "btnCancel não pode ser reabilitado via JS"
+
+    # 3. Garante que atualizarPainelMonitoramento e polling forçam display: 'none' e disabled = true
+    assert "btnCancel.style.display = 'none'" in html_content
+    assert "btnCancel.disabled = true" in html_content
 
 
 
