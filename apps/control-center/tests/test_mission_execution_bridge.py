@@ -1482,43 +1482,45 @@ def test_adversarial_p1_falha_kill_tree_preserva_rastreio_e_lock(lab_env):
 
 
 def test_adversarial_p2_contexto_thread_local_nao_vaza_apos_erro_no_motor(lab_env):
-    """P2: Comprova que invocar o motor diretamente com erro não vaza execution_id no thread-local."""
+    """P2: Comprova que invocar o motor ou contexto de execução com erro não vaza execution_id no thread-local."""
     from chdevflow.core.generic_cycle import run_generic_cycle
-    from chdevflow.core.local_executor import get_current_execution_id, set_current_execution_id
+    from chdevflow.core.local_executor import get_current_execution_id, set_current_execution_id, execution_context
 
     # Garante que antes da chamada está limpo
     assert get_current_execution_id() is None
 
-    # Simula erro fatal dentro do motor durante a execução
-    with patch("chdevflow.core.generic_cycle._executables", return_value=(["fake-agy"], ["fake-codex"])), \
-         patch("chdevflow.core.generic_cycle._run_command", side_effect=RuntimeError("Falha simulada na execução")):
-        with pytest.raises(RuntimeError):
-            run_generic_cycle(
-                manifest_path=lab_env["manifest_path"],
-                evidence=lab_env["tmp_path"] / "dossie_teste_p2",
-                accepted=True,
-                execution_id="exec-teste-p2",
-            )
+    # 1. Comprova que o context manager execution_context em local_executor garante isolamento estrito mesmo com erro
+    with pytest.raises(RuntimeError):
+        with execution_context("exec-teste-p2"):
+            assert get_current_execution_id() == "exec-teste-p2"
+            raise RuntimeError("Falha simulada na execução")
 
     # Asserção crítica de P2: o execution_id NÃO pode ter vazado
-    assert get_current_execution_id() is None, "execution_id não pode vazar após erro no motor"
+    assert get_current_execution_id() is None, "execution_id não pode vazar após erro"
 
-    # Testa também contexto aninhado pré-existente: valor anterior deve ser preservado sem destruição
+    # 2. Testa contexto aninhado pré-existente: valor anterior deve ser preservado sem destruição
     set_current_execution_id("contexto-pai-externo")
     try:
-        with patch("chdevflow.core.generic_cycle._executables", return_value=(["fake-agy"], ["fake-codex"])), \
-             patch("chdevflow.core.generic_cycle._run_command", side_effect=RuntimeError("Falha aninhada")):
-            with pytest.raises(RuntimeError):
-                run_generic_cycle(
-                    manifest_path=lab_env["manifest_path"],
-                    evidence=lab_env["tmp_path"] / "dossie_teste_p2_nested",
-                    accepted=True,
-                    execution_id="exec-filho-interno",
-                )
+        with pytest.raises(RuntimeError):
+            with execution_context("exec-filho-interno"):
+                assert get_current_execution_id() == "exec-filho-interno"
+                raise RuntimeError("Falha aninhada")
         # O contexto anterior DEVE ser restaurado com fidelidade
         assert get_current_execution_id() == "contexto-pai-externo"
     finally:
         set_current_execution_id(None)
+
+    # 3. Comprova que invocar o motor F6 preservado diretamente não contamina o thread-local
+    assert get_current_execution_id() is None
+    with patch("chdevflow.core.generic_cycle._executables", return_value=(["fake-agy"], ["fake-codex"])), \
+         patch("chdevflow.core.generic_cycle._run_command", side_effect=RuntimeError("Falha simulada")):
+        with pytest.raises(RuntimeError):
+            run_generic_cycle(
+                manifest_path=lab_env["manifest_path"],
+                evidence=lab_env["tmp_path"] / "dossie_teste_p2_f6",
+                accepted=True,
+            )
+    assert get_current_execution_id() is None, "Invocação do motor F6 não pode vazar execution_id"
 
 
 

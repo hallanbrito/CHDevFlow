@@ -101,8 +101,12 @@
         <span id="tempo-decorrido-execucao" style="font-size: 0.75rem; color: var(--text-muted);">(0s)</span>
       </div>
       <div>
-        <button type="button" id="btn-cancelar-execucao" class="btn btn-sm" style="background: #dc2626; color: white;" onclick="cancelarExecucaoAtiva()">
-          Cancelar Execução
+        <!-- Cancelamento avançado via UI adiado para evolução futura conforme diretriz MVP KISS (Issue #121) -->
+        <span class="badge-status" style="font-size: 0.75rem; background: var(--bg-card); color: var(--text-muted); border: 1px dashed var(--border-color); padding: 0.25rem 0.5rem;" title="Cancelamento avançado via UI adiado para evolução futura. Em caso de travamento no host, intervir pelo terminal.">
+          Cancelamento UI: Adiado (MVP KISS)
+        </span>
+        <button type="button" id="btn-cancelar-execucao" class="btn btn-sm" style="display: none; background: #dc2626; color: white;" onclick="cancelarExecucaoAtiva()" disabled>
+          Cancelar Execução (Adiado)
         </button>
       </div>
     </div>

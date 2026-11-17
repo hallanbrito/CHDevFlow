@@ -372,19 +372,5 @@ class GenericCycleTests(unittest.TestCase):
         self.assertFalse((self.evidence / "github_project_write.json").exists())
 
 
-    def test_cancelamento_interrompe_ciclo_e_marca_cancelado(self):
-        with patch.object(f6, "_git", side_effect=self.fake_git), \
-             patch.object(f6, "_executables", return_value=(["agy.exe"], ["codex.exe"])), \
-             patch.object(f6, "_run_command", side_effect=self.fake_command):
-            result = f6.run_generic_cycle(
-                manifest_path=self.manifest,
-                evidence=self.evidence,
-                accepted=True,
-                cancel_check=lambda: True,
-            )
-        self.assertEqual(result.status, "CANCELADO")
-        self.assertIn("Execucao cancelada pelo operador", result.findings)
-
-
 if __name__ == "__main__":
     unittest.main()
