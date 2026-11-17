@@ -186,7 +186,13 @@ class ExecutionService:
         self._recover_stale_lock()
 
     def _recover_stale_lock(self) -> None:
-        """Verifica e recupera de forma fail-closed um lock persistente deixado por crash/restart."""
+        """Verifica de forma fail-closed um lock persistente deixado por crash/restart.
+
+        Conforme diretriz CH-1 e auditoria Codex: a morte do PID do servidor NÃO
+        autoriza apagar active_execution.lock nem assumir inexistência de subprocessos.
+        O lock é SEMPRE retido de forma fail-closed, exigindo recuperação manual segura
+        para evitar trabalho concorrente com possíveis processos órfãos.
+        """
         with self._lock:
             if not self.lock_file.exists():
                 return
@@ -194,7 +200,7 @@ class ExecutionService:
                 raw_text = self.lock_file.read_text(encoding="utf-8")
                 dados = json.loads(raw_text)
             except Exception:
-                # Fail-closed estrito: se o lock estiver corrompido ou ilegível, não removemos cegamente
+                # Fail-closed estrito: se o lock estiver corrompido ou ilegível, mantemos retido
                 return
 
             if not isinstance(dados, dict):
@@ -203,43 +209,48 @@ class ExecutionService:
             pid = dados.get("pid")
             exec_id = dados.get("execution_id")
 
-            # Avalia status do processo dono do lock
-            status_processo = check_process_status(pid)
+            # Retém a execução ativa em memória para manter a exclusividade estrita
+            if exec_id:
+                self._active_execution_id = exec_id
 
-            if status_processo == ProcessStatus.VIVO:
-                # Processo comprovadamente vivo no host: preserva lock e assume ID ativo
-                if exec_id:
-                    self._active_execution_id = exec_id
-                return
-
-            if status_processo == ProcessStatus.INCONCLUSIVO:
-                # Casos inconclusivos (ex: PID ausente, falha de acesso) permanecem bloqueados
-                return
-
-            # Apenas se status for estritamente MORTO_COMPROVADO podemos limpar o lock
-            if status_processo == ProcessStatus.MORTO_COMPROVADO:
-                if exec_id:
-                    try:
-                        registro_path = self.executions_dir / f"{exec_id}.json"
-                        if registro_path.exists():
-                            registro_dict = json.loads(registro_path.read_text(encoding="utf-8"))
-                            if registro_dict.get("status") in ("INICIADO", "EM_EXECUCAO", "CANCELAMENTO_PENDENTE"):
-                                registro_dict["status"] = "INTERROMPIDO_CRASH"
-                                registro_dict["finished_at"] = datetime.now(timezone.utc).isoformat()
-                                registro_dict["findings"] = registro_dict.get("findings", []) + [
-                                    f"Servidor reiniciado ou processo comprovadamente morto (PID {pid} inativo)."
-                                ]
-                                registro_path.write_text(
-                                    json.dumps(registro_dict, ensure_ascii=False, indent=2),
-                                    encoding="utf-8",
-                                )
-                    except Exception:
-                        pass
-
+            # Registra diagnóstico no registro da execução se estava em andamento
+            if exec_id:
                 try:
-                    self.lock_file.unlink(missing_ok=True)
-                except OSError:
+                    registro_path = self.executions_dir / f"{exec_id}.json"
+                    if registro_path.exists():
+                        registro_dict = json.loads(registro_path.read_text(encoding="utf-8"))
+                        if registro_dict.get("status") in ("INICIADO", "EM_EXECUCAO", "CANCELAMENTO_PENDENTE"):
+                            registro_dict["status"] = "INTERROMPIDO_CRASH"
+                            registro_dict["finished_at"] = datetime.now(timezone.utc).isoformat()
+                            mensagem = (
+                                f"Queda/reinício do servidor detectada com trava ativa (PID anterior {pid}). "
+                                "A trava 'active_execution.lock' foi preservada de forma fail-closed para evitar "
+                                "trabalho concorrente com possíveis subprocessos órfãos. Requer intervenção manual "
+                                "do operador para verificação de processos e liberação segura."
+                            )
+                            if mensagem not in registro_dict.get("findings", []):
+                                registro_dict["findings"] = registro_dict.get("findings", []) + [mensagem]
+                            registro_path.write_text(
+                                json.dumps(registro_dict, ensure_ascii=False, indent=2),
+                                encoding="utf-8",
+                            )
+                except Exception:
                     pass
+
+            # Fail-closed estrito: JAMAIS remove self.lock_file automaticamente na inicialização!
+            # O lock DEVE permanecer no disco bloqueando qualquer novo despacho até intervenção manual.
+
+    def liberar_trava_manual(self, justificativa: str = "Intervenção manual do operador") -> bool:
+        """Permite liberação manual explícita da trava pelo operador após verificação de processos."""
+        with self._lock:
+            if not self.lock_file.exists():
+                return False
+            self._active_execution_id = None
+            try:
+                self.lock_file.unlink(missing_ok=True)
+                return True
+            except OSError:
+                return False
 
     def _clean_lock_file_if_owned(self, execution_id: str) -> None:
         """Remove o arquivo de lock apenas se ele pertencer à execução especificada."""

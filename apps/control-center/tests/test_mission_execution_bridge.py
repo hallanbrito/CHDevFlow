@@ -439,7 +439,7 @@ def test_cancelamento_interrompe_subprocessos(lab_env):
 
 
 def test_recuperacao_segura_crash_restart(lab_env):
-    """Comprova que um lock deixado por crash anterior é recuperado de forma fail-closed sem travar o painel."""
+    """Comprova fail-closed estrito: lock deixado por crash anterior é preservado e rejeita nova missão (409)."""
     reset_services()
     data_dir = lab_env["data_dir"]
     lock_file = data_dir / "active_execution.lock"
@@ -466,22 +466,22 @@ def test_recuperacao_segura_crash_restart(lab_env):
         "timeout_seconds": 480,
     }), encoding="utf-8")
 
-    # Inicialização do serviço recupera o lock
+    # Inicialização do serviço preserva o lock de forma fail-closed
     novo_svc = ExecutionService(
         data_dir=data_dir,
         labs_root=lab_env["labs_root"],
         cycle_runner=fake_cycle_runner_success,
     )
 
-    # Lock foi removido do disco
-    assert not lock_file.exists()
+    # Lock NÃO é removido do disco (fail-closed, sem assumir que subprocessos morreram)
+    assert lock_file.exists()
 
-    # O registro antigo foi marcado como INTERROMPIDO_CRASH
+    # O registro antigo foi marcado como INTERROMPIDO_CRASH com aviso de necessidade de intervenção manual
     registro_recuperado = novo_svc.obter_execucao(crash_id)
     assert registro_recuperado["status"] == "INTERROMPIDO_CRASH"
-    assert any("Servidor reiniciado" in f for f in registro_recuperado["findings"])
+    assert any("Queda/reinício do servidor detectada com trava ativa" in f for f in registro_recuperado["findings"])
 
-    # Nova execução pode ser iniciada imediatamente sem bloqueio
+    # Nova execução DEVE ser rejeitada com 409 Conflict enquanto o lock não for liberado manualmente
     app = create_app()
     app.dependency_overrides[get_execution_service] = lambda: novo_svc
     client = TestClient(app, base_url="http://127.0.0.1:8000")
@@ -496,7 +496,19 @@ def test_recuperacao_segura_crash_restart(lab_env):
         "confirmacao_po": True,
         "csrf_token": token,
     }, headers=headers)
-    assert resp.status_code == 202
+    assert resp.status_code == 409
+    assert "Trava local detectada em disco" in resp.json()["detail"] or "Já existe uma missão ativa" in resp.json()["detail"]
+
+    # Após intervenção manual explícita pelo operador (liberação segura da trava), nova missão pode prosseguir
+    assert novo_svc.liberar_trava_manual("Operador verificou ausência de subprocessos órfãos")
+    assert not lock_file.exists()
+
+    resp_pos = client.post("/api/missoes/executar", json={
+        "manifest_path": str(lab_env["manifest_path"]),
+        "confirmacao_po": True,
+        "csrf_token": token,
+    }, headers=headers)
+    assert resp_pos.status_code == 202
 
 
 def test_sanitizacao_logs_e_segredos(lab_env):
@@ -755,7 +767,7 @@ def test_crash_recovery_preserva_lock_se_pid_vivo_ou_corrompido(lab_env):
                 confirmacao_po=True,
             )
 
-    # Caso 3: Lock com PID inativo/morto
+    # Caso 3: Lock com PID inativo/morto no SO (fail-closed: preserva lock pois filhos podem estar vivos)
     with patch("ch_control_center.services.execution_service.check_process_status", return_value=ProcessStatus.MORTO_COMPROVADO):
         lock_file.write_text(json.dumps({
             "execution_id": "exec-morto",
@@ -766,7 +778,12 @@ def test_crash_recovery_preserva_lock_se_pid_vivo_ou_corrompido(lab_env):
             labs_root=lab_env["labs_root"],
             cycle_runner=fake_cycle_runner_success,
         )
-        assert not lock_file.exists()
+        assert lock_file.exists(), "Fail-closed estrito: morte do servidor não prova morte dos filhos"
+        with pytest.raises(ExecutionConflictError):
+            svc_dead.executar_missao(
+                manifest_path=lab_env["manifest_path"],
+                confirmacao_po=True,
+            )
 
 
 def test_rejeicao_confirmacao_po_string_ou_inteiro(custom_client, lab_env):
@@ -1040,14 +1057,14 @@ def test_adversarial_p1_crash_recovery_fail_closed_cinco_casos(lab_env):
             svc5 = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
             assert lock_file.exists(), "PermissionError em os.kill comprova que o processo existe e está vivo"
 
-    # Caso de Contraste: Somente MORTO_COMPROVADO deve desbloquear
+    # Caso de Contraste / Subprocessos órfãos: Mesmo com MORTO_COMPROVADO do servidor, lock é preservado fail-closed
     with patch("ch_control_center.services.execution_service.check_process_status", return_value=ProcessStatus.MORTO_COMPROVADO):
         lock_file.write_text(json.dumps({
             "execution_id": "exec-morto-comprovado",
             "pid": 99999999,
         }), encoding="utf-8")
         svc_morto = ExecutionService(data_dir=data_dir, labs_root=lab_env["labs_root"])
-        assert not lock_file.exists(), "Apenas prova segura de término (MORTO_COMPROVADO) limpa o lock"
+        assert lock_file.exists(), "Fail-closed: morte do PID do servidor NÃO autoriza apagar active_execution.lock"
 
 
 def test_adversarial_p1_lock_exclusivo_atomico_e_limpeza_por_proprietario(lab_env):
@@ -1594,6 +1611,90 @@ def test_adversarial_p2_ui_transicao_estados_mantem_cancelamento_desabilitado_e_
     # 3. Garante que atualizarPainelMonitoramento e polling forçam display: 'none' e disabled = true
     assert "btnCancel.style.display = 'none'" in html_content
     assert "btnCancel.disabled = true" in html_content
+
+
+def test_adversarial_p1_crash_com_subprocesso_vivo_preserva_lock_e_rejeita_b(lab_env):
+    """P1: Servidor A adquire lock e gera subprocesso; A cai; subprocesso continua vivo;
+    instância B inicia; comprova lock preservado e novo despacho rejeitado com HTTP 409."""
+    import sys
+    reset_services()
+    data_dir = lab_env["data_dir"]
+    lock_file = data_dir / "active_execution.lock"
+    exec_dir = data_dir / "executions"
+    exec_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Servidor A cria um subprocesso real inofensivo
+    proc_filho = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert proc_filho.poll() is None, "Subprocesso filho deve estar vivo"
+
+        # 2. Servidor A detinha o lock e registro antes de cair inesperadamente
+        exec_id_a = "exec-missao-a-crash"
+        pid_servidor_a_morto = 99999998
+        lock_file.write_text(json.dumps({
+            "execution_id": exec_id_a,
+            "mission_id": "MISSAO-A",
+            "pid": pid_servidor_a_morto,
+            "started_at": "2026-11-17T11:00:00Z",
+            "manifest_path": str(lab_env["manifest_path"]),
+            "evidence_dir": str(lab_env["labs_root"] / "dossie-a"),
+        }), encoding="utf-8")
+        (exec_dir / f"{exec_id_a}.json").write_text(json.dumps({
+            "execution_id": exec_id_a,
+            "mission_id": "MISSAO-A",
+            "issue": 121,
+            "status": "EM_EXECUCAO",
+            "manifest_path": str(lab_env["manifest_path"]),
+            "worktree": str(lab_env["worktree"]),
+            "evidence_dir": str(lab_env["labs_root"] / "dossie-a"),
+            "started_at": "2026-11-17T11:00:00Z",
+            "timeout_seconds": 480,
+        }), encoding="utf-8")
+
+        # 3. Servidor A encerrou inesperadamente (PID inativo), mas o subprocesso filho continua vivo
+        assert proc_filho.poll() is None
+
+        # 4. Inicia nova instância do servidor B
+        svc_b = ExecutionService(
+            data_dir=data_dir,
+            labs_root=lab_env["labs_root"],
+            cycle_runner=fake_cycle_runner_success,
+        )
+
+        # 5. Asserções críticas P1:
+        # - O lock foi estritamente PRESERVADO no disco (fail-closed, não apagado)
+        assert svc_b.lock_file.exists(), "Lock deve ser preservado de forma fail-closed"
+        # - O subprocesso de A continua comprovadamente vivo no SO
+        assert proc_filho.poll() is None, "Subprocesso filho de A não pode ter sido afetado e continua vivo"
+        # - Registro da Missão A foi atualizado para INTERROMPIDO_CRASH com aviso de necessidade de intervenção
+        reg_a = svc_b.obter_execucao(exec_id_a)
+        assert reg_a["status"] == "INTERROMPIDO_CRASH"
+        assert any("Queda/reinício do servidor detectada com trava ativa" in f for f in reg_a["findings"])
+
+        # 6. Missão B tenta disparar novo despacho na instância B e DEVE receber HTTP 409 Conflict
+        app = create_app()
+        app.dependency_overrides[get_execution_service] = lambda: svc_b
+        client = TestClient(app, base_url="http://127.0.0.1:8000")
+        token = obter_csrf_token()
+        headers = {
+            "Origin": "http://127.0.0.1:8000",
+            "Referer": "http://127.0.0.1:8000/missoes",
+            "X-CSRF-Token": token,
+        }
+        resp_b = client.post("/api/missoes/executar", json={
+            "manifest_path": str(lab_env["manifest_path"]),
+            "confirmacao_po": True,
+            "csrf_token": token,
+        }, headers=headers)
+        assert resp_b.status_code == 409, f"Esperava 409 Conflict, recebeu {resp_b.status_code}: {resp_b.text}"
+        assert "Trava local detectada em disco" in resp_b.json()["detail"] or "Já existe uma missão ativa" in resp_b.json()["detail"]
+
+    finally:
+        # Limpeza defensiva do subprocesso criado pelo teste
+        if proc_filho.poll() is None:
+            proc_filho.kill()
+            proc_filho.wait(timeout=2)
+        reset_services()
 
 
 
