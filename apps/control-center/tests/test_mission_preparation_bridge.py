@@ -690,6 +690,10 @@ def test_api_preflight_consulta_manifesto_existente(repo_fonte_simulado):
         data_dir=repo_fonte_simulado["data_dir"],
     )
 
+    app = create_app()
+    app.dependency_overrides[get_preparation_service] = lambda: svc
+    client = TestClient(app, base_url="http://127.0.0.1:8000")
+
     with patch.object(
         svc,
         "verificar_ferramentas_locais",
@@ -704,14 +708,10 @@ def test_api_preflight_consulta_manifesto_existente(repo_fonte_simulado):
             confirmacao_po=True,
         )
 
-    app = create_app()
-    app.dependency_overrides[get_preparation_service] = lambda: svc
-    client = TestClient(app, base_url="http://127.0.0.1:8000")
-
-    resp = client.get(
-        "/api/missoes/preflight",
-        params={"manifest_path": resultado_prep.manifest_path},
-    )
+        resp = client.get(
+            "/api/missoes/preflight",
+            params={"manifest_path": resultado_prep.manifest_path},
+        )
     assert resp.status_code == 200
     dados = resp.json()
     assert dados["apto"] is True
