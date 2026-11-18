@@ -164,6 +164,34 @@ class MissionPreparationService:
             "-c",
             "filter.lfs.required=false",
         ]
+
+        # P1-A residual: Neutraliza dinamicamente drivers de filtro arbitrários configurados
+        try:
+            proc_cfg = subprocess.run(
+                ["git", "config", "--name-only", "--get-regexp", r"^filter\."],
+                cwd=cwd,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc_cfg.returncode == 0 and proc_cfg.stdout.strip():
+                drivers = set()
+                for linha in proc_cfg.stdout.strip().splitlines():
+                    partes = linha.split(".")
+                    if len(partes) >= 2 and partes[0] == "filter":
+                        drivers.add(partes[1])
+                for d in sorted(drivers):
+                    if d != "lfs":
+                        safe_opts.extend([
+                            "-c", f"filter.{d}.smudge=",
+                            "-c", f"filter.{d}.clean=",
+                            "-c", f"filter.{d}.process=",
+                            "-c", f"filter.{d}.required=false",
+                        ])
+        except Exception:
+            pass
+
         env = os.environ.copy()
         env["GIT_CONFIG_NOSYSTEM"] = "1"
         return subprocess.run(
@@ -179,20 +207,49 @@ class MissionPreparationService:
             check=False,
         )
 
+    def _verificar_filtros_externos(self, repo: Path) -> None:
+        """Verifica de forma fail-closed se existem drivers de filtro Git externos personalizados configurados (P1-A)."""
+        proc = self._executar_git_seguro(
+            repo, "config", "--get-regexp", r"^filter\..*\.(smudge|clean|process)"
+        )
+        if proc.returncode == 0 and proc.stdout.strip():
+            linhas = proc.stdout.strip().splitlines()
+            filtros_inseguros = []
+            for linha in linhas:
+                partes = linha.split(None, 1)
+                if partes:
+                    chave = partes[0]
+                    valor = partes[1].strip() if len(partes) > 1 else ""
+                    if valor and not chave.startswith("filter.lfs."):
+                        filtros_inseguros.append(chave)
+            if filtros_inseguros:
+                raise PreparationValidationError(
+                    f"Filtro Git externo personalizado configurado detectado: {filtros_inseguros}. "
+                    "A preparação de missões recusa bases com drivers de filtro Git externos personalizados "
+                    "(fail-closed) para impedir execução arbitrária de código durante checkout/smudge/process."
+                )
+
     def _rollback_recursos_missao(
         self,
         m_id: str,
         worktree_dir: Path,
         branch_name: str,
         manifest_path: Path,
+        *,
+        branch_criada_nesta_tentativa: bool = False,
+        worktree_criada_nesta_tentativa: bool = False,
     ) -> None:
-        """Executa rollback estrito de recursos pertencentes exclusivamente a esta missão (P1-A)."""
+        """Executa rollback estrito de recursos pertencentes exclusivamente a esta missão (P1-A/P1-C)."""
         nome_esperado_wt = f"CH-Lab-{m_id}"
         nome_esperado_manifest = f"CH-Manifest-{m_id}.json"
         nome_esperado_branch = f"ch-lab/{m_id.lower()}"
 
-        # 1. Limpeza da worktree (apenas se corresponder ao nome esperado e estiver sob labs_root)
-        if worktree_dir.name == nome_esperado_wt and worktree_dir.parent.resolve() == self.labs_root.resolve():
+        # 1. Limpeza da worktree (apenas se foi comprovadamente criada nesta tentativa)
+        if (
+            worktree_criada_nesta_tentativa
+            and worktree_dir.name == nome_esperado_wt
+            and worktree_dir.parent.resolve() == self.labs_root.resolve()
+        ):
             try:
                 res_list = self._executar_git_seguro(self.source_repo, "worktree", "list", "--porcelain")
                 if res_list.returncode == 0 and str(worktree_dir) in res_list.stdout:
@@ -212,8 +269,8 @@ class MissionPreparationService:
             except Exception:
                 pass
 
-        # 2. Limpeza da branch (apenas se for exatamente a branch temporária da missão)
-        if branch_name == nome_esperado_branch:
+        # 2. Limpeza da branch (P1-C: apenas se for comprovadamente criada nesta tentativa e coincidir com a missão)
+        if branch_criada_nesta_tentativa and branch_name == nome_esperado_branch:
             try:
                 res_b = self._executar_git_seguro(
                     self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
@@ -612,6 +669,9 @@ class MissionPreparationService:
         if not test_files:
             raise PreparationValidationError("Nenhum arquivo de teste 'test_*.py' encontrado em 'tests/'.")
 
+        # P1-A residual: Validação fail-closed contra filtros Git externos personalizados configurados
+        self._verificar_filtros_externos(self.source_repo)
+
         with self._prep_lock:
             # P2: Fail-closed antecipado: bloqueia ANTES de criar worktree, branch ou manifesto se houver lock
             if self.verificar_lock_ativo():
@@ -629,10 +689,24 @@ class MissionPreparationService:
             branch_name = f"ch-lab/{m_id.lower()}"
             manifest_path = self.labs_root / f"CH-Manifest-{m_id}.json"
 
+            # P1-C: Detecção antecipada de colisão de worktree, manifesto E branch
             if worktree_dir.exists():
                 raise PreparationConflictError(f"Diretório de laboratório '{worktree_dir}' já existe.")
             if manifest_path.exists():
                 raise PreparationConflictError(f"Manifesto '{manifest_path}' já existe.")
+
+            res_branch_preexistente = self._executar_git_seguro(
+                self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
+            )
+            if res_branch_preexistente.returncode == 0:
+                raise PreparationConflictError(
+                    f"Branch temporária '{branch_name}' já existe no repositório. "
+                    "Escolha outro identificador de missão ou limpe a missão anterior."
+                )
+
+            # Rastreamento explícito de propriedade para garantir que rollback não toque em recursos alheios
+            branch_criada_nesta_tentativa = False
+            worktree_criada_nesta_tentativa = False
 
             try:
                 # 10. Criação do Laboratório Git descartável via worktree
@@ -647,9 +721,21 @@ class MissionPreparationService:
                     head_commit,
                 )
                 if res_wt.returncode != 0:
+                    # Se git falhou mas criou recursos parcialmente, marca para rollback estrito
+                    res_b_pos = self._executar_git_seguro(
+                        self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
+                    )
+                    if res_b_pos.returncode == 0:
+                        branch_criada_nesta_tentativa = True
+                    if worktree_dir.exists():
+                        worktree_criada_nesta_tentativa = True
+
                     raise MissionPreparationError(
                         f"Falha ao criar worktree descartável '{worktree_dir.name}': {sanitizar_log(res_wt.stderr)}"
                     )
+
+                branch_criada_nesta_tentativa = True
+                worktree_criada_nesta_tentativa = True
 
                 # 11. Escrita do Prompt versionado dentro do laboratório
                 prompt_filename = "prompt_missao.txt"
@@ -735,8 +821,15 @@ class MissionPreparationService:
                 temp_manifest.replace(manifest_path)
 
             except Exception:
-                # P1-A: Rollback estrito de worktree, branch e manifesto mesmo após falha parcial do git
-                self._rollback_recursos_missao(m_id, worktree_dir, branch_name, manifest_path)
+                # P1-A/P1-C: Rollback estrito de worktree, branch e manifesto comprovadamente criados nesta tentativa
+                self._rollback_recursos_missao(
+                    m_id,
+                    worktree_dir,
+                    branch_name,
+                    manifest_path,
+                    branch_criada_nesta_tentativa=branch_criada_nesta_tentativa,
+                    worktree_criada_nesta_tentativa=worktree_criada_nesta_tentativa,
+                )
                 raise
 
         # 15. Executa preflight determinístico real no manifesto recém-gerado

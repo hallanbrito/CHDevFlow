@@ -980,3 +980,150 @@ def test_preflight_bloqueia_se_teste_referenciado_ausente_do_laboratorio_ou_snap
     assert res_adulterado.apto is False
     assert res_adulterado.status == "BLOQUEADO"
     assert any("reprovada" in m.lower() or "ausente" in m.lower() for m in res_adulterado.motivos_bloqueio)
+
+
+def test_preparacao_rejeita_filtros_git_externos_personalizados_smudge_e_process(repo_fonte_simulado, tmp_path):
+    """Comprova recusa fail-closed de checkout em bases com filtros externos configurados (P1-A residual)."""
+    repo = repo_fonte_simulado["repo"]
+    marcador_smudge = tmp_path / "smudge_executado.txt"
+
+    # Configura .gitattributes no repositório fonte e commita antes de ativar o driver
+    gitattrs = repo / ".gitattributes"
+    gitattrs.write_text("arquivo_filtrado.txt filter=custom\n", encoding="utf-8")
+    arquivo_filtrado = repo / "arquivo_filtrado.txt"
+    arquivo_filtrado.write_text("conteudo para filtro", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Adiciona arquivo com atributo filter"], cwd=repo, check=True)
+
+    # Configura driver de filtro customizado no repositório fonte
+    subprocess.run(
+        ["git", "config", "filter.custom.smudge", f"echo 'executou smudge' > '{marcador_smudge.as_posix()}'"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "filter.custom.process", "echo 'executou process'"],
+        cwd=repo,
+        check=True,
+    )
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with pytest.raises(PreparationValidationError) as exc_info:
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Testar recusa fail-closed de filtros externos",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
+
+    msg = str(exc_info.value)
+    assert "Filtro Git externo personalizado configurado detectado" in msg or "fail-closed" in msg
+    assert not marcador_smudge.exists(), "Programa externo de filtro smudge NÃO deveria ter sido executado!"
+
+
+def test_preparacao_preserva_branch_preexistente_byte_a_byte_apos_colisao(repo_fonte_simulado):
+    """Comprova que branch ch-lab/<m_id> preexistente é preservada byte a byte (SHA) sem exclusão (P1-C)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+
+    # Cria previamente a branch com commit específico diferente de HEAD
+    subprocess.run(["git", "branch", "ch-lab/existing"], cwd=repo, check=True)
+    proc_sha = subprocess.run(
+        ["git", "rev-parse", "refs/heads/ch-lab/existing"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    sha_original = proc_sha.stdout.strip()
+    assert len(sha_original) == 40
+
+    # Garante que o diretório de laboratório não existe (cenário reproduzido por CH-1)
+    lab_ausente = labs_root / "CH-Lab-EXISTING"
+    assert not lab_ausente.exists()
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    # Tentativa de preparar com mission_id="EXISTING" colide com a branch preexistente
+    with pytest.raises(PreparationConflictError) as exc_info:
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Testar colisão com branch preexistente",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+            mission_id="EXISTING",
+        )
+
+    assert "já existe no repositório" in str(exc_info.value)
+
+    # 1. Branch preexistente deve permanecer intacta com o mesmo SHA exato (byte a byte)
+    proc_sha_pos = subprocess.run(
+        ["git", "rev-parse", "refs/heads/ch-lab/existing"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc_sha_pos.stdout.strip() == sha_original, "Branch preexistente foi adulterada ou excluída!"
+
+    # 2. Clone principal permanece limpo
+    proc_status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True)
+    assert proc_status.stdout.strip() == ""
+
+
+def test_rollback_nao_remove_branch_preexistente_sem_comprovacao_de_propriedade(repo_fonte_simulado):
+    """Comprova que _rollback_recursos_missao não remove branch se branch_criada_nesta_tentativa=False (P1-C)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+
+    subprocess.run(["git", "branch", "ch-lab/protegida"], cwd=repo, check=True)
+    proc_sha = subprocess.run(
+        ["git", "rev-parse", "refs/heads/ch-lab/protegida"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    sha_original = proc_sha.stdout.strip()
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    worktree_dir = labs_root / "CH-Lab-PROTEGIDA"
+    manifest_path = labs_root / "CH-Manifest-PROTEGIDA.json"
+
+    # Aciona rollback diretamente simulando falha onde a branch não foi criada nesta tentativa
+    svc._rollback_recursos_missao(
+        "PROTEGIDA",
+        worktree_dir,
+        "ch-lab/protegida",
+        manifest_path,
+        branch_criada_nesta_tentativa=False,
+        worktree_criada_nesta_tentativa=False,
+    )
+
+    # A branch DEVE continuar existindo com o mesmo SHA
+    proc_sha_pos = subprocess.run(
+        ["git", "rev-parse", "refs/heads/ch-lab/protegida"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert proc_sha_pos.returncode == 0
+    assert proc_sha_pos.stdout.strip() == sha_original
