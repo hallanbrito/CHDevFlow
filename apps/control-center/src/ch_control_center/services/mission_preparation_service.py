@@ -128,7 +128,108 @@ class MissionPreparationService:
             else obter_diretorio_dados_seguro()
         )
         self.lock_file = self.data_dir / "active_execution.lock"
+        self.safe_empty_hooks_dir = self.data_dir / "safe_empty_hooks"
+        self._obter_diretorio_hooks_vazio()
         self._prep_lock = threading.Lock()
+
+    def _obter_diretorio_hooks_vazio(self) -> Path:
+        """Garante e retorna um diretório estritamente vazio e controlado para core.hooksPath."""
+        self.safe_empty_hooks_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            for item in self.safe_empty_hooks_dir.iterdir():
+                if item.is_file() or item.is_symlink():
+                    item.unlink(missing_ok=True)
+                elif item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+        except Exception:
+            pass
+        return self.safe_empty_hooks_dir
+
+    def _executar_git_seguro(
+        self, cwd: Path, *args: str, timeout: float = 30.0
+    ) -> subprocess.CompletedProcess[str]:
+        """Executa comando Git inibindo hooks, fsmonitor e executores externos configuráveis (P1-A)."""
+        empty_hooks = self._obter_diretorio_hooks_vazio()
+        safe_opts = [
+            "-c",
+            f"core.hooksPath={empty_hooks.as_posix()}",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "filter.lfs.smudge=",
+            "-c",
+            "filter.lfs.clean=",
+            "-c",
+            "filter.lfs.process=",
+            "-c",
+            "filter.lfs.required=false",
+        ]
+        env = os.environ.copy()
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        return subprocess.run(
+            ["git", *safe_opts, *args],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            env=env,
+            check=False,
+        )
+
+    def _rollback_recursos_missao(
+        self,
+        m_id: str,
+        worktree_dir: Path,
+        branch_name: str,
+        manifest_path: Path,
+    ) -> None:
+        """Executa rollback estrito de recursos pertencentes exclusivamente a esta missão (P1-A)."""
+        nome_esperado_wt = f"CH-Lab-{m_id}"
+        nome_esperado_manifest = f"CH-Manifest-{m_id}.json"
+        nome_esperado_branch = f"ch-lab/{m_id.lower()}"
+
+        # 1. Limpeza da worktree (apenas se corresponder ao nome esperado e estiver sob labs_root)
+        if worktree_dir.name == nome_esperado_wt and worktree_dir.parent.resolve() == self.labs_root.resolve():
+            try:
+                res_list = self._executar_git_seguro(self.source_repo, "worktree", "list", "--porcelain")
+                if res_list.returncode == 0 and str(worktree_dir) in res_list.stdout:
+                    self._executar_git_seguro(self.source_repo, "worktree", "remove", "--force", str(worktree_dir))
+            except Exception:
+                pass
+            if worktree_dir.exists():
+                try:
+                    if worktree_dir.is_dir() and not worktree_dir.is_symlink():
+                        shutil.rmtree(worktree_dir, ignore_errors=True)
+                    else:
+                        worktree_dir.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            try:
+                self._executar_git_seguro(self.source_repo, "worktree", "prune")
+            except Exception:
+                pass
+
+        # 2. Limpeza da branch (apenas se for exatamente a branch temporária da missão)
+        if branch_name == nome_esperado_branch:
+            try:
+                res_b = self._executar_git_seguro(
+                    self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
+                )
+                if res_b.returncode == 0:
+                    self._executar_git_seguro(self.source_repo, "branch", "-D", branch_name)
+            except Exception:
+                pass
+
+        # 3. Limpeza do manifesto (apenas se for o manifesto desta missão sob labs_root)
+        if manifest_path.name == nome_esperado_manifest and manifest_path.parent.resolve() == self.labs_root.resolve():
+            try:
+                manifest_path.unlink(missing_ok=True)
+                manifest_path.with_suffix(".tmp").unlink(missing_ok=True)
+            except Exception:
+                pass
 
     @staticmethod
     def _localizar_repositorio_fonte() -> Path:
@@ -237,41 +338,69 @@ class MissionPreparationService:
     def _extrair_e_validar_referencia_testes(
         self, criterios_aceite: str, root: Path
     ) -> list[str]:
-        """Valida que os critérios de aceite referenciam testes independentes preexistentes e rastreados (P1)."""
-        # Extrai possíveis referências a arquivos de teste em tests/
-        padrao = re.compile(r"(?:tests[/\\])?([a-zA-Z0-9_/\\-]*test_[a-zA-Z0-9_]+\.py)")
+        """Valida que os critérios de aceite referenciam testes independentes presentes como blobs em HEAD (P1-B)."""
+        # P1-B: Regex canônica reconhece estritamente referências tests/**/test_*.py
+        padrao = re.compile(
+            r"(?:^|[\s\"'`(])(tests[/\\](?:[a-zA-Z0-9_-]+[/\\])*test_[a-zA-Z0-9_]+\.py)(?:$|[\s\"'`),:;])"
+        )
         encontrados = padrao.findall(criterios_aceite)
-
-        padrao_tests = re.compile(r"tests/([a-zA-Z0-9_/\\-]+\.py)")
-        encontrados.extend(padrao_tests.findall(criterios_aceite))
 
         testes_validos_rastreados: list[str] = []
 
         for ref in encontrados:
             ref_norm = ref.replace("\\", "/")
-            if not ref_norm.startswith("tests/"):
-                caminho_rel = f"tests/{ref_norm}"
-            else:
-                caminho_rel = ref_norm
+            partes = ref_norm.split("/")
+            if ".." in partes or "." in partes or any(not p for p in partes):
+                continue
+            if not ref_norm.startswith("tests/") or not ref_norm.endswith(".py"):
+                continue
+            if not partes[-1].startswith("test_"):
+                continue
 
-            caminho_completo = root / caminho_rel
-            if caminho_completo.is_file() and not caminho_completo.is_symlink():
-                # Confirma se o teste está efetivamente rastreado no Git
-                proc = _exec_git(root, "ls-files", "--error-unmatch", caminho_rel)
-                if proc.returncode == 0:
-                    if caminho_rel not in testes_validos_rastreados:
-                        testes_validos_rastreados.append(caminho_rel)
+            caminho_completo = root / ref_norm
+            # O arquivo deve existir fisicamente e não pode ser link simbólico
+            if not caminho_completo.is_file() or caminho_completo.is_symlink():
+                continue
+
+            # Confirma se o teste é estritamente um blob regular presente em HEAD (rejeita staged-only no index)
+            proc = self._executar_git_seguro(root, "ls-tree", "HEAD", ref_norm)
+            if proc.returncode == 0 and proc.stdout.strip():
+                linhas = proc.stdout.strip().splitlines()
+                for linha in linhas:
+                    campos = linha.split()
+                    if len(campos) >= 2:
+                        modo, tipo = campos[0], campos[1]
+                        if tipo == "blob" and modo in ("100644", "100755"):
+                            if ref_norm not in testes_validos_rastreados:
+                                testes_validos_rastreados.append(ref_norm)
+                            break
 
         if not testes_validos_rastreados:
             raise PreparationValidationError(
                 "Critérios de aceite devem referenciar explicitamente pelo menos um arquivo de teste "
-                "independente preexistente e rastreado no Git sob 'tests/' (ex: tests/test_modulo.py). "
+                "independente preexistente e presente como blob regular em HEAD sob 'tests/**/test_*.py' "
+                "(ex: tests/test_modulo.py). Arquivos staged-only no índice, helpers sem prefixo 'test_' "
+                "ou ausentes em HEAD são rejeitados. "
                 "Validação automatizada não atesta relevância ou cobertura; revisão humana mandatória."
             )
 
         return testes_validos_rastreados
 
-    def verificar_preflight(self, manifest_path: str | Path) -> PreflightResult:
+    @staticmethod
+    def _extrair_testes_do_prompt(prompt_txt: str) -> list[str]:
+        """Extrai a lista de testes rastreados prometidos no corpo do prompt versionado."""
+        achados = re.findall(r"-\s+`([^`]+)`", prompt_txt)
+        return [
+            a.strip().replace("\\", "/")
+            for a in achados
+            if a.strip().startswith("tests/") and a.strip().endswith(".py")
+        ]
+
+    def verificar_preflight(
+        self,
+        manifest_path: str | Path,
+        testes_esperados: list[str] | None = None,
+    ) -> PreflightResult:
         """Executa pré-validação completa (contrato documental F6, git, lock e ferramentas)."""
         # P2: Preserva caminho sem chamar .resolve(), para manter detecção de symlink coerente com F6 e ExecutionService
         caminho_manifesto = Path(manifest_path).expanduser().absolute()
@@ -314,6 +443,7 @@ class MissionPreparationService:
         base_sha: str | None = None
         prompt_ref: str | None = None
         testes_count: int = 0
+        todos_testes_esperados = set(testes_esperados or [])
 
         # Validação mandatória pelo motor de preflight preexistente
         try:
@@ -327,8 +457,22 @@ class MissionPreparationService:
             prompt_ref = mission_obj.prompt_ref
             testes_count = len([k for k in snapshot if k != mission_obj.prompt_ref])
 
+            # P1-B: Extrai também referências prometidas gravadas no prompt da missão
+            todos_testes_esperados.update(self._extrair_testes_do_prompt(prompt_txt))
+
+            # P1-B: Confirma que CADA teste referenciado está presente no laboratório e integra o snapshot F6
+            for t in sorted(todos_testes_esperados):
+                t_posix = t.replace("\\", "/")
+                p_lab = root_path / t_posix
+                if not p_lab.is_file() or p_lab.is_symlink():
+                    motivos.append(f"Teste obrigatório '{t_posix}' ausente do laboratório ou é link simbólico.")
+                elif t_posix not in snapshot:
+                    motivos.append(
+                        f"Teste obrigatório '{t_posix}' não integra o snapshot de testes preexistentes do F6."
+                    )
+
             # Consulta branch atual do laboratório
-            res_branch = _exec_git(root_path, "branch", "--show-current")
+            res_branch = self._executar_git_seguro(root_path, "branch", "--show-current")
             if res_branch.returncode == 0:
                 branch = res_branch.stdout.strip()
 
@@ -441,13 +585,13 @@ class MissionPreparationService:
         if not self.source_repo.is_dir() or not (self.source_repo / ".git").exists():
             raise PreparationValidationError(f"Repositório fonte Git não localizado em '{self.source_repo}'.")
 
-        res_head = _exec_git(self.source_repo, "rev-parse", "--verify", "HEAD")
+        res_head = self._executar_git_seguro(self.source_repo, "rev-parse", "--verify", "HEAD")
         if res_head.returncode != 0:
             raise PreparationValidationError("Falha ao obter commit HEAD do repositório fonte.")
         head_commit = res_head.stdout.strip()
 
         # Valida origin do repositório fonte
-        res_remote = _exec_git(self.source_repo, "remote", "get-url", "origin")
+        res_remote = self._executar_git_seguro(self.source_repo, "remote", "get-url", "origin")
         origin_url = res_remote.stdout.strip() if res_remote.returncode == 0 else ""
         allowed_remotes = {
             f"https://github.com/{repo_limpo}",
@@ -490,24 +634,23 @@ class MissionPreparationService:
             if manifest_path.exists():
                 raise PreparationConflictError(f"Manifesto '{manifest_path}' já existe.")
 
-            # 10. Criação do Laboratório Git descartável via worktree
-            # Usa HEAD como base para criar branch temporária isolada
-            res_wt = _exec_git(
-                self.source_repo,
-                "worktree",
-                "add",
-                "-b",
-                branch_name,
-                str(worktree_dir),
-                head_commit,
-            )
-            if res_wt.returncode != 0:
-                raise MissionPreparationError(
-                    f"Falha ao criar worktree descartável '{worktree_dir.name}': {sanitizar_log(res_wt.stderr)}"
-                )
-
-            worktree_criada = True
             try:
+                # 10. Criação do Laboratório Git descartável via worktree
+                # Usa HEAD como base; neutraliza hooks, fsmonitor e executores configuráveis (P1-A)
+                res_wt = self._executar_git_seguro(
+                    self.source_repo,
+                    "worktree",
+                    "add",
+                    "-b",
+                    branch_name,
+                    str(worktree_dir),
+                    head_commit,
+                )
+                if res_wt.returncode != 0:
+                    raise MissionPreparationError(
+                        f"Falha ao criar worktree descartável '{worktree_dir.name}': {sanitizar_log(res_wt.stderr)}"
+                    )
+
                 # 11. Escrita do Prompt versionado dentro do laboratório
                 prompt_filename = "prompt_missao.txt"
                 prompt_path = worktree_dir / prompt_filename
@@ -536,11 +679,11 @@ class MissionPreparationService:
                 prompt_path.write_text(conteudo_prompt, encoding="utf-8")
 
                 # 12. Commit temporário na branch descartável para garantir worktree limpa (requisito F6)
-                res_add = _exec_git(worktree_dir, "add", prompt_filename)
+                res_add = self._executar_git_seguro(worktree_dir, "add", prompt_filename)
                 if res_add.returncode != 0:
                     raise MissionPreparationError("Falha ao registrar prompt no Git do laboratório.")
 
-                res_commit = _exec_git(
+                res_commit = self._executar_git_seguro(
                     worktree_dir,
                     "-c",
                     "user.name=CHDevFlow Preparer",
@@ -554,14 +697,22 @@ class MissionPreparationService:
                     raise MissionPreparationError("Falha ao versionar prompt na branch temporária.")
 
                 # 13. Obtenção do SHA base com o prompt commitado e verificação de worktree limpa
-                res_base = _exec_git(worktree_dir, "rev-parse", "--verify", "HEAD")
+                res_base = self._executar_git_seguro(worktree_dir, "rev-parse", "--verify", "HEAD")
                 if res_base.returncode != 0:
                     raise MissionPreparationError("Falha ao verificar SHA da branch temporária.")
                 base_sha_lab = res_base.stdout.strip()
 
-                res_status = _exec_git(worktree_dir, "status", "--porcelain", "--untracked-files=all")
+                res_status = self._executar_git_seguro(worktree_dir, "status", "--porcelain", "--untracked-files=all")
                 if res_status.stdout.strip() != "":
                     raise MissionPreparationError("Laboratório recém-criado não está em estado Git limpo.")
+
+                # P1-B: Verifica que cada teste referenciado existe fisicamente no laboratório
+                for t in testes_referenciados:
+                    p_teste_lab = worktree_dir / t
+                    if not p_teste_lab.is_file() or p_teste_lab.is_symlink():
+                        raise MissionPreparationError(
+                            f"Falha de integridade: teste referenciado '{t}' não existe no laboratório criado."
+                        )
 
                 # 14. Geração do Manifesto manual/v1 fora da worktree
                 dados_manifesto = {
@@ -584,15 +735,11 @@ class MissionPreparationService:
                 temp_manifest.replace(manifest_path)
 
             except Exception:
-                # Em caso de falha durante a preparação, limpa a worktree criada para evitar arquivos órfãos
-                if worktree_criada and worktree_dir.is_dir():
-                    _exec_git(self.source_repo, "worktree", "remove", "--force", str(worktree_dir))
-                    _exec_git(self.source_repo, "branch", "-D", branch_name)
-                    if manifest_path.exists():
-                        manifest_path.unlink(missing_ok=True)
+                # P1-A: Rollback estrito de worktree, branch e manifesto mesmo após falha parcial do git
+                self._rollback_recursos_missao(m_id, worktree_dir, branch_name, manifest_path)
                 raise
 
         # 15. Executa preflight determinístico real no manifesto recém-gerado
-        resultado = self.verificar_preflight(manifest_path)
+        resultado = self.verificar_preflight(manifest_path, testes_esperados=testes_referenciados)
         resultado.testes_referenciados = testes_referenciados
         return resultado

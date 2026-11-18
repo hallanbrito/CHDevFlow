@@ -719,3 +719,264 @@ def test_api_preflight_consulta_manifesto_existente(repo_fonte_simulado):
     assert dados["target_file"] == repo_fonte_simulado["target_rel"]
     assert dados["cost_verified"] is False
     assert dados["sem_consumo_agentes"] is True
+
+
+def test_preparacao_inibe_hooks_adversariais_git(repo_fonte_simulado, tmp_path):
+    """Comprova neutralização de hooks post-checkout e pre-commit durante a preparação (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    hooks_dir = repo / ".git" / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+
+    sentinela_checkout = tmp_path / "post_checkout_fired.txt"
+    sentinela_commit = tmp_path / "pre_commit_fired.txt"
+
+    # Hook adversarial post-checkout
+    hook_post_checkout = hooks_dir / "post-checkout"
+    hook_post_checkout.write_text(
+        f"#!/bin/sh\necho 'HOOK POST-CHECKOUT' > '{sentinela_checkout.as_posix()}'\nexit 0\n",
+        encoding="utf-8",
+    )
+
+    # Hook adversarial pre-commit
+    hook_pre_commit = hooks_dir / "pre-commit"
+    hook_pre_commit.write_text(
+        f"#!/bin/sh\necho 'HOOK PRE-COMMIT' > '{sentinela_commit.as_posix()}'\nexit 0\n",
+        encoding="utf-8",
+    )
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": True, "codex": True, "python": True},
+    ):
+        resultado = svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Testar neutralização de hooks adversariais",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
+
+    assert resultado.apto is True
+    assert not sentinela_checkout.exists(), "Hook post-checkout NÃO deveria ter sido executado!"
+    assert not sentinela_commit.exists(), "Hook pre-commit NÃO deveria ter sido executado!"
+
+
+def test_rollback_apos_falha_parcial_worktree_add(repo_fonte_simulado):
+    """Comprova rollback estrito de branch e worktree após falha parcial de worktree add (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+
+    # Cria recurso legítimo de terceiro em labs_root que não deve ser tocado
+    outro_lab = labs_root / "CH-Lab-OUTRA-MISSAO"
+    outro_lab.mkdir(parents=True)
+    arquivo_terceiro = outro_lab / "dados_importantes.txt"
+    arquivo_terceiro.write_text("conteúdo legítimo de outra missão", encoding="utf-8")
+
+    # Cria branch legítima de outro desenvolvedor que não deve ser tocada
+    subprocess.run(["git", "branch", "branch-de-terceiro"], cwd=repo, check=True)
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    original_exec = svc._executar_git_seguro
+
+    # Simula falha parcial: git cria a branch e cria arquivos na pasta, mas aborta com erro
+    def fake_exec_git(cwd, *args, **kwargs):
+        if len(args) >= 2 and args[0] == "worktree" and args[1] == "add":
+            # args: ("worktree", "add", "-b", branch_name, worktree_dir, head_commit)
+            b_name = args[3]
+            wt_path = Path(args[4])
+            wt_path.mkdir(parents=True, exist_ok=True)
+            (wt_path / "arquivo_parcial.txt").write_text("parcial", encoding="utf-8")
+            subprocess.run(["git", "branch", b_name], cwd=repo, check=True)
+            return subprocess.CompletedProcess(
+                args=["git", *args],
+                returncode=1,
+                stdout="",
+                stderr="fatal: erro simulado de checkout parcial durante worktree add",
+            )
+        return original_exec(cwd, *args, **kwargs)
+
+    with patch.object(svc, "_executar_git_seguro", side_effect=fake_exec_git):
+        with pytest.raises(MissionPreparationError) as exc_info:
+            svc.preparar_missao(
+                issue=124,
+                repository="hallanbrito/CHDevFlow",
+                target_file=repo_fonte_simulado["target_rel"],
+                objetivo="Teste falha parcial",
+                criterios_aceite="pytest tests/test_modulo_alvo.py",
+                confirmacao_po=True,
+                mission_id="MISSAO-FALHA-PARCIAL",
+            )
+
+    assert "erro simulado de checkout parcial" in str(exc_info.value)
+
+    # 1. Branch efêmera da missão falhada deve ter sido limpa pelo rollback
+    proc_branch = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/heads/ch-lab/missao-falha-parcial"],
+        cwd=repo,
+        capture_output=True,
+    )
+    assert proc_branch.returncode != 0, "Branch da missão falhada deveria ter sido removida no rollback!"
+
+    # 2. Pasta temporária da missão falhada deve ter sido limpa pelo rollback
+    pasta_lab_falhada = labs_root / "CH-Lab-MISSAO-FALHA-PARCIAL"
+    assert not pasta_lab_falhada.exists(), "Diretório de worktree da missão falhada deveria ter sido removido!"
+
+    # 3. Recurso de terceiro em labs_root permaneceu intacto
+    assert outro_lab.is_dir()
+    assert arquivo_terceiro.read_text(encoding="utf-8") == "conteúdo legítimo de outra missão"
+
+    # 4. Branch de terceiro no repositório permaneceu intacta
+    proc_terceiro = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/heads/branch-de-terceiro"],
+        cwd=repo,
+        capture_output=True,
+    )
+    assert proc_terceiro.returncode == 0
+
+    # 5. Clone principal permaneceu limpo
+    proc_status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True)
+    assert proc_status.stdout.strip() == ""
+
+
+def test_criterios_aceite_rejeita_teste_apenas_staged(repo_fonte_simulado):
+    """Comprova que testes adicionados ao índice mas ausentes de HEAD são rejeitados (P1-B)."""
+    repo = repo_fonte_simulado["repo"]
+    teste_staged = repo / "tests" / "test_apenas_no_indice.py"
+    teste_staged.write_text("def test_staged(): pass\n", encoding="utf-8")
+
+    # Adiciona ao índice via git add, mas NÃO faz commit (staged-only)
+    subprocess.run(["git", "add", "tests/test_apenas_no_indice.py"], cwd=repo, check=True)
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with pytest.raises(PreparationValidationError) as exc_info:
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Testar rejeição de teste staged-only",
+            criterios_aceite="pytest tests/test_apenas_no_indice.py",
+            confirmacao_po=True,
+        )
+
+    msg = str(exc_info.value)
+    assert "presente como blob regular em HEAD" in msg or "rejeitados" in msg
+
+
+def test_criterios_aceite_rejeita_teste_removido_de_head(repo_fonte_simulado):
+    """Comprova rejeição de teste que foi removido no commit HEAD (P1-B)."""
+    repo = repo_fonte_simulado["repo"]
+    teste_removido = repo / "tests" / "test_temporario.py"
+    teste_removido.write_text("def test_temp(): pass\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tests/test_temporario.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Adiciona teste temporario"], cwd=repo, check=True)
+
+    # Agora remove o teste e commita a remoção
+    subprocess.run(["git", "rm", "tests/test_temporario.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Remove teste temporario"], cwd=repo, check=True)
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with pytest.raises(PreparationValidationError) as exc_info:
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Testar rejeição de teste removido de HEAD",
+            criterios_aceite="pytest tests/test_temporario.py",
+            confirmacao_po=True,
+        )
+
+    assert "devem referenciar explicitamente pelo menos um arquivo de teste" in str(exc_info.value)
+
+
+def test_criterios_aceite_rejeita_helper_sem_prefixo_test(repo_fonte_simulado):
+    """Comprova que arquivos em tests/ que não sejam test_*.py são rejeitados (P1-B)."""
+    repo = repo_fonte_simulado["repo"]
+    helper = repo / "tests" / "helper.py"
+    helper.write_text("def helper_fn(): pass\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tests/helper.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Adiciona helper.py"], cwd=repo, check=True)
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with pytest.raises(PreparationValidationError) as exc_info:
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Testar rejeição de helper sem test_",
+            criterios_aceite="pytest tests/helper.py",
+            confirmacao_po=True,
+        )
+
+    assert "devem referenciar explicitamente pelo menos um arquivo de teste" in str(exc_info.value)
+
+
+def test_preflight_bloqueia_se_teste_referenciado_ausente_do_laboratorio_ou_snapshot(repo_fonte_simulado):
+    """Comprova que preflight bloqueia se teste referenciado não integrar o snapshot F6 (P1-B)."""
+    svc = MissionPreparationService(
+        source_repo=repo_fonte_simulado["repo"],
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": True, "codex": True, "python": True},
+    ):
+        resultado = svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Missão teste snapshot",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
+
+    assert resultado.apto is True
+
+    # 1. Consulta com teste ausente do snapshot F6
+    res_consulta = svc.verificar_preflight(
+        resultado.manifest_path,
+        testes_esperados=["tests/test_inexistente_no_snapshot.py"],
+    )
+    assert res_consulta.apto is False
+    assert res_consulta.status == "BLOQUEADO"
+    assert any("Teste obrigatório 'tests/test_inexistente_no_snapshot.py' ausente" in m for m in res_consulta.motivos_bloqueio)
+
+    # 2. Simula adulteração física no laboratório (remoção de arquivo de teste)
+    lab_teste = Path(resultado.worktree) / "tests" / "test_modulo_alvo.py"
+    lab_teste.unlink()
+
+    # Preflight detecta violação de integridade / dirty worktree do F6 e bloqueia
+    res_adulterado = svc.verificar_preflight(resultado.manifest_path)
+    assert res_adulterado.apto is False
+    assert res_adulterado.status == "BLOQUEADO"
+    assert any("reprovada" in m.lower() or "ausente" in m.lower() for m in res_adulterado.motivos_bloqueio)
