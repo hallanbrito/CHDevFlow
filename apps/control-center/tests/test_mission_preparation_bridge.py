@@ -1,17 +1,18 @@
-"""Testes da preparação guiada de missões e preflight (CC-USO-01 / Issue #124).
+"""Testes da preparação guiada de missões e preflight (CC-USO-01 / Issue #124 / R1).
 
-Verifica integralmente os requisitos da Fatia A:
-- Preparação segura do laboratório descartável CH-Lab-*, prompt e manifesto manual/v1.
-- Validação real pelo motor _preflight determinístico de F6.
-- Preservação estrita do repositório principal (sem escritas ou commits na branch principal).
-- Preflight visual com estados APTO e BLOQUEADO e explicações auditáveis.
-- Testes adversariais: path traversal, target em tests/, arquivos não-Python, repos não permitidos,
-  symlinks, ausência de testes, lock ativo e falhas de CSRF/Host/Origin.
-- Ausência de chamadas a modelos ou agentes reais em CI.
+Verifica integralmente os requisitos da Fatia A e as correções de revisão R1:
+- P1: Isolamento estrito de labs_root (rejeição a labs_root igual ou interno ao repo fonte, preservando o clone principal).
+- P1: Validação de critérios de aceite vinculados explicitamente a testes preexistentes rastreados no Git.
+- P2: Paridade estrita de rejeição a symlinks de manifesto entre preflight e ExecutionService.
+- P2: Distinção entre status APTO e PREPARADO_SEM_CLI com alertas de não-verificação de autenticação/cotas.
+- P2: Bloqueio antecipado fail-closed por lock ativo sem mutação de arquivos ou criação de branches descartáveis.
+- Testes adversariais de path traversal, target em tests/, arquivos não-Python, CSRF e origem externa.
+- Preservação do contrato de F6 e ausência de chamadas a modelos em CI.
 """
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import subprocess
 from unittest.mock import patch
@@ -26,6 +27,10 @@ from ch_control_center.dependencies import (
     reset_services,
 )
 from ch_control_center.security import obter_csrf_token
+from ch_control_center.services.execution_service import (
+    ExecutionService,
+    ManifestValidationError,
+)
 from ch_control_center.services.mission_preparation_service import (
     MissionPreparationError,
     MissionPreparationService,
@@ -100,15 +105,21 @@ def test_preparar_missao_sucesso_preflight_apto(repo_fonte_simulado):
         data_dir=data_dir,
     )
 
-    resultado = svc.preparar_missao(
-        issue=124,
-        repository="hallanbrito/CHDevFlow",
-        target_file=target_rel,
-        objetivo="Implementar preparação guiada de missões na interface.",
-        criterios_aceite="pytest tests/test_modulo_alvo.py deve passar com 100% de sucesso.",
-        confirmacao_po=True,
-        timeout_segundos=480,
-    )
+    # Simula ferramentas CLIs disponíveis no host para prova completa de APTO
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": True, "codex": True, "python": True},
+    ):
+        resultado = svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=target_rel,
+            objetivo="Implementar preparação guiada de missões na interface.",
+            criterios_aceite="pytest tests/test_modulo_alvo.py deve passar com 100% de sucesso.",
+            confirmacao_po=True,
+            timeout_segundos=480,
+        )
 
     # 1. Valida resultado do preflight
     assert isinstance(resultado, PreflightResult)
@@ -119,6 +130,7 @@ def test_preparar_missao_sucesso_preflight_apto(repo_fonte_simulado):
     assert resultado.repository == "hallanbrito/CHDevFlow"
     assert resultado.target_file == target_rel
     assert resultado.testes_independentes_count >= 1
+    assert "tests/test_modulo_alvo.py" in resultado.testes_referenciados
     assert resultado.cost_verified is False
     assert resultado.os_isolation_verified is False
     assert resultado.test_execution == "host"
@@ -130,12 +142,12 @@ def test_preparar_missao_sucesso_preflight_apto(repo_fonte_simulado):
     assert worktree_path.is_dir()
     assert worktree_path.name.startswith("CH-Lab-")
 
-    # 3. Valida prompt versionado dentro do laboratório
+    # 3. Valida prompt versionado dentro do laboratório com testes rastreados
     prompt_file = worktree_path / "prompt_missao.txt"
     assert prompt_file.is_file()
     prompt_content = prompt_file.read_text(encoding="utf-8")
     assert "Implementar preparação guiada" in prompt_content
-    assert "pytest tests/test_modulo_alvo.py" in prompt_content
+    assert "tests/test_modulo_alvo.py" in prompt_content
 
     # 4. Valida estado Git limpo do laboratório
     proc_status = subprocess.run(
@@ -184,6 +196,239 @@ def test_preparar_missao_sucesso_preflight_apto(repo_fonte_simulado):
     assert target_f6 == target_rel
 
 
+def test_adversarial_rejeita_labs_root_no_repositorio_principal(repo_fonte_simulado):
+    """P1: Comprova bloqueio estrito quando labs_root contamina ou coincide com o repositório fonte."""
+    repo = repo_fonte_simulado["repo"]
+    data_dir = repo_fonte_simulado["data_dir"]
+
+    # Caso 1: labs_root é exatamente igual à raiz do clone principal
+    with pytest.raises(PreparationValidationError, match="não pode ser igual ao repositório principal"):
+        MissionPreparationService(
+            source_repo=repo,
+            labs_root=repo,
+            data_dir=data_dir,
+        )
+
+    # Caso 2: labs_root é uma subpasta dentro do clone principal
+    sub_pasta_insegura = repo / "CH-Labs-Contaminado"
+    with pytest.raises(PreparationValidationError, match="não pode estar contido no repositório principal"):
+        MissionPreparationService(
+            source_repo=repo,
+            labs_root=sub_pasta_insegura,
+            data_dir=data_dir,
+        )
+
+    # Comprova que o repositório fonte permanece 100% intocado
+    assert not sub_pasta_insegura.exists()
+    proc = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True)
+    assert proc.stdout.strip() == ""
+
+
+def test_adversarial_rejeita_criterios_sem_referencia_a_teste_rastreado(repo_fonte_simulado):
+    """P1: Comprova rejeição a critérios de aceite que não referenciam testes rastreados preexistentes."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+    data_dir = repo_fonte_simulado["data_dir"]
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=data_dir,
+    )
+
+    # Caso 1: Texto arbitrário que não cita arquivo de teste
+    with pytest.raises(PreparationValidationError, match="pelo menos um arquivo de teste"):
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Fazer funcionar perfeitamente",
+            criterios_aceite="O código deve estar sem erros e funcionando bem.",
+            confirmacao_po=True,
+        )
+
+    # Caso 2: Cita teste inexistente
+    with pytest.raises(PreparationValidationError, match="pelo menos um arquivo de teste"):
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Teste com arquivo fantasma",
+            criterios_aceite="pytest tests/test_inexistente_fantasma.py",
+            confirmacao_po=True,
+        )
+
+    # Caso 3: Cita teste que existe no disco mas NÃO está rastreado no Git
+    untracked_test = repo / "tests" / "test_nao_rastreado.py"
+    untracked_test.write_text("def test_x(): pass\n", encoding="utf-8")
+    with pytest.raises(PreparationValidationError, match="pelo menos um arquivo de teste"):
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Teste não rastreado",
+            criterios_aceite="pytest tests/test_nao_rastreado.py",
+            confirmacao_po=True,
+        )
+    untracked_test.unlink()
+
+
+def test_adversarial_preparacao_recusada_quando_lock_ativo_sem_mutacao(repo_fonte_simulado):
+    """P2: Comprova que lock ativo recusa preparação ANTES de criar worktree ou branch (sem mutação)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+    data_dir = repo_fonte_simulado["data_dir"]
+
+    # Cria trava ativa em disco
+    lock_file = data_dir / "active_execution.lock"
+    lock_file.write_text(json.dumps({"execution_id": "lock-ativo-teste", "pid": 99999}), encoding="utf-8")
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=data_dir,
+    )
+
+    # Tentativa de preparação deve falhar com PreparationConflictError antes de criar arquivos
+    with pytest.raises(PreparationConflictError, match="Trava de execução ativa em disco"):
+        svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Tentativa sob lock",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
+
+    # Comprova que nenhuma pasta CH-Lab-* e nenhum manifesto foram criados em labs_root
+    assert list(labs_root.glob("CH-Lab-*")) == []
+    assert list(labs_root.glob("CH-Manifest-*")) == []
+
+    # Comprova que nenhuma branch descartável foi criada no repositório fonte
+    proc_branches = subprocess.run(
+        ["git", "branch", "--list", "ch-lab/*"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc_branches.stdout.strip() == ""
+
+
+def test_preflight_rejeita_symlink_de_manifesto_paridade_execucao(repo_fonte_simulado, tmp_path):
+    """P2: Comprova que preflight visual e despacho rejeitam symlinks de manifesto com idêntica paridade."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+    data_dir = repo_fonte_simulado["data_dir"]
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=data_dir,
+    )
+
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": True, "codex": True, "python": True},
+    ):
+        resultado = svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Teste de symlink",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
+
+    manifest_real = Path(resultado.manifest_path)
+    assert manifest_real.is_file()
+
+    # Cria symlink apontando para o manifesto real (ou simula com patch caso o SO restrinja)
+    symlink_manifest = tmp_path / "symlink_manifesto.json"
+    symlink_real_criado = False
+    try:
+        symlink_manifest.symlink_to(manifest_real)
+        symlink_real_criado = True
+    except OSError:
+        symlink_manifest.write_text("{}", encoding="utf-8")
+
+    if symlink_real_criado:
+        # 1. Validação no Preflight do MissionPreparationService: deve recusar e acusar BLOQUEADO
+        resultado_preflight = svc.verificar_preflight(symlink_manifest)
+        assert resultado_preflight.apto is False
+        assert resultado_preflight.status == "BLOQUEADO"
+        assert any("simbolico" in m.lower() for m in resultado_preflight.motivos_bloqueio)
+
+        # 2. Validação no ExecutionService: deve rejeitar com ManifestValidationError
+        exec_svc = ExecutionService(
+            data_dir=data_dir,
+            labs_root=labs_root,
+        )
+        with pytest.raises(ManifestValidationError, match="arquivo regular existente"):
+            exec_svc.executar_missao(
+                manifest_path=symlink_manifest,
+                confirmacao_po=True,
+            )
+    else:
+        orig_is_symlink = Path.is_symlink
+        with patch.object(
+            Path,
+            "is_symlink",
+            autospec=True,
+            side_effect=lambda p: True if p.name == "symlink_manifesto.json" else orig_is_symlink(p),
+        ):
+            resultado_preflight = svc.verificar_preflight(symlink_manifest)
+            assert resultado_preflight.apto is False
+            assert resultado_preflight.status == "BLOQUEADO"
+            assert any("simbolico" in m.lower() for m in resultado_preflight.motivos_bloqueio)
+
+            exec_svc = ExecutionService(
+                data_dir=data_dir,
+                labs_root=labs_root,
+            )
+            with pytest.raises(ManifestValidationError, match="arquivo regular existente"):
+                exec_svc.executar_missao(
+                    manifest_path=symlink_manifest,
+                    confirmacao_po=True,
+                )
+
+
+def test_preflight_sem_cli_retorna_preparado_sem_cli(repo_fonte_simulado):
+    """P2: Comprova que ausência de AGY/Codex no host retorna PREPARADO_SEM_CLI em vez de falso APTO."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+    data_dir = repo_fonte_simulado["data_dir"]
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=data_dir,
+    )
+
+    # Simula ambiente onde Git existe mas AGY e Codex não estão instalados
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": False, "codex": False, "python": True},
+    ):
+        resultado = svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Teste sem CLIs",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
+
+    assert resultado.apto is False
+    assert resultado.status == "PREPARADO_SEM_CLI"
+    assert any("AGY" in m for m in resultado.motivos_bloqueio)
+    assert any("Codex" in m for m in resultado.motivos_bloqueio)
+    # Alerta mandatório de autenticação não verificada
+    assert any("autenticacao_clis=nao_verificada" in a for a in resultado.avisos_seguranca)
+
+
 def test_adversarial_rejeita_path_traversal(repo_fonte_simulado):
     """Comprova rejeição a tentativas de path traversal (../, \\, /, coringas)."""
     repo = repo_fonte_simulado["repo"]
@@ -210,7 +455,7 @@ def test_adversarial_rejeita_path_traversal(repo_fonte_simulado):
                 repository="hallanbrito/CHDevFlow",
                 target_file=caminho,
                 objetivo="Teste de segurança",
-                criterios_aceite="pytest tests/",
+                criterios_aceite="pytest tests/test_modulo_alvo.py",
                 confirmacao_po=True,
             )
 
@@ -230,7 +475,7 @@ def test_adversarial_rejeita_alvo_em_tests_ou_nao_python(repo_fonte_simulado):
             repository="hallanbrito/CHDevFlow",
             target_file="tests/test_modulo_alvo.py",
             objetivo="Alvo em tests",
-            criterios_aceite="pytest tests/",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
             confirmacao_po=True,
         )
 
@@ -240,7 +485,7 @@ def test_adversarial_rejeita_alvo_em_tests_ou_nao_python(repo_fonte_simulado):
             repository="hallanbrito/CHDevFlow",
             target_file="src/chdevflow/core/script.sh",
             objetivo="Alvo não-python",
-            criterios_aceite="pytest tests/",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
             confirmacao_po=True,
         )
 
@@ -260,7 +505,7 @@ def test_adversarial_rejeita_repositorio_nao_autorizado(repo_fonte_simulado):
             repository="outro_usuario/malicioso",
             target_file=repo_fonte_simulado["target_rel"],
             objetivo="Repo externo",
-            criterios_aceite="pytest tests/",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
             confirmacao_po=True,
         )
 
@@ -280,7 +525,7 @@ def test_adversarial_rejeita_sem_confirmacao_po(repo_fonte_simulado):
             repository="hallanbrito/CHDevFlow",
             target_file=repo_fonte_simulado["target_rel"],
             objetivo="Sem autorização",
-            criterios_aceite="pytest tests/",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
             confirmacao_po=False,
         )
 
@@ -300,7 +545,7 @@ def test_adversarial_rejeita_issue_ou_criterios_invalidos(repo_fonte_simulado):
             repository="hallanbrito/CHDevFlow",
             target_file=repo_fonte_simulado["target_rel"],
             objetivo="Issue zero",
-            criterios_aceite="pytest tests/",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
             confirmacao_po=True,
         )
 
@@ -313,39 +558,6 @@ def test_adversarial_rejeita_issue_ou_criterios_invalidos(repo_fonte_simulado):
             criterios_aceite="   ",
             confirmacao_po=True,
         )
-
-
-def test_preflight_detecta_lock_ativo(repo_fonte_simulado):
-    """Comprova que preflight marca BLOQUEADO quando há trava ativa no host."""
-    repo = repo_fonte_simulado["repo"]
-    labs_root = repo_fonte_simulado["labs_root"]
-    data_dir = repo_fonte_simulado["data_dir"]
-
-    # Cria trava ativa em disco
-    lock_file = data_dir / "active_execution.lock"
-    lock_file.write_text(json.dumps({"execution_id": "lock-teste-124", "pid": 12345}), encoding="utf-8")
-
-    svc = MissionPreparationService(
-        source_repo=repo,
-        labs_root=labs_root,
-        data_dir=data_dir,
-    )
-
-    # 1. Prepara a missão (cria worktree e manifesto)
-    resultado = svc.preparar_missao(
-        issue=124,
-        repository="hallanbrito/CHDevFlow",
-        target_file=repo_fonte_simulado["target_rel"],
-        objetivo="Missão sob lock",
-        criterios_aceite="pytest tests/",
-        confirmacao_po=True,
-    )
-
-    # O preflight deve acusar BLOQUEADO devido à trava ativa
-    assert resultado.apto is False
-    assert resultado.status == "BLOQUEADO"
-    assert resultado.lock_ativo is True
-    assert any("active_execution.lock" in m for m in resultado.motivos_bloqueio)
 
 
 def test_api_preparar_missao_sucesso_via_json(repo_fonte_simulado):
@@ -383,7 +595,13 @@ def test_api_preparar_missao_sucesso_via_json(repo_fonte_simulado):
         "csrf_token": token,
     }
 
-    resp = client.post("/api/missoes/preparar", json=payload, headers=headers)
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": True, "codex": True, "python": True},
+    ):
+        resp = client.post("/api/missoes/preparar", json=payload, headers=headers)
+
     assert resp.status_code == 201
     dados = resp.json()
     assert dados["apto"] is True
@@ -419,7 +637,7 @@ def test_api_preparar_missao_rejeita_csrf_invalido(repo_fonte_simulado):
         "repository": "hallanbrito/CHDevFlow",
         "target_file": repo_fonte_simulado["target_rel"],
         "objetivo": "Ataque CSRF",
-        "criterios_aceite": "pytest tests/",
+        "criterios_aceite": "pytest tests/test_modulo_alvo.py",
         "confirmacao_po": True,
         "csrf_token": "token_falso_invalido",
     }
@@ -454,7 +672,7 @@ def test_api_preparar_missao_rejeita_origem_externa(repo_fonte_simulado):
         "repository": "hallanbrito/CHDevFlow",
         "target_file": repo_fonte_simulado["target_rel"],
         "objetivo": "Ataque externo",
-        "criterios_aceite": "pytest tests/",
+        "criterios_aceite": "pytest tests/test_modulo_alvo.py",
         "confirmacao_po": True,
         "csrf_token": token,
     }
@@ -472,14 +690,19 @@ def test_api_preflight_consulta_manifesto_existente(repo_fonte_simulado):
         data_dir=repo_fonte_simulado["data_dir"],
     )
 
-    resultado_prep = svc.preparar_missao(
-        issue=124,
-        repository="hallanbrito/CHDevFlow",
-        target_file=repo_fonte_simulado["target_rel"],
-        objetivo="Teste consulta preflight",
-        criterios_aceite="pytest tests/test_modulo_alvo.py",
-        confirmacao_po=True,
-    )
+    with patch.object(
+        svc,
+        "verificar_ferramentas_locais",
+        return_value={"git": True, "agy": True, "codex": True, "python": True},
+    ):
+        resultado_prep = svc.preparar_missao(
+            issue=124,
+            repository="hallanbrito/CHDevFlow",
+            target_file=repo_fonte_simulado["target_rel"],
+            objetivo="Teste consulta preflight",
+            criterios_aceite="pytest tests/test_modulo_alvo.py",
+            confirmacao_po=True,
+        )
 
     app = create_app()
     app.dependency_overrides[get_preparation_service] = lambda: svc

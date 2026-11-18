@@ -122,14 +122,14 @@
       <textarea id="prep-objetivo" name="objetivo" rows="2" placeholder="Descreva de forma clara e concisa a alteração esperada no arquivo alvo..." style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required></textarea>
     </div>
 
-    <!-- Critérios de Aceite e Testes Preexistentes -->
+    <!-- Critérios de Aceite e Testes Preexistentes (P1) -->
     <div>
       <label for="prep-criterios" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
-        CRITÉRIOS DE ACEITE E TESTES INDEPENDENTES PREEXISTENTES:
+        CRITÉRIOS DE ACEITE E REFERÊNCIA A TESTES INDEPENDENTES PREEXISTENTES (P1):
       </label>
-      <textarea id="prep-criterios" name="criterios_aceite" rows="2" placeholder="Indique os critérios objetivos e aponte os testes preexistentes em tests/ (ex: pytest tests/test_ch_pipe_01_f6_generic_cycle.py)..." style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required></textarea>
+      <textarea id="prep-criterios" name="criterios_aceite" rows="2" placeholder="Obrigatório referenciar explicitamente pelo menos um arquivo de teste em tests/ (ex: pytest tests/test_modulo_alvo.py)..." style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required></textarea>
       <small style="font-size: 0.7rem; color: var(--text-muted);">
-        Governança F6: não inventamos testes automáticos como substitutos de critérios humanos. Testes preexistentes em <code>tests/</code> são obrigatórios.
+        Governança F6 (P1): obrigatório referenciar teste preexistente rastreado em <code>tests/</code>. A validação comprova presença física e imutabilidade dos testes na worktree, mas <strong>não atesta relevância ou cobertura</strong>; revisão humana mandatória pelo PO.
       </small>
     </div>
 
@@ -587,7 +587,7 @@ function renderizarPreflight(data) {
     badge.textContent = '✓ APTO PARA DESPACHO';
     badge.style.background = '#16a34a';
     badge.style.color = 'white';
-    desc.textContent = 'A missão atende a todos os requisitos do contrato F6 e está elegível para despacho local com autorização individual do PO.';
+    desc.textContent = 'A missão atende a todos os requisitos do contrato F6 e as ferramentas obrigatórias estão presentes no host. Elegível para despacho local com autorização individual do PO.';
     bannerApto.style.display = 'block';
     containerBloqueios.style.display = 'none';
 
@@ -598,6 +598,30 @@ function renderizarPreflight(data) {
       manifestInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
       manifestInput.style.borderColor = '#16a34a';
       setTimeout(() => { manifestInput.style.borderColor = ''; }, 3000);
+    }
+  } else if (data.status === 'PREPARADO_SEM_CLI') {
+    badge.textContent = '⚠️ PREPARADO (CLI PENDENTE NO HOST)';
+    badge.style.background = '#d97706';
+    badge.style.color = 'white';
+    desc.textContent = 'Laboratório e manifesto gerados e validados pelo _preflight F6 com sucesso. Contudo, o despacho permanece retido pois ferramentas obrigatórias (AGY e/ou Codex) não foram localizadas no PATH do host.';
+    bannerApto.style.display = 'none';
+
+    const motivos = data.motivos_bloqueio || [];
+    if (motivos.length > 0) {
+      containerBloqueios.style.display = 'block';
+      listaBloqueios.innerHTML = '';
+      motivos.forEach(m => {
+        const li = document.createElement('li');
+        li.textContent = m;
+        listaBloqueios.appendChild(li);
+      });
+    } else {
+      containerBloqueios.style.display = 'none';
+    }
+
+    if (data.manifest_path) {
+      const manifestInput = document.getElementById('manifest-path-input');
+      manifestInput.value = data.manifest_path;
     }
   } else {
     badge.textContent = '⛔ BLOQUEADO PELO PREFLIGHT';

@@ -26,7 +26,7 @@ Na fatia original **CC-01**, a supervisão permanece somente leitura. A [PR #123
 4. **Central de Missões e Fatias W:** Tabela com busca textual instantânea, filtros por status e esteira (AGY, Codex, ChatGPT) e modal de inspeção detalhada.
 5. **Modo Estudante Didático (ADR-CC02-03):** Glossário contextual do Método C.H., diagrama explicativo dos 9 estados da máquina de governança e detalhamento das 5 invariantes inegociáveis.
 6. **Modo Demonstração Offline (RF-06):** Alternância transparente com um clique entre o snapshot de demonstração offline (`DEMO_OFFLINE`) e o GitHub Project #2 (`LIVE_GITHUB`), com banner de aviso explícito.
-7. **Testes da versão atual:** suíte Control Center **153 passed, 1 warning** em 17/11/2026, incluindo a preparação guiada de missões e preflight F6 (Issue #124 / Fatia A); regressão P1 aprovada; piloto real CC-123 com **3/3** testes independentes, Codex textual `APROVAR_LAB`.
+7. **Testes da versão atual:** suíte Control Center **157 passed, 1 warning** em 17/11/2026, incluindo a preparação guiada de missões, preflight F6 e revisões R1 (Issue #124 / Fatia A); regressões P1 e P2 aprovadas; piloto real CC-123 com **3/3** testes independentes, Codex textual `APROVAR_LAB`.
 
 ---
 

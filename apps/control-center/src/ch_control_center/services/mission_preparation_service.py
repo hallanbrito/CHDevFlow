@@ -2,20 +2,24 @@
 
 Responsabilidades:
 - Validação estrita de escopo, permissões, repositório e caminho único Python (.py).
+- Isolamento absoluto da pasta de laboratórios em relação ao clone principal (P1).
+- Validação de que os critérios de aceite referenciam testes preexistentes rastreados no Git (P1).
 - Criação segura de laboratório descartável Git `CH-Lab-*` em branch temporária,
   sem modificar ou escrever arquivos no clone principal.
+- Bloqueio antecipado fail-closed se houver trava ativa no host, sem mutação de arquivos (P2).
 - Geração de prompt versionado e commit temporário na branch do laboratório
   para garantir estado Git limpo exigido pelo contrato de F6.
 - Geração de manifesto `manual/v1` em arquivo JSON externo à worktree.
-- Pré-validação determinística via `_preflight` do motor F6 preexistente.
+- Pré-validação determinística via `_preflight` do motor F6 preexistente,
+  rejeitando links simbólicos de manifesto com paridade ao despacho (P2).
 - Verificação de travas ativas/crash e inventário de ferramentas locais no host.
-- Retorno de status APTO ou BLOQUEADO com justificativas e alertas de segurança.
+- Distinção honesta entre APTO PARA DESPACHO e PREPARADO SEM CLI (P2).
+- Retorno de status auditável com justificativas e alertas de segurança.
 - Não aciona modelos (AGY/Codex), não executa merge, deploy ou escrita no Project #2.
 """
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -55,7 +59,7 @@ class PreparationConflictError(MissionPreparationError):
 @dataclass
 class PreflightResult:
     apto: bool
-    status: str  # "APTO" | "BLOQUEADO"
+    status: str  # "APTO" | "PREPARADO_SEM_CLI" | "BLOQUEADO"
     motivos_bloqueio: list[str] = field(default_factory=list)
     avisos_seguranca: list[str] = field(default_factory=list)
     mission_id: str | None = None
@@ -69,6 +73,7 @@ class PreflightResult:
     prompt_ref: str | None = None
     lock_ativo: bool = False
     testes_independentes_count: int = 0
+    testes_referenciados: list[str] = field(default_factory=list)
     ferramentas_cli: dict[str, bool] = field(default_factory=dict)
     cost_verified: bool = False
     os_isolation_verified: bool = False
@@ -114,6 +119,9 @@ class MissionPreparationService:
             if labs_root
             else Path(os.getenv("CH_CC_LABS_ROOT", str(Path.home() / "CHDevFlow-Labs"))).resolve()
         )
+        # P1: Validação preventiva de isolamento estrito logo na inicialização
+        self._validar_isolamento_labs_root(self.labs_root, self.source_repo)
+
         self.data_dir = (
             Path(data_dir).resolve()
             if data_dir
@@ -154,6 +162,27 @@ class MissionPreparationService:
             atual = atual.parent
 
         return Path.cwd().resolve()
+
+    @staticmethod
+    def _validar_isolamento_labs_root(labs_root: Path, source_repo: Path) -> None:
+        """Garante de forma estrita que a pasta de laboratórios não contamine o clone principal (P1)."""
+        lr = labs_root.resolve()
+        sr = source_repo.resolve()
+        if lr == sr:
+            raise PreparationValidationError(
+                f"Configuração insegura de labs_root: '{lr}' não pode ser igual ao repositório principal ('{sr}')."
+            )
+        if lr in sr.parents or sr in lr.parents:
+            raise PreparationValidationError(
+                f"Configuração insegura de labs_root: '{lr}' não pode estar contido no repositório principal ('{sr}') nem contê-lo."
+            )
+        try:
+            if lr.is_relative_to(sr) or sr.is_relative_to(lr):
+                raise PreparationValidationError(
+                    f"Configuração insegura de labs_root: '{lr}' não pode estar contido no repositório principal ('{sr}') nem contê-lo."
+                )
+        except AttributeError:
+            pass
 
     def verificar_ferramentas_locais(self) -> dict[str, bool]:
         """Verifica a presença das ferramentas de linha de comando no host (somente leitura, sem execução)."""
@@ -205,25 +234,76 @@ class MissionPreparationService:
 
         return alvo
 
+    def _extrair_e_validar_referencia_testes(
+        self, criterios_aceite: str, root: Path
+    ) -> list[str]:
+        """Valida que os critérios de aceite referenciam testes independentes preexistentes e rastreados (P1)."""
+        # Extrai possíveis referências a arquivos de teste em tests/
+        padrao = re.compile(r"(?:tests[/\\])?([a-zA-Z0-9_/\\-]*test_[a-zA-Z0-9_]+\.py)")
+        encontrados = padrao.findall(criterios_aceite)
+
+        padrao_tests = re.compile(r"tests/([a-zA-Z0-9_/\\-]+\.py)")
+        encontrados.extend(padrao_tests.findall(criterios_aceite))
+
+        testes_validos_rastreados: list[str] = []
+
+        for ref in encontrados:
+            ref_norm = ref.replace("\\", "/")
+            if not ref_norm.startswith("tests/"):
+                caminho_rel = f"tests/{ref_norm}"
+            else:
+                caminho_rel = ref_norm
+
+            caminho_completo = root / caminho_rel
+            if caminho_completo.is_file() and not caminho_completo.is_symlink():
+                # Confirma se o teste está efetivamente rastreado no Git
+                proc = _exec_git(root, "ls-files", "--error-unmatch", caminho_rel)
+                if proc.returncode == 0:
+                    if caminho_rel not in testes_validos_rastreados:
+                        testes_validos_rastreados.append(caminho_rel)
+
+        if not testes_validos_rastreados:
+            raise PreparationValidationError(
+                "Critérios de aceite devem referenciar explicitamente pelo menos um arquivo de teste "
+                "independente preexistente e rastreado no Git sob 'tests/' (ex: tests/test_modulo.py). "
+                "Validação automatizada não atesta relevância ou cobertura; revisão humana mandatória."
+            )
+
+        return testes_validos_rastreados
+
     def verificar_preflight(self, manifest_path: str | Path) -> PreflightResult:
         """Executa pré-validação completa (contrato documental F6, git, lock e ferramentas)."""
-        caminho_manifesto = Path(manifest_path).expanduser().resolve()
+        # P2: Preserva caminho sem chamar .resolve(), para manter detecção de symlink coerente com F6 e ExecutionService
+        caminho_manifesto = Path(manifest_path).expanduser().absolute()
         motivos: list[str] = []
         avisos: list[str] = [
             "⚠️ cost_verified=false: Custo não verificado pelo painel; operador deve comprovar ausência de custos antes de qualquer despacho.",
             "⚠️ os_isolation_verified=false: Isolamento de SO não comprovado; testes e alterações ocorrem no ambiente do host.",
             "⚠️ test_execution=host: Testes automatizados executam diretamente no host, sem sandbox de SO.",
+            "⚠️ autenticacao_clis=nao_verificada: Detecção de 'agy' e 'codex' comprova apenas presença no PATH do host, NÃO comprova autenticação, login ativo, permissões nem saldo/cotas.",
+            "ℹ️ testes_independentes: Validação F6 comprova presença física e imutabilidade dos testes na worktree, NÃO sua relevância, cobertura ou suficiência para o objetivo da missão. Aceite final exige revisão humana pelo PO.",
             "ℹ️ sem_consumo_agentes=true: Esta preparação e pré-validação não consumiram modelos, agentes ou cotas.",
             "ℹ️ auto_merge=false: Nenhum merge, deploy ou escrita no Project #2 é realizado.",
         ]
+
+        if caminho_manifesto.is_symlink():
+            motivos.append("Manifesto ausente ou link simbolico (symlinks rejeitados por segurança).")
 
         lock_ativo = self.verificar_lock_ativo()
         if lock_ativo:
             motivos.append("Trava de execução ativa em disco ('active_execution.lock') ou missão interrompida por crash.")
 
+        # P2: Verificação de ferramentas locais no host
         ferramentas = self.verificar_ferramentas_locais()
+        cli_pendente = False
         if not ferramentas.get("git"):
             motivos.append("Git não encontrado no PATH do sistema host.")
+        if not ferramentas.get("agy"):
+            cli_pendente = True
+            motivos.append("CLI AGY ('agy') não encontrada no PATH do host (necessária para execução F6).")
+        if not ferramentas.get("codex"):
+            cli_pendente = True
+            motivos.append("CLI Codex ('codex') não encontrada no PATH do host (necessária para auditoria F6).")
 
         mission_id: str | None = None
         issue: int | None = None
@@ -254,10 +334,22 @@ class MissionPreparationService:
 
         except Exception as exc:
             msg_erro = sanitizar_log(str(exc))
-            motivos.append(f"Validação _preflight F6 reprovada: {msg_erro}")
+            if "link simbolico" in msg_erro.lower() and "Manifesto ausente ou link simbolico" not in motivos:
+                motivos.append(f"Validação _preflight F6 reprovada: {msg_erro}")
+            elif not caminho_manifesto.is_symlink():
+                motivos.append(f"Validação _preflight F6 reprovada: {msg_erro}")
 
-        apto = (len(motivos) == 0)
-        status = "APTO" if apto else "BLOQUEADO"
+        # P2: Separa PREPARADO de APTO PARA DESPACHO
+        if len(motivos) == 0:
+            apto = True
+            status = "APTO"
+        elif cli_pendente and all(("CLI" in m or "não encontrada no PATH" in m) for m in motivos):
+            # Apenas faltam CLIs no host, mas a worktree e o manifesto estão válidos
+            apto = False
+            status = "PREPARADO_SEM_CLI"
+        else:
+            apto = False
+            status = "BLOQUEADO"
 
         return PreflightResult(
             apto=apto,
@@ -314,18 +406,21 @@ class MissionPreparationService:
         # 4. Validação do Arquivo Python-Alvo
         alvo_validado = self.validar_caminho_alvo(target_file, root=self.source_repo)
 
-        # 5. Validação do Objetivo e Critérios de Aceite
+        # 5. Validação do Objetivo
         obj_limpo = (objetivo or "").strip()
         if not obj_limpo:
             raise PreparationValidationError("Objetivo da missão é obrigatório.")
         if len(obj_limpo) > 4000:
             raise PreparationValidationError("Texto do objetivo excede 4000 caracteres.")
 
+        # P1: Validação de Critérios de Aceite com referência explícita a testes rastreados
         crit_limpo = (criterios_aceite or "").strip()
         if not crit_limpo:
             raise PreparationValidationError("Critérios de aceite / testes independentes preexistentes são obrigatórios.")
         if len(crit_limpo) > 4000:
             raise PreparationValidationError("Texto dos critérios de aceite excede 4000 caracteres.")
+
+        testes_referenciados = self._extrair_e_validar_referencia_testes(crit_limpo, self.source_repo)
 
         # 6. Validação do Timeout
         if not isinstance(timeout_segundos, int) or not (TIMEOUT_MINIMO <= timeout_segundos <= TIMEOUT_MAXIMO):
@@ -374,6 +469,16 @@ class MissionPreparationService:
             raise PreparationValidationError("Nenhum arquivo de teste 'test_*.py' encontrado em 'tests/'.")
 
         with self._prep_lock:
+            # P2: Fail-closed antecipado: bloqueia ANTES de criar worktree, branch ou manifesto se houver lock
+            if self.verificar_lock_ativo():
+                raise PreparationConflictError(
+                    "Trava de execução ativa em disco ('active_execution.lock') ou missão em andamento no host. "
+                    "Preparação de novos laboratórios recusada para evitar acúmulo de worktrees concorrentes (fail-closed)."
+                )
+
+            # P1: Validação de isolamento do labs_root antes de qualquer mkdir ou mutação
+            self._validar_isolamento_labs_root(self.labs_root, self.source_repo)
+
             # 9. Definição segura de pastas de destino
             self.labs_root.mkdir(mode=0o700, parents=True, exist_ok=True)
             worktree_dir = self.labs_root / f"CH-Lab-{m_id}"
@@ -407,6 +512,7 @@ class MissionPreparationService:
                 prompt_filename = "prompt_missao.txt"
                 prompt_path = worktree_dir / prompt_filename
 
+                lista_testes_txt = "\n".join(f"- `{t}`" for t in testes_referenciados)
                 conteudo_prompt = (
                     f"# Missão #{issue} — {m_id}\n"
                     f"Repositório: {repo_limpo}\n"
@@ -415,6 +521,8 @@ class MissionPreparationService:
                     f"{obj_limpo}\n\n"
                     f"## Critérios de Aceite e Testes Independentes Preexistentes\n"
                     f"{crit_limpo}\n\n"
+                    f"### Testes Rastreados Validados no Repositório:\n"
+                    f"{lista_testes_txt}\n\n"
                     f"## Diretrizes Estritas de Execução\n"
                     f"- Altere estritamente o arquivo alvo '{alvo_validado}'.\n"
                     f"- Não altere nenhum arquivo de teste em 'tests/' nem este arquivo de prompt.\n"
@@ -486,4 +594,5 @@ class MissionPreparationService:
 
         # 15. Executa preflight determinístico real no manifesto recém-gerado
         resultado = self.verificar_preflight(manifest_path)
+        resultado.testes_referenciados = testes_referenciados
         return resultado
