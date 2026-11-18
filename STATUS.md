@@ -17,8 +17,10 @@
 - Recuperação após crash exige intervenção humana segura; cancelamento avançado pela interface adiado.
 - Sem liberação para produção, deploy, merge automático ou execução de agentes sem confirmação.
 
-## 🎯 Próxima melhoria
-**[Issue #124 — CC-USO-01](https://github.com/hallanbrito/CHDevFlow/issues/124):** preparar e validar missões úteis diretamente pela interface, sem edição manual de manifesto nem cópia de caminhos. **Backlog, implementação futura dependente de novo aceite do PO.**
+## 🎯 Próxima melhoria (em andamento)
+**[Issue #124 — CC-USO-01 / Fatia A](https://github.com/hallanbrito/CHDevFlow/issues/124):** Preparação guiada de missões locais e preflight determinístico na interface `/missoes`. **Implementada e pendente de integração à `main` (Draft PR em auditoria independente pelo Codex; aguarda homologação e decisão do PO).**
+- **Funcionalidades da Fatia A:** formulário com seleção de Issue, repositório permitido (`hallanbrito/CHDevFlow`), escopo de arquivo único Python (.py fora de `tests/`), critérios de aceite preexistentes e botão *Preparar missão*. Criação de laboratório descartável `CH-Lab-*` em branch temporária, prompt versionado na branch de laboratório e manifesto `manual/v1` externo à worktree, sem escrever no clone principal. Preflight visual com estados APTO ou BLOQUEADO, validação real determinística pelo `_preflight` F6 preexistente, verificação de ferramentas locais (`agy`, `codex`, `git`, `python`) e detecção fail-closed de trava ativa no host. Autopreenchimento do manifesto para o painel de despacho existente sem necessidade de edição de JSON ou cópia manual de caminhos. Sem execução de agentes de IA nesta etapa de preparação.
+- **Próximo passo após auditoria e aceite da Fatia A:** Fatia B (integração da execução assistida e acompanhamento da missão preparada).
 
 ## 📌 Regra permanente do STATUS.md
 1. **Atualizar este arquivo na mesma PR que altera o estado do produto**, antes do merge; não deixar o status para uma PR corretiva posterior.

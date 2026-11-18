@@ -42,53 +42,232 @@
   </form>
 </div>
 
-<!-- Painel de Despacho e Execução Local Autorizada (CC-DESPACHO-01 / Issue #121) -->
+<!-- Painel de Preparação Guiada e Despacho Local (CC-USO-01 / Issue #124) -->
 <div class="card" style="margin-bottom: 1.25rem; padding: 1.25rem; border-left: 4px solid var(--primary, #2563eb);">
-  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;">
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.75rem;">
     <div>
-      <h2 style="font-size: 1.1rem; font-weight: 700; margin: 0; color: var(--text-primary);">Execução Local Autorizada de Missão (CC-DESPACHO-01)</h2>
+      <h2 style="font-size: 1.15rem; font-weight: 700; margin: 0; color: var(--text-primary);">
+        1. Preparação Guiada de Missão Local (CC-USO-01 / Fatia A)
+      </h2>
       <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">
-        Ponte direta com o motor <code>run_generic_cycle</code> (AGY &rarr; Testes &rarr; Codex). Host local (127.0.0.1) &bull; Worktree descartável <code>CH-Lab-*</code> &bull; <strong>Custo não verificado pelo painel; operador deve comprovar antes da execução</strong>.
+        Gera com segurança o laboratório descartável <code>CH-Lab-*</code> em branch temporária, o prompt versionado e o manifesto <code>manual/v1</code> externo à worktree, validando elegibilidade pelo <code>_preflight</code> determinístico F6 <strong>sem acionar modelos de IA nem consumir cotas</strong>.
       </p>
     </div>
-    <span class="badge-status" style="background: rgba(37, 99, 235, 0.1); color: #2563eb; font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px;">
-      UMA MISSÃO ATIVA
+    <span class="badge-status" style="background: rgba(37, 99, 235, 0.1); color: #2563eb; font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px; white-space: nowrap;">
+      SEM CONSUMO DE IA
     </span>
   </div>
 
-  <!-- Formulário de Despacho de Missão -->
-  <form id="form-despacho-missao" style="display: flex; flex-direction: column; gap: 0.75rem;" onsubmit="despacharMissao(event)">
-    <input type="hidden" id="dispatch-csrf-token" name="csrf_token" value="{{ csrf_token }}">
+  <!-- Formulário de Preparação Guiada -->
+  <form id="form-preparacao-missao" style="display: flex; flex-direction: column; gap: 0.85rem;" onsubmit="prepararMissao(event)">
+    <input type="hidden" id="prep-csrf-token" name="csrf_token" value="{{ csrf_token }}">
 
-    <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
-      <div style="flex: 2; min-width: 280px;">
-        <label for="manifest-path-input" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
-          CAMINHO ABSOLUTO DO MANIFESTO PRÉ-PREPARADO (.json):
+    <!-- Seleção Rápida a partir de Issues Listadas -->
+    <div style="background: var(--bg-primary); padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border-color);">
+      <label for="prep-select-issue" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+        SELECIONAR ISSUE/MISSÃO DO GRAFO (OPCIONAL — PREENCHE OS CAMPOS ABAIXO):
+      </label>
+      <select id="prep-select-issue" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" onchange="aoSelecionarIssue(event)">
+        <option value="">-- Selecione uma Issue do projeto para autopreencher ou informe manualmente --</option>
+        {% for m in missoes %}
+          <option value="{{ m.number or m.id }}" data-issue="{{ m.number or '' }}" data-repo="{{ m.repository }}" data-title="{{ m.title }}" data-status="{{ m.status_grafo }}">
+            {% if m.number %}#{{ m.number }}: {% endif %}{{ m.title }} (Status: {{ m.status_grafo }})
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <!-- Linha de Metadados: Issue, Repositório e Timeout -->
+    <div style="display: flex; flex-wrap: wrap; gap: 1rem;">
+      <div style="flex: 1; min-width: 110px;">
+        <label for="prep-issue" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+          ISSUE (#):
         </label>
-        <input type="text" id="manifest-path-input" name="manifest_path" placeholder="Ex: /home/usuario/CHDevFlow-Labs/manifesto.json" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+        <input type="number" id="prep-issue" name="issue" min="1" placeholder="Ex: 124" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+      </div>
+
+      <div style="flex: 2; min-width: 220px;">
+        <label for="prep-repo" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+          REPOSITÓRIO PERMITIDO:
+        </label>
+        <select id="prep-repo" name="repository" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+          <option value="hallanbrito/CHDevFlow" selected>hallanbrito/CHDevFlow (Autorizado)</option>
+        </select>
       </div>
 
       <div style="flex: 1; min-width: 130px;">
-        <label for="timeout-input" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+        <label for="prep-timeout" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
           TIMEOUT TOTAL (SEG):
         </label>
-        <input type="number" id="timeout-input" name="timeout" value="480" min="120" max="900" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
-      </div>
-
-      <div style="display: flex; align-items: center; padding-bottom: 0.25rem;">
-        <button type="submit" id="btn-despachar" class="btn btn-primary" style="white-space: nowrap;">
-          Disparar Missão Local
-        </button>
+        <input type="number" id="prep-timeout" name="timeout_segundos" value="480" min="120" max="900" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
       </div>
     </div>
 
-    <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
-      <input type="checkbox" id="confirmacao-po-input" name="confirmacao_po" required style="cursor: pointer;">
-      <label for="confirmacao-po-input" style="font-size: 0.8rem; color: var(--text-primary); cursor: pointer;">
-        <strong>Declaro ter verificado a ausência de custos e autorizo a execução local individual em worktree descartável CH-Lab-*.</strong> (Aviso: <code>--mode plan</code> não comprova autenticação ou custo R$0; operador deve comprovar previamente).
+    <!-- Arquivo Python-Alvo da Fatia -->
+    <div>
+      <label for="prep-target-file" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+        ARQUIVO PYTHON-ALVO ÚNICO DA FATIA (.py fora de tests/):
+      </label>
+      <input type="text" id="prep-target-file" name="target_file" placeholder="Ex: src/chdevflow/core/generic_cycle.py" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+      <small style="font-size: 0.7rem; color: var(--text-muted);">
+        Contrato F6 estrito: exatamente 1 arquivo Python (.py) relativo à raiz, fora de <code>tests/</code>, sem barras invertidas (use /) nem symlinks.
+      </small>
+    </div>
+
+    <!-- Objetivo da Missão -->
+    <div>
+      <label for="prep-objetivo" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+        OBJETIVO ESPECÍFICO DA MISSÃO:
+      </label>
+      <textarea id="prep-objetivo" name="objetivo" rows="2" placeholder="Descreva de forma clara e concisa a alteração esperada no arquivo alvo..." style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required></textarea>
+    </div>
+
+    <!-- Critérios de Aceite e Testes Preexistentes -->
+    <div>
+      <label for="prep-criterios" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+        CRITÉRIOS DE ACEITE E TESTES INDEPENDENTES PREEXISTENTES:
+      </label>
+      <textarea id="prep-criterios" name="criterios_aceite" rows="2" placeholder="Indique os critérios objetivos e aponte os testes preexistentes em tests/ (ex: pytest tests/test_ch_pipe_01_f6_generic_cycle.py)..." style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required></textarea>
+      <small style="font-size: 0.7rem; color: var(--text-muted);">
+        Governança F6: não inventamos testes automáticos como substitutos de critérios humanos. Testes preexistentes em <code>tests/</code> são obrigatórios.
+      </small>
+    </div>
+
+    <!-- Autorização PO para Preparação -->
+    <div style="display: flex; align-items: flex-start; gap: 0.5rem; margin-top: 0.25rem;">
+      <input type="checkbox" id="prep-confirmacao-po" name="confirmacao_po" required style="margin-top: 0.2rem; cursor: pointer;">
+      <label for="prep-confirmacao-po" style="font-size: 0.8rem; color: var(--text-primary); cursor: pointer;">
+        <strong>Autorizo a preparação do laboratório descartável <code>CH-Lab-*</code> em branch temporária e a geração do manifesto <code>manual/v1</code> fora da worktree.</strong> (Nenhum modelo de IA é acionado nesta etapa; validação 100% determinística local).
       </label>
     </div>
+
+    <div style="display: flex; align-items: center; gap: 0.75rem; margin-top: 0.25rem;">
+      <button type="submit" id="btn-preparar-missao" class="btn btn-primary" style="white-space: nowrap; font-weight: 600;">
+        Preparar Missão (Gerar Lab e Manifesto)
+      </button>
+      <span id="feedback-preparacao-spinner" style="display: none; font-size: 0.8rem; color: var(--text-muted);">
+        ⏳ Montando worktree descartável e executando preflight...
+      </span>
+    </div>
   </form>
+
+  <div id="mensagem-alerta-preparacao" style="display: none; margin-top: 0.75rem; padding: 0.6rem; border-radius: 4px; font-size: 0.85rem;" role="alert"></div>
+
+  <!-- Painel Visual de Preflight (Resultado da Pré-validação F6) -->
+  <div id="painel-preflight" style="display: none; margin-top: 1rem; padding: 1rem; background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 6px;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <span id="badge-status-preflight" class="badge-status" style="font-size: 0.85rem; font-weight: 700; padding: 0.3rem 0.6rem; border-radius: 4px;">
+          PREFLIGHT PENDENTE
+        </span>
+        <strong id="titulo-preflight" style="font-size: 0.95rem; color: var(--text-primary);">
+          Pré-validação Determinística da Missão
+        </strong>
+      </div>
+      <button type="button" class="btn btn-sm" onclick="fecharPainelPreflight()">✕</button>
+    </div>
+
+    <p id="desc-status-preflight" style="font-size: 0.8rem; margin: 0 0 0.5rem 0; color: var(--text-primary);"></p>
+
+    <!-- Lista de Bloqueios se houver -->
+    <div id="container-bloqueios-preflight" style="display: none; background: #fee2e2; border: 1px solid #f87171; border-radius: 4px; padding: 0.6rem; margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.8rem; color: #991b1b; display: block; margin-bottom: 0.25rem;">
+        ⛔ Causas de Bloqueio Detectadas pelo Preflight:
+      </strong>
+      <ul id="lista-bloqueios-preflight" style="margin: 0; padding-left: 1.25rem; font-size: 0.8rem; color: #7f1d1d;"></ul>
+    </div>
+
+    <!-- Quadro de Alertas Mandatórios de Segurança -->
+    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px; padding: 0.6rem; margin-bottom: 0.75rem;">
+      <strong style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+        Alertas Mandatórios de Segurança e Limitações do Host:
+      </strong>
+      <ul id="lista-alertas-seguranca" style="margin: 0; padding-left: 1.25rem; font-size: 0.75rem; color: var(--text-secondary); display: flex; flex-direction: column; gap: 0.2rem;"></ul>
+    </div>
+
+    <!-- Tabela Resumo do Laboratório Preparado -->
+    <div style="background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 4px; padding: 0.6rem;">
+      <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 0.4rem;">
+        Especificação Técnica do Laboratório F6:
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.5rem; font-size: 0.8rem;">
+        <div><strong>ID da Missão:</strong> <code id="preflight-mission-id">-</code></div>
+        <div><strong>Issue:</strong> <span id="preflight-issue">-</span></div>
+        <div><strong>Repositório:</strong> <code id="preflight-repo">-</code></div>
+        <div><strong>Arquivo-Alvo:</strong> <code id="preflight-target">-</code></div>
+        <div><strong>Worktree:</strong> <code id="preflight-worktree" style="word-break: break-all;">-</code></div>
+        <div><strong>Branch Git:</strong> <code id="preflight-branch">-</code></div>
+        <div><strong>Base SHA:</strong> <code id="preflight-sha">-</code></div>
+        <div><strong>Testes em tests/:</strong> <span id="preflight-testes-count">-</span></div>
+        <div><strong>Trava no Host:</strong> <span id="preflight-lock">-</span></div>
+        <div><strong>Ferramentas Host:</strong> <span id="preflight-ferramentas">-</span></div>
+      </div>
+      <div style="margin-top: 0.5rem; border-top: 1px dashed var(--border-color); padding-top: 0.4rem;">
+        <strong>Manifesto Preparado:</strong> <code id="preflight-manifest-path" style="color: #2563eb; word-break: break-all;">-</code>
+      </div>
+    </div>
+
+    <!-- Ação de Continuidade quando Apto -->
+    <div id="banner-acao-apto" style="display: none; margin-top: 0.75rem; padding: 0.6rem; background: #ecfdf5; border: 1px solid #6ee7b7; border-radius: 4px; font-size: 0.8rem; color: #065f46;">
+      ✓ <strong>Missão Apta:</strong> O caminho do manifesto foi automaticamente preenchido no painel de despacho abaixo. Revise as declarações e execute quando autorizado individualmente pelo PO.
+    </div>
+  </div>
+
+  <!-- Divisor e Seção 2: Despacho e Execução Local Autorizada -->
+  <div style="margin-top: 1.5rem; border-top: 2px dashed var(--border-color); padding-top: 1rem;">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 0.75rem;">
+      <div>
+        <h2 style="font-size: 1.15rem; font-weight: 700; margin: 0; color: var(--text-primary);">
+          2. Despacho e Execução Local Autorizada (CC-DESPACHO-01 / Issue #121)
+        </h2>
+        <p style="font-size: 0.75rem; color: var(--text-muted); margin: 0.25rem 0 0 0;">
+          Ponte direta com o motor <code>run_generic_cycle</code> (AGY &rarr; Testes &rarr; Codex). Host local (127.0.0.1) &bull; Worktree descartável <code>CH-Lab-*</code> &bull; <strong>Custo não verificado pelo painel; operador deve comprovar antes da execução</strong>.
+        </p>
+      </div>
+      <span class="badge-status" style="background: rgba(37, 99, 235, 0.1); color: #2563eb; font-size: 0.75rem; padding: 0.25rem 0.5rem; border-radius: 4px;">
+        UMA MISSÃO ATIVA
+      </span>
+    </div>
+
+    <!-- Formulário de Despacho de Missão -->
+    <form id="form-despacho-missao" style="display: flex; flex-direction: column; gap: 0.75rem;" onsubmit="despacharMissao(event)">
+      <input type="hidden" id="dispatch-csrf-token" name="csrf_token" value="{{ csrf_token }}">
+
+      <div style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+        <div style="flex: 2; min-width: 280px;">
+          <label for="manifest-path-input" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+            CAMINHO ABSOLUTO DO MANIFESTO PRÉ-PREPARADO (.json):
+          </label>
+          <div style="display: flex; gap: 0.5rem;">
+            <input type="text" id="manifest-path-input" name="manifest_path" placeholder="Ex: /home/usuario/CHDevFlow-Labs/manifesto.json" style="flex: 1; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+            <button type="button" id="btn-checar-preflight" class="btn btn-sm" onclick="verificarPreflightManual()" style="white-space: nowrap;" title="Revalida determinísticamente o manifesto pelo _preflight F6">
+              Checar Preflight
+            </button>
+          </div>
+        </div>
+
+        <div style="flex: 1; min-width: 130px;">
+          <label for="timeout-input" style="font-size: 0.75rem; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 0.3rem;">
+            TIMEOUT TOTAL (SEG):
+          </label>
+          <input type="number" id="timeout-input" name="timeout" value="480" min="120" max="900" style="width: 100%; padding: 0.45rem 0.75rem; border-radius: 6px; border: 1px solid var(--border-color); background: var(--bg-card); color: var(--text-primary); font-size: 0.85rem;" required>
+        </div>
+
+        <div style="display: flex; align-items: center; padding-bottom: 0.25rem;">
+          <button type="submit" id="btn-despachar" class="btn btn-primary" style="white-space: nowrap;">
+            Disparar Missão Local
+          </button>
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 0.5rem; margin-top: 0.25rem;">
+        <input type="checkbox" id="confirmacao-po-input" name="confirmacao_po" required style="cursor: pointer;">
+        <label for="confirmacao-po-input" style="font-size: 0.8rem; color: var(--text-primary); cursor: pointer;">
+          <strong>Declaro ter verificado a ausência de custos e autorizo a execução local individual em worktree descartável CH-Lab-*.</strong> (Aviso: <code>--mode plan</code> não comprova autenticação ou custo R$0; operador deve comprovar previamente).
+        </label>
+      </div>
+    </form>
+  </div>
 
   <div id="mensagem-alerta-despacho" style="display: none; margin-top: 0.75rem; padding: 0.6rem; border-radius: 4px; font-size: 0.85rem;" role="alert"></div>
 
@@ -334,6 +513,241 @@
 <script>
 let activeExecutionId = null;
 let pollingInterval = null;
+
+function aoSelecionarIssue(event) {
+  const select = event.target;
+  const opt = select.options[select.selectedIndex];
+  if (!opt || !opt.value) return;
+
+  const issueNum = opt.getAttribute('data-issue');
+  const repo = opt.getAttribute('data-repo');
+  const title = opt.getAttribute('data-title');
+
+  if (issueNum) {
+    document.getElementById('prep-issue').value = issueNum;
+  }
+  if (repo) {
+    const repoSelect = document.getElementById('prep-repo');
+    let found = false;
+    for (let i = 0; i < repoSelect.options.length; i++) {
+      if (repoSelect.options[i].value === repo) {
+        repoSelect.selectedIndex = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      const novaOpt = document.createElement('option');
+      novaOpt.value = repo;
+      novaOpt.textContent = repo;
+      repoSelect.appendChild(novaOpt);
+      repoSelect.value = repo;
+    }
+  }
+  if (title) {
+    document.getElementById('prep-objetivo').value = title;
+  }
+}
+
+function exibirAlertaPreparacao(mensagem, tipo = 'erro') {
+  const alerta = document.getElementById('mensagem-alerta-preparacao');
+  alerta.style.display = 'block';
+  alerta.textContent = mensagem;
+  if (tipo === 'erro') {
+    alerta.style.background = '#fee2e2';
+    alerta.style.color = '#991b1b';
+    alerta.style.border = '1px solid #f87171';
+  } else if (tipo === 'aviso' || tipo === 'alerta') {
+    alerta.style.background = '#fef3c7';
+    alerta.style.color = '#92400e';
+    alerta.style.border = '1px solid #fcd34d';
+  } else {
+    alerta.style.background = '#dcfce7';
+    alerta.style.color = '#166534';
+    alerta.style.border = '1px solid #86efac';
+  }
+}
+
+function fecharPainelPreflight() {
+  document.getElementById('painel-preflight').style.display = 'none';
+}
+
+function renderizarPreflight(data) {
+  const painel = document.getElementById('painel-preflight');
+  painel.style.display = 'block';
+
+  const badge = document.getElementById('badge-status-preflight');
+  const desc = document.getElementById('desc-status-preflight');
+  const bannerApto = document.getElementById('banner-acao-apto');
+  const containerBloqueios = document.getElementById('container-bloqueios-preflight');
+  const listaBloqueios = document.getElementById('lista-bloqueios-preflight');
+  const listaAlertas = document.getElementById('lista-alertas-seguranca');
+
+  if (data.apto || data.status === 'APTO') {
+    badge.textContent = '✓ APTO PARA DESPACHO';
+    badge.style.background = '#16a34a';
+    badge.style.color = 'white';
+    desc.textContent = 'A missão atende a todos os requisitos do contrato F6 e está elegível para despacho local com autorização individual do PO.';
+    bannerApto.style.display = 'block';
+    containerBloqueios.style.display = 'none';
+
+    // Autopreencher o campo de manifesto no painel de despacho
+    if (data.manifest_path) {
+      const manifestInput = document.getElementById('manifest-path-input');
+      manifestInput.value = data.manifest_path;
+      manifestInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      manifestInput.style.borderColor = '#16a34a';
+      setTimeout(() => { manifestInput.style.borderColor = ''; }, 3000);
+    }
+  } else {
+    badge.textContent = '⛔ BLOQUEADO PELO PREFLIGHT';
+    badge.style.background = '#dc2626';
+    badge.style.color = 'white';
+    desc.textContent = 'A missão foi reprovada na pré-validação F6 ou o host possui travas ativas. O despacho permanece bloqueado.';
+    bannerApto.style.display = 'none';
+
+    const motivos = data.motivos_bloqueio || [];
+    if (motivos.length > 0) {
+      containerBloqueios.style.display = 'block';
+      listaBloqueios.innerHTML = '';
+      motivos.forEach(m => {
+        const li = document.createElement('li');
+        li.textContent = m;
+        listaBloqueios.appendChild(li);
+      });
+    } else {
+      containerBloqueios.style.display = 'none';
+    }
+  }
+
+  // Preenche alertas de segurança
+  const alertas = data.avisos_seguranca || [];
+  listaAlertas.innerHTML = '';
+  alertas.forEach(a => {
+    const li = document.createElement('li');
+    li.textContent = a;
+    listaAlertas.appendChild(li);
+  });
+
+  // Preenche tabela de detalhes técnicos
+  document.getElementById('preflight-mission-id').textContent = data.mission_id || '-';
+  document.getElementById('preflight-issue').textContent = data.issue ? '#' + data.issue : '-';
+  document.getElementById('preflight-repo').textContent = data.repository || '-';
+  document.getElementById('preflight-target').textContent = data.target_file || '-';
+  document.getElementById('preflight-worktree').textContent = data.worktree || '-';
+  document.getElementById('preflight-branch').textContent = data.branch || '-';
+  document.getElementById('preflight-sha').textContent = data.base_sha || '-';
+  document.getElementById('preflight-testes-count').textContent = (data.testes_independentes_count !== undefined) ? data.testes_independentes_count + ' arquivos de teste' : '-';
+  document.getElementById('preflight-lock').textContent = data.lock_ativo ? '⚠️ ATIVA (BLOQUEIO)' : '✓ Livre (Exclusividade pronta)';
+  document.getElementById('preflight-lock').style.color = data.lock_ativo ? '#dc2626' : '#16a34a';
+
+  const clis = data.ferramentas_cli || {};
+  const cliText = 'AGY: ' + (clis.agy ? '✓ Disponível' : '✗ Não encontrado') + ' | Codex: ' + (clis.codex ? '✓ Disponível' : '✗ Não encontrado');
+  document.getElementById('preflight-ferramentas').textContent = cliText;
+
+  document.getElementById('preflight-manifest-path').textContent = data.manifest_path || '-';
+}
+
+async function prepararMissao(event) {
+  event.preventDefault();
+  const alerta = document.getElementById('mensagem-alerta-preparacao');
+  alerta.style.display = 'none';
+  const spinner = document.getElementById('feedback-preparacao-spinner');
+  spinner.style.display = 'inline';
+
+  const issueVal = parseInt(document.getElementById('prep-issue').value, 10);
+  const repoVal = document.getElementById('prep-repo').value.trim();
+  const targetVal = document.getElementById('prep-target-file').value.trim();
+  const objetivoVal = document.getElementById('prep-objetivo').value.trim();
+  const criteriosVal = document.getElementById('prep-criterios').value.trim();
+  const timeoutVal = parseInt(document.getElementById('prep-timeout').value, 10) || 480;
+  const confirmacaoPo = document.getElementById('prep-confirmacao-po').checked;
+  const csrfToken = document.getElementById('prep-csrf-token').value;
+
+  if (!confirmacaoPo) {
+    exibirAlertaPreparacao('É obrigatório marcar a autorização explícita de preparação do laboratório.');
+    spinner.style.display = 'none';
+    return;
+  }
+
+  const btn = document.getElementById('btn-preparar-missao');
+  btn.disabled = true;
+  btn.textContent = 'Preparando Laboratório...';
+
+  try {
+    const resp = await fetch('/api/missoes/preparar', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken
+      },
+      body: JSON.stringify({
+        issue: issueVal,
+        repository: repoVal,
+        target_file: targetVal,
+        objetivo: objetivoVal,
+        criterios_aceite: criteriosVal,
+        timeout_segundos: timeoutVal,
+        confirmacao_po: confirmacaoPo,
+        csrf_token: csrfToken
+      })
+    });
+
+    const data = await resp.json();
+    spinner.style.display = 'none';
+    btn.disabled = false;
+    btn.textContent = 'Preparar Missão (Gerar Lab e Manifesto)';
+
+    if (!resp.ok) {
+      exibirAlertaPreparacao(data.detail || 'Falha ao preparar missão.');
+      return;
+    }
+
+    renderizarPreflight(data);
+    if (data.apto) {
+      exibirAlertaPreparacao('Laboratório, prompt e manifesto preparados com sucesso! Preflight APTO.', 'sucesso');
+    } else {
+      exibirAlertaPreparacao('Laboratório preparado, porém o Preflight detectou BLOQUEIOS. Veja detalhes abaixo.', 'aviso');
+    }
+  } catch (err) {
+    spinner.style.display = 'none';
+    btn.disabled = false;
+    btn.textContent = 'Preparar Missão (Gerar Lab e Manifesto)';
+    exibirAlertaPreparacao('Erro de conexão ao preparar missão: ' + err.message);
+  }
+}
+
+async function verificarPreflightManual() {
+  const manifestPath = document.getElementById('manifest-path-input').value.trim();
+  if (!manifestPath) {
+    exibirAlertaDespacho('Informe o caminho do manifesto para verificar o preflight.');
+    return;
+  }
+
+  const btn = document.getElementById('btn-checar-preflight');
+  btn.disabled = true;
+  btn.textContent = 'Verificando...';
+
+  try {
+    const url = '/api/missoes/preflight?manifest_path=' + encodeURIComponent(manifestPath);
+    const resp = await fetch(url);
+    const data = await resp.json();
+    btn.disabled = false;
+    btn.textContent = 'Checar Preflight';
+
+    if (!resp.ok) {
+      exibirAlertaDespacho(data.detail || 'Falha ao consultar preflight.');
+      return;
+    }
+
+    renderizarPreflight(data);
+    document.getElementById('painel-preflight').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = 'Checar Preflight';
+    exibirAlertaDespacho('Erro ao verificar preflight: ' + err.message);
+  }
+}
 
 function exibirAlertaDespacho(mensagem, tipo = 'erro') {
   const alerta = document.getElementById('mensagem-alerta-despacho');

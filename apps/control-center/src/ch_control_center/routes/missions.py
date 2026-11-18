@@ -17,6 +17,7 @@ from ch_control_center.config import DIRETORIO_TEMPLATES
 from ch_control_center.dependencies import (
     get_execution_service,
     get_mission_service,
+    get_preparation_service,
     get_project_service,
 )
 from ch_control_center.security import (
@@ -29,6 +30,12 @@ from ch_control_center.services.execution_service import (
     ExecutionNotFoundError,
     ExecutionService,
     ManifestValidationError,
+)
+from ch_control_center.services.mission_preparation_service import (
+    MissionPreparationError,
+    MissionPreparationService,
+    PreparationConflictError,
+    PreparationValidationError,
 )
 from ch_control_center.services.mission_service import MissionService
 from ch_control_center.services.project_service import ProjectService
@@ -96,6 +103,129 @@ async def get_execution_detail_api(
     if not execucao:
         raise HTTPException(status_code=404, detail=f"Execução '{execution_id}' não encontrada.")
     return execucao
+
+
+@router.post("/api/missoes/preparar", response_class=JSONResponse, status_code=201)
+async def prepare_mission_api(
+    request: Request,
+    preparation_service: MissionPreparationService = Depends(get_preparation_service),
+) -> dict[str, Any]:
+    """Prepara laboratório descartável CH-Lab-*, prompt versionado e manifesto manual/v1 (Issue #124)."""
+    content_type = request.headers.get("content-type", "")
+    issue: int | None = None
+    repository: str | None = None
+    target_file: str | None = None
+    objetivo: str | None = None
+    criterios_aceite: str | None = None
+    confirmacao_po: bool = False
+    timeout: int = 480
+    mission_id: str | None = None
+    csrf_token: str | None = None
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="Corpo da requisição JSON inválido.")
+        if not isinstance(body, dict):
+            raise HTTPException(status_code=400, detail="Corpo da requisição deve ser um objeto JSON.")
+
+        issue_raw = body.get("issue")
+        try:
+            issue = int(issue_raw) if issue_raw is not None else None
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Campo 'issue' deve ser um número inteiro válido.")
+
+        repository = body.get("repository") or body.get("repositorio")
+        target_file = body.get("target_file") or body.get("arquivo_alvo")
+        objetivo = body.get("objetivo") or body.get("objective")
+        criterios_aceite = body.get("criterios_aceite") or body.get("acceptance_criteria")
+        raw_conf = body.get("confirmacao_po") if "confirmacao_po" in body else body.get("confirmation")
+        if raw_conf is not True:
+            raise HTTPException(
+                status_code=400,
+                detail="Confirmação explícita de preparação pelo PO é obrigatória e deve ser o booleano True.",
+            )
+        confirmacao_po = True
+        raw_timeout = body.get("timeout_segundos") or body.get("timeout")
+        try:
+            timeout = int(raw_timeout) if raw_timeout is not None else 480
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Timeout deve ser um número inteiro válido.")
+        mission_id = body.get("mission_id")
+        csrf_token = body.get("csrf_token")
+    else:
+        try:
+            form = await request.form()
+            issue_raw = form.get("issue")
+            issue = int(issue_raw) if issue_raw else None
+            repository = form.get("repository") or form.get("repositorio")
+            target_file = form.get("target_file") or form.get("arquivo_alvo")
+            objetivo = form.get("objetivo") or form.get("objective")
+            criterios_aceite = form.get("criterios_aceite") or form.get("acceptance_criteria")
+            confirmacao_po = form.get("confirmacao_po") in ("true", "True", "1", True, "on") or form.get("confirmation") in ("true", "True", "1", True, "on")
+            timeout_raw = form.get("timeout_segundos") or form.get("timeout")
+            timeout = int(timeout_raw) if timeout_raw else 480
+            mission_id = form.get("mission_id")
+            csrf_token = form.get("csrf_token")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Dados de formulário inválidos.")
+
+    validar_requisicao_post_segura(request, csrf_token=csrf_token)
+
+    if issue is None or issue < 1:
+        raise HTTPException(status_code=400, detail="Número de Issue válido (inteiro >= 1) é obrigatório.")
+    if not repository:
+        raise HTTPException(status_code=400, detail="Repositório autorizado é obrigatório.")
+    if not target_file:
+        raise HTTPException(status_code=400, detail="Arquivo Python-alvo da fatia (.py) é obrigatório.")
+    if not objetivo:
+        raise HTTPException(status_code=400, detail="Objetivo da missão é obrigatório.")
+    if not criterios_aceite:
+        raise HTTPException(status_code=400, detail="Critérios de aceite / testes independentes preexistentes são obrigatórios.")
+
+    try:
+        resultado = await run_in_threadpool(
+            preparation_service.preparar_missao,
+            issue=issue,
+            repository=repository.strip(),
+            target_file=target_file.strip(),
+            objetivo=objetivo.strip(),
+            criterios_aceite=criterios_aceite.strip(),
+            confirmacao_po=confirmacao_po,
+            timeout_segundos=timeout,
+            mission_id=mission_id.strip() if mission_id else None,
+        )
+        return resultado.to_dict()
+    except PreparationValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except PreparationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except MissionPreparationError as exc:
+        raise HTTPException(status_code=500, detail=f"Erro na preparação do laboratório: {str(exc)}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro interno de preparação: {str(exc)}")
+
+
+@router.get("/api/missoes/preflight", response_class=JSONResponse)
+async def check_preflight_api(
+    request: Request,
+    manifest_path: str = Query(..., description="Caminho absoluto do manifesto JSON a validar"),
+    preparation_service: MissionPreparationService = Depends(get_preparation_service),
+) -> dict[str, Any]:
+    """Executa verificação determinística de preflight em manifesto pré-existente."""
+    validar_host_cabecalho(request)
+    if not manifest_path or not manifest_path.strip():
+        raise HTTPException(status_code=400, detail="Parâmetro 'manifest_path' é obrigatório.")
+
+    try:
+        resultado = await run_in_threadpool(
+            preparation_service.verificar_preflight,
+            manifest_path=manifest_path.strip(),
+        )
+        return resultado.to_dict()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro interno na validação de preflight: {str(exc)}")
 
 
 @router.post("/api/missoes/executar", response_class=JSONResponse, status_code=202)

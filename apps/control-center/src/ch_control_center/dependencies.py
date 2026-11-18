@@ -4,12 +4,14 @@ from __future__ import annotations
 import threading
 
 from ch_control_center.services.execution_service import ExecutionService
+from ch_control_center.services.mission_preparation_service import MissionPreparationService
 from ch_control_center.services.mission_service import MissionService
 from ch_control_center.services.project_service import ProjectService
 
 _mission_service_instance: MissionService | None = None
 _project_service_instance: ProjectService | None = None
 _execution_service_instance: ExecutionService | None = None
+_preparation_service_instance: MissionPreparationService | None = None
 _services_lock = threading.Lock()
 
 
@@ -43,11 +45,22 @@ def get_execution_service() -> ExecutionService:
     return _execution_service_instance
 
 
+def get_preparation_service() -> MissionPreparationService:
+    """Retorna a instância compartilhada do MissionPreparationService."""
+    global _preparation_service_instance
+    if _preparation_service_instance is None:
+        with _services_lock:
+            if _preparation_service_instance is None:
+                _preparation_service_instance = MissionPreparationService()
+    return _preparation_service_instance
+
+
 def reset_services() -> None:
     """Reinicializa as instâncias de serviço (útil para testes isolados)."""
-    global _mission_service_instance, _project_service_instance, _execution_service_instance
+    global _mission_service_instance, _project_service_instance, _execution_service_instance, _preparation_service_instance
     with _services_lock:
         _mission_service_instance = None
         _project_service_instance = None
         _execution_service_instance = None
+        _preparation_service_instance = None
 
