@@ -26,7 +26,7 @@ Na fatia original **CC-01**, a supervisão permanece somente leitura. A [PR #123
 4. **Central de Missões e Fatias W:** Tabela com busca textual instantânea, filtros por status e esteira (AGY, Codex, ChatGPT) e modal de inspeção detalhada.
 5. **Modo Estudante Didático (ADR-CC02-03):** Glossário contextual do Método C.H., diagrama explicativo dos 9 estados da máquina de governança e detalhamento das 5 invariantes inegociáveis.
 6. **Modo Demonstração Offline (RF-06):** Alternância transparente com um clique entre o snapshot de demonstração offline (`DEMO_OFFLINE`) e o GitHub Project #2 (`LIVE_GITHUB`), com banner de aviso explícito.
-7. **Testes da versão atual:** suíte Control Center **142 passed, 1 warning** em 17/11/2026, regressão P1 aprovada; piloto real CC-123 com **3/3** testes independentes, Codex textual `APROVAR_LAB`; CI da implementação verde.
+7. **Testes da versão atual:** suíte Control Center **157 passed, 1 warning** em 17/11/2026, incluindo a preparação guiada de missões, preflight F6 e revisões R1 (Issue #124 / Fatia A); regressões P1 e P2 aprovadas; piloto real CC-123 com **3/3** testes independentes, Codex textual `APROVAR_LAB`.
 
 ---
 
@@ -120,6 +120,7 @@ apps/control-center/
 │       │   └── projects.py            # POST /projetos/alternar e GET /api/projetos
 │       ├── services/
 │       │   ├── execution_service.py    # Despacho, lock e dossiê (PR #123)
+│       │   ├── mission_preparation_service.py # Preparação guiada e preflight F6 (Issue #124)
 │       │   ├── mission_service.py     # Orquestrador de missões e estados
 │       │   └── project_service.py     # Gerenciador de perfis multi-projeto
 │       ├── static/
@@ -130,12 +131,14 @@ apps/control-center/
 │       └── templates/
 │           ├── base.html              # Layout mestre com sidebar e banners
 │           ├── dashboard.html         # Página inicial
-│           ├── missions.html          # Central de fatias W
+│           ├── missions.html          # Central de missões, preparação guiada e preflight
 │           ├── graph.html             # Grafo visual topológico
 │           └── student.html           # Modo estudante
 └── tests/
     ├── conftest.py                    # Cliente ASGI in-memory
     ├── test_dag_engine.py             # Testes topológicos e de ciclos
+    ├── test_mission_execution_bridge.py # Testes de despacho e ciclo F6 (PR #123)
+    ├── test_mission_preparation_bridge.py # Testes de preparação guiada e preflight (Issue #124)
     ├── test_mission_service.py        # Testes de orquestração de missões
     ├── test_project_service.py        # Testes de isolamento multi-projeto
     ├── test_routes_read_only.py       # Testes de integridade HTTP e segurança
