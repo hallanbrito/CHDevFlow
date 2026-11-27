@@ -8,7 +8,8 @@
 - Nova visão, roadmap, arquitetura, contratos, segurança e transição documentados nesta branch.
 - Nenhuma funcionalidade nova da fábrica implementada nesta transição.
 - Docker obrigatório no novo runtime, ainda não validado. Não declarar segurança, custo zero ou compatibilidade de fornecedores comprovados.
-- Próxima fatia: auditoria técnica de reuso, ADRs e prova negativa de isolamento Docker; aprovação humana antes de implementação.
+- Equipe de desenvolvimento aprovada pelo PO: [TEAM.md](TEAM.md).
+- Próxima fatia: [FACTORY-001 #127](https://github.com/hallanbrito/CHDevFlow/issues/127), First Agent + Docker. Fatia A: auditoria de leitura, ADR e preflight; Fatia B: implementação condicionada à aprovação do plano. Nenhuma execução real ou implementação homologada.
 - [Roadmap vigente](ROADMAP.md) · [Registro da transição](TRANSITION.md) · [Segurança](SECURITY.md).
 
 ## Registro anterior — histórico, não planejamento vigente
