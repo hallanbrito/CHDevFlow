@@ -97,7 +97,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
             _validate_container(self._valid_inspect(workspace), image, workspace)
             details = self._valid_inspect(workspace)
             details["HostConfig"]["Tmpfs"] = {
-                "/tmp": "rw,nosuid,nodev,noexec,size=128m,mode=1777"
+                "/tmp": "rw,nosuid,nodev,noexec,size=512m,mode=1777"
             }
             _validate_container(details, image, workspace)
 

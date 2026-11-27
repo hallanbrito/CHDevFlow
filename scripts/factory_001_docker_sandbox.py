@@ -26,8 +26,8 @@ IMAGE_DIGESTS = {
 IMAGE_REPOSITORY = "ghcr.io/github/copilot-cli"
 WORKSPACE_TARGET = "/home/copilot/workspace"
 CONTAINER_USER = "10001:10001"
-MEMORY_BYTES = 256 * 1024 * 1024
-TMPFS_SIZE_BYTES = 128 * 1024 * 1024
+MEMORY_BYTES = 1024 * 1024 * 1024
+TMPFS_SIZE_BYTES = 512 * 1024 * 1024
 PID_LIMIT = 64
 CPU_LIMIT = "1"
 MAX_COMMAND_SECONDS = 60
@@ -339,7 +339,7 @@ class DockerSandbox:
             f"--memory={MEMORY_BYTES}",
             f"--cpus={CPU_LIMIT}",
             f"--user={CONTAINER_USER}",
-            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777",
             "--mount",
             f"type=bind,src={workspace},dst={WORKSPACE_TARGET},readonly",
             f"--workdir={WORKSPACE_TARGET}",
@@ -504,7 +504,7 @@ test -x /usr/bin/openssl
 grep -Eq '^Seccomp:[[:space:]]*2$' /proc/self/status
 grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
 grep -Eq '^CapEff:[[:space:]]*0+$' /proc/self/status
-test "$(cat /sys/fs/cgroup/memory.max)" = "268435456"
+test "$(cat /sys/fs/cgroup/memory.max)" = "1073741824"
 test "$(cat /sys/fs/cgroup/pids.max)" = "64"
 test "$(cat /sys/fs/cgroup/cpu.max)" = "100000 100000"
 test ! -e "$1"

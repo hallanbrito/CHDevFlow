@@ -13,7 +13,7 @@ Esta fatia demonstra somente o CLI e a fronteira do container. Não integra inte
 ## Controles da prova
 
 - Container efêmero por comando, daemon Docker Linux local e imagem oficial fixada por digest.
-- UID/GID `10001:10001`; `--cap-drop=ALL`; seccomp padrão do daemon; `no-new-privileges`; rootfs somente leitura; rede `none`; limites de 1 CPU, 256 MiB e 64 PIDs; tmpfs `/tmp` limitado a 128 MiB, `nosuid,nodev,noexec`.
+- UID/GID `10001:10001`; `--cap-drop=ALL`; seccomp padrão do daemon; `no-new-privileges`; rootfs somente leitura; rede `none`; limites de 1 CPU, 1 GiB e 64 PIDs; tmpfs `/tmp` limitado a 512 MiB, `nosuid,nodev,noexec`.
 - Única montagem: workspace efêmero dedicado, somente leitura. Sem montagem de HOME, credenciais ou socket Docker. `COPILOT_HOME` aponta para temporário interno ao container.
 - Cliente Docker usa diretório de configuração temporário e remove variáveis de credenciais conhecidas. Nenhum valor real é lido ou registrado.
 - Timeout/cancelamento param o container, removem-no e verificam que não restou container com aquele ID. Qualquer falha de daemon, configuração ou cleanup termina como bloqueio, sem execução no host.
@@ -45,7 +45,7 @@ O job `factory-001-docker-sandbox.yml` executa os mesmos testes unitários e de 
 
 ## Evidência e limites
 
-Evidência real requer conclusão verde do job dedicado. Verificação local: Docker CLI `29.10.1` e Compose `5.8.0` existem, mas `docker version` não alcança o daemon em `/var/run/docker.sock`; não foram encontrados `dockerd-rootless.sh`, `docker-rootless-setuptool.sh`, `rootlesskit` ou sockets rootless nos caminhos verificados. Portanto, esta estação não pode produzir evidência local de container. A imagem pública `1.0.117` foi inspecionada em 27/11/2026; o índice publicado foi `sha256:b0c9fef096b841c0ed1ad121b8d389b09eaf1f7995b40b0383668f523cc09146`, com manifests por arquitetura fixados abaixo:
+Evidência real requer conclusão verde do job dedicado. Verificação local: Docker CLI `29.10.1` e Compose `5.8.0` existem, mas `docker version` não alcança o daemon em `/var/run/docker.sock`; não foram encontrados `dockerd-rootless.sh`, `docker-rootless-setuptool.sh`, `rootlesskit` ou sockets rootless nos caminhos verificados. Portanto, esta estação não pode produzir evidência local de container. O primeiro ensaio de `--version` mostrou `ENOSPC` ao extrair o runtime no tmpfs de 128 MiB. O pacote Linux x64 oficial publicado para `1.0.117` tem 165,249,950 bytes comprimidos; os limites foram ajustados para 1 GiB de memória e tmpfs até 512 MiB, ainda finitos e inspecionados. A imagem pública `1.0.117` foi inspecionada em 27/11/2026; o índice publicado foi `sha256:b0c9fef096b841c0ed1ad121b8d389b09eaf1f7995b40b0383668f523cc09146`, com manifests por arquitetura fixados abaixo:
 
 - `linux/amd64`: `sha256:6a816154086e00511cdc87563def1bb529dffef966288b0ce26677af7eb3ff1c`
 - `linux/arm64`: `sha256:dcb3397e37c80f0a7edccd72d8af1ac78bf6086c37d1fe2772f1e5cbaebdb8e4`
