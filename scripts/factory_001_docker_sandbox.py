@@ -193,6 +193,8 @@ def _validate_container(
         expected_options = {"rw", "nosuid", "nodev", "size", "mode"}
         if noexec:
             expected_options.add("noexec")
+        else:
+            expected_options.add("exec")
         if set(options) != expected_options or any(
             options[name] for name in expected_options - {"size", "mode"}
         ):
@@ -363,7 +365,7 @@ class DockerSandbox:
             f"--cpus={CPU_LIMIT}",
             f"--user={CONTAINER_USER}",
             "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777",
-            "--tmpfs=/var/tmp:rw,nosuid,nodev,size=1g,mode=1777",
+            "--tmpfs=/var/tmp:rw,exec,nosuid,nodev,size=1g,mode=1777",
             "--mount",
             f"type=bind,src={workspace},dst={WORKSPACE_TARGET},readonly",
             f"--workdir={WORKSPACE_TARGET}",

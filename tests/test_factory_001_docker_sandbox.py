@@ -89,7 +89,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
                         f"size={TMPFS_DEFAULT_SIZE_BYTES},mode=1777"
                     ),
                     "/var/tmp": (
-                        f"rw,nosuid,nodev,size={TMPFS_SIZE_BYTES},mode=1777"
+                        f"rw,exec,nosuid,nodev,size={TMPFS_SIZE_BYTES},mode=1777"
                     ),
                 },
             },
@@ -111,7 +111,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
             details = self._valid_inspect(workspace)
             details["HostConfig"]["Tmpfs"] = {
                 "/tmp": "rw,nosuid,nodev,noexec,size=16m,mode=1777",
-                "/var/tmp": "rw,nosuid,nodev,size=1g,mode=1777",
+                "/var/tmp": "rw,exec,nosuid,nodev,size=1g,mode=1777",
             }
             _validate_container(details, image, workspace)
 
@@ -132,6 +132,15 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 {
                     "Tmpfs": {
                         "/tmp": "rw,size=16777216,mode=1777",
+                        "/var/tmp": "rw,exec,nosuid,nodev,size=1073741824,mode=1777",
+                    }
+                },
+            ),
+            (
+                "exec cache",
+                {
+                    "Tmpfs": {
+                        "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
                         "/var/tmp": "rw,nosuid,nodev,size=1073741824,mode=1777",
                     }
                 },
@@ -141,8 +150,8 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 {
                     "Tmpfs": {
                         "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
-                        "/var/tmp": "rw,nosuid,nodev,size=1073741824,mode=1777",
-                        "/var/cache": "rw,nosuid,nodev,size=1073741824,mode=1777",
+                        "/var/tmp": "rw,exec,nosuid,nodev,size=1073741824,mode=1777",
+                        "/var/cache": "rw,exec,nosuid,nodev,size=1073741824,mode=1777",
                     }
                 },
             ),
