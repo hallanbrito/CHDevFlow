@@ -585,7 +585,9 @@ def run_acceptance(sandbox: DockerSandbox) -> dict[str, object]:
         _require(
             probe.returncode == 0
             and "FACTORY001_NEGATIVE_CONTROLS_PASS" in probe.stdout,
-            "Um teste negativo de isolamento falhou.",
+            "Um teste negativo de isolamento falhou "
+            f"(exit={probe.returncode}, stdout={probe.stdout.strip()[:500]!r}, "
+            f"stderr={probe.stderr.strip()[:800]!r}).",
         )
 
         timed_out = sandbox.execute(
