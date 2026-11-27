@@ -541,7 +541,7 @@ test ! -S /run/docker.sock
 test -z "${COPILOT_GITHUB_TOKEN+x}"
 test -z "${GH_TOKEN+x}"
 test -z "${GITHUB_TOKEN+x}"
-if : > /home/copilot/.factory001-write-test 2>/dev/null; then
+if /bin/sh -c ': > /home/copilot/.factory001-write-test' 2>/dev/null; then
   exit 31
 fi
 if /usr/bin/timeout 3 /usr/bin/openssl s_client -connect 1.1.1.1:443 -brief </dev/null >/dev/null 2>&1; then
