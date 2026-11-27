@@ -490,22 +490,24 @@ class DockerSandbox:
                         break
                     except subprocess.TimeoutExpired:
                         continue
-                if process.poll() is None:
-                    try:
-                        stdout, stderr = process.communicate(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        stdout, stderr = process.communicate()
-                if stdout is None:
-                    stdout = ""
-                if stderr is None:
-                    stderr = ""
         finally:
-            if process is not None and process.poll() is None:
-                self._stop(container_id)
-                process.kill()
-                process.communicate()
-            removed = self._remove(container_id)
+            try:
+                if process is not None:
+                    try:
+                        if process.poll() is None:
+                            self._stop(container_id)
+                    finally:
+                        if process.poll() is None:
+                            process.kill()
+                        try:
+                            stdout, stderr = process.communicate(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            stdout, stderr = process.communicate()
+                    stdout = stdout or ""
+                    stderr = stderr or ""
+            finally:
+                removed = self._remove(container_id)
 
         return ContainerResult(
             container_id=container_id,
