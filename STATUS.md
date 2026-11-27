@@ -1,3 +1,21 @@
+# STATUS — CHDevFlow Factory
+
+**Atualizado:** 27/11/2026 (America/Fortaleza)
+**Branch da nova direção:** factory/v2. A main permanece legada até integração documental aprovada.
+
+## Estado atual
+- Planejamento anterior substituído: 51 issues fechadas como not_planned; 20 PRs fechadas sem merge.
+- Nova visão, roadmap, arquitetura, contratos, segurança e transição documentados nesta branch.
+- Nenhuma funcionalidade nova da fábrica implementada nesta transição.
+- Docker obrigatório no novo runtime, ainda não validado. Não declarar segurança, custo zero ou compatibilidade de fornecedores comprovados.
+- Próxima fatia: auditoria técnica de reuso, ADRs e prova negativa de isolamento Docker; aprovação humana antes de implementação.
+- [Roadmap vigente](ROADMAP.md) · [Registro da transição](TRANSITION.md) · [Segurança](SECURITY.md).
+
+## Registro anterior — histórico, não planejamento vigente
+
+<details>
+<summary>Status legado preservado</summary>
+
 # STATUS — CHDevFlow
 
 **Atualizado:** 17/11/2026 (America/Fortaleza)  
@@ -25,3 +43,6 @@
 2. Registrar apenas **entregas integradas, limitações reais e próximo passo**. Uma PR ainda aberta não é descrita como entregue na `main`.
 3. Após cada merge, conferir coerência entre `STATUS.md`, PR e CI; corrigir qualquer divergência pelo fluxo de PR da `main`, sem escrita direta ou bypass.
 4. Evitar diário extenso: detalhes, logs e histórico permanecem nas Issues/PRs e no [RUC do piloto](docs/control-center/RUC-CC-DESPACHO-01-PILOTO-20261117.md).
+
+
+</details>
