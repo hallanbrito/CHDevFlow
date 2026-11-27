@@ -11,6 +11,7 @@ from scripts.factory_001_docker_sandbox import (
     IMAGE_REPOSITORY,
     MEMORY_BYTES,
     PID_LIMIT,
+    TMPFS_SIZE_BYTES,
     WORKSPACE_TARGET,
     DockerSandbox,
     SandboxError,
@@ -76,7 +77,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 "Memory": MEMORY_BYTES,
                 "NanoCpus": 1_000_000_000,
                 "Tmpfs": {
-                    "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777"
+                    "/tmp": f"rw,nosuid,nodev,noexec,size={TMPFS_SIZE_BYTES},mode=1777"
                 },
             },
             "Mounts": [
@@ -96,7 +97,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
             _validate_container(self._valid_inspect(workspace), image, workspace)
             details = self._valid_inspect(workspace)
             details["HostConfig"]["Tmpfs"] = {
-                "/tmp": "rw,nosuid,nodev,noexec,size=16m,mode=1777"
+                "/tmp": "rw,nosuid,nodev,noexec,size=128m,mode=1777"
             }
             _validate_container(details, image, workspace)
 
@@ -114,14 +115,14 @@ class DockerSandboxUnitTests(unittest.TestCase):
             ),
             (
                 "tmpfs flags",
-                {"Tmpfs": {"/tmp": "rw,size=16777216,mode=1777"}},
+                {"Tmpfs": {"/tmp": "rw,size=134217728,mode=1777"}},
             ),
             (
                 "extra tmpfs",
                 {
                     "Tmpfs": {
-                        "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
-                        "/var/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
+                        "/tmp": "rw,nosuid,nodev,noexec,size=134217728,mode=1777",
+                        "/var/tmp": "rw,nosuid,nodev,noexec,size=134217728,mode=1777",
                     }
                 },
             ),

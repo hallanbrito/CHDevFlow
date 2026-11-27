@@ -27,6 +27,7 @@ IMAGE_REPOSITORY = "ghcr.io/github/copilot-cli"
 WORKSPACE_TARGET = "/home/copilot/workspace"
 CONTAINER_USER = "10001:10001"
 MEMORY_BYTES = 256 * 1024 * 1024
+TMPFS_SIZE_BYTES = 128 * 1024 * 1024
 PID_LIMIT = 64
 CPU_LIMIT = "1"
 MAX_COMMAND_SECONDS = 60
@@ -197,7 +198,7 @@ def _validate_container(
         mode = int(options["mode"], 8)
     except ValueError as exc:
         raise SandboxError("Modo do tmpfs inválido.") from exc
-    if size != 16 * 1024 * 1024 or mode != 0o1777:
+    if size != TMPFS_SIZE_BYTES or mode != 0o1777:
         raise SandboxError("Tmpfs permitido somente em /tmp.")
 
     variables = config.get("Env", [])
@@ -338,7 +339,7 @@ class DockerSandbox:
             f"--memory={MEMORY_BYTES}",
             f"--cpus={CPU_LIMIT}",
             f"--user={CONTAINER_USER}",
-            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=128m,mode=1777",
             "--mount",
             f"type=bind,src={workspace},dst={WORKSPACE_TARGET},readonly",
             f"--workdir={WORKSPACE_TARGET}",

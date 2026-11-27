@@ -13,7 +13,7 @@ Esta fatia demonstra somente o CLI e a fronteira do container. Não integra inte
 ## Controles da prova
 
 - Container efêmero por comando, daemon Docker Linux local e imagem oficial fixada por digest.
-- UID/GID `10001:10001`; `--cap-drop=ALL`; seccomp padrão do daemon; `no-new-privileges`; rootfs somente leitura; rede `none`; limites de 1 CPU, 256 MiB e 64 PIDs.
+- UID/GID `10001:10001`; `--cap-drop=ALL`; seccomp padrão do daemon; `no-new-privileges`; rootfs somente leitura; rede `none`; limites de 1 CPU, 256 MiB e 64 PIDs; tmpfs `/tmp` limitado a 128 MiB, `nosuid,nodev,noexec`.
 - Única montagem: workspace efêmero dedicado, somente leitura. Sem montagem de HOME, credenciais ou socket Docker. `COPILOT_HOME` aponta para temporário interno ao container.
 - Cliente Docker usa diretório de configuração temporário e remove variáveis de credenciais conhecidas. Nenhum valor real é lido ou registrado.
 - Timeout/cancelamento param o container, removem-no e verificam que não restou container com aquele ID. Qualquer falha de daemon, configuração ou cleanup termina como bloqueio, sem execução no host.
