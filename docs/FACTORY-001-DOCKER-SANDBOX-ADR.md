@@ -23,7 +23,7 @@ Docker compartilha o kernel com o host; esta prova reduz acesso, não demonstra 
 ## Critérios de aceite verificáveis
 
 - Pré-verificação exige daemon Linux acessível, seccomp ativo e a imagem local correspondente ao digest fixado; daemon ausente resulta em `BLOQUEADO`, exit code 2.
-- `docker inspect` confirma o digest, UID/GID não-root, remoção de capabilities, seccomp padrão, `no-new-privileges`, rootfs somente leitura, rede `none`, limites de CPU/memória/PIDs e somente workspace + tmpfs montados.
+- `docker inspect` confirma o digest, UID/GID não-root, remoção de capabilities, seccomp padrão, `no-new-privileges`, rootfs somente leitura, rede `none`, limites de CPU/memória/PIDs, bind exclusivo do workspace em `Mounts` e tmpfs exclusivo em `/tmp` via `HostConfig.Tmpfs`.
 - `copilot --version` retorna `1.0.117` e `copilot --help` retorna uso dentro do container.
 - Provas negativas confirmam canário externo inacessível, credenciais fictícias não encaminhadas, ausência de socket Docker, processo sem privilégios de escrita e conexão externa bloqueada.
 - Timeout e cancelamento encerram e removem seus containers; o teste verifica que não restaram IDs.

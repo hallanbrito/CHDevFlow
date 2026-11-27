@@ -154,19 +154,14 @@ def _validate_container(
         for mount in mounts
         if isinstance(mount, dict) and mount.get("Type") == "bind"
     ]
-    tmpfs_mounts = [
-        mount
-        for mount in mounts
-        if isinstance(mount, dict) and mount.get("Type") == "tmpfs"
-    ]
-    if len(bind_mounts) != 1 or len(tmpfs_mounts) != 1 or len(mounts) != 2:
+    if len(bind_mounts) != 1 or len(mounts) != 1:
         summary = ", ".join(
             f"{mount.get('Type', '?')}:{mount.get('Destination', '?')}"
             for mount in mounts
             if isinstance(mount, dict)
         )
         raise SandboxError(
-            "O container deve receber somente o workspace e o tmpfs temporário. "
+            "O container deve receber somente o bind do workspace. "
             f"Montagens observadas (tipo:destino): {summary or 'nenhuma'}."
         )
     mount = bind_mounts[0]
@@ -177,7 +172,32 @@ def _validate_container(
         and mount.get("RW") is False
     ):
         raise SandboxError("Montagem do workspace não corresponde à política somente leitura.")
-    if tmpfs_mounts[0].get("Destination") != "/tmp":
+
+    tmpfs = host.get("Tmpfs")
+    if not isinstance(tmpfs, dict) or set(tmpfs) != {"/tmp"}:
+        raise SandboxError("Somente um tmpfs em /tmp é permitido.")
+    tmpfs_options = tmpfs["/tmp"]
+    if not isinstance(tmpfs_options, str):
+        raise SandboxError("Opções do tmpfs são inválidas.")
+    options = dict(
+        option.split("=", 1) if "=" in option else (option, "")
+        for option in tmpfs_options.split(",")
+    )
+    required_tmpfs_options = {"rw", "nosuid", "nodev", "noexec", "size", "mode"}
+    if set(options) != required_tmpfs_options or any(
+        options[name] for name in ("rw", "nosuid", "nodev", "noexec")
+    ):
+        raise SandboxError("Opções do tmpfs não correspondem à política.")
+    size_match = re.fullmatch(r"(?i)([0-9]+)([kmgt]?)", options["size"])
+    if not size_match:
+        raise SandboxError("Tamanho do tmpfs inválido.")
+    size_units = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
+    size = int(size_match.group(1)) * size_units[size_match.group(2).lower()]
+    try:
+        mode = int(options["mode"], 8)
+    except ValueError as exc:
+        raise SandboxError("Modo do tmpfs inválido.") from exc
+    if size != 16 * 1024 * 1024 or mode != 0o1777:
         raise SandboxError("Tmpfs permitido somente em /tmp.")
 
     variables = config.get("Env", [])

@@ -75,6 +75,9 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 "PidsLimit": PID_LIMIT,
                 "Memory": MEMORY_BYTES,
                 "NanoCpus": 1_000_000_000,
+                "Tmpfs": {
+                    "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777"
+                },
             },
             "Mounts": [
                 {
@@ -83,7 +86,6 @@ class DockerSandboxUnitTests(unittest.TestCase):
                     "Destination": WORKSPACE_TARGET,
                     "RW": False,
                 },
-                {"Type": "tmpfs", "Destination": "/tmp", "RW": True},
             ],
         }
 
@@ -92,6 +94,11 @@ class DockerSandboxUnitTests(unittest.TestCase):
             workspace = Path("/tmp/workspace")
             image, _ = image_reference("x86_64")
             _validate_container(self._valid_inspect(workspace), image, workspace)
+            details = self._valid_inspect(workspace)
+            details["HostConfig"]["Tmpfs"] = {
+                "/tmp": "rw,nosuid,nodev,noexec,size=16m,mode=1777"
+            }
+            _validate_container(details, image, workspace)
 
         cases = (
             ("privileged", {"Privileged": True}),
@@ -103,6 +110,19 @@ class DockerSandboxUnitTests(unittest.TestCase):
                         "no-new-privileges=true",
                         "seccomp=unconfined",
                     ]
+                },
+            ),
+            (
+                "tmpfs flags",
+                {"Tmpfs": {"/tmp": "rw,size=16777216,mode=1777"}},
+            ),
+            (
+                "extra tmpfs",
+                {
+                    "Tmpfs": {
+                        "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
+                        "/var/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
+                    }
                 },
             ),
             ("rootfs", {"ReadonlyRootfs": False}),
@@ -126,7 +146,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
         image, _ = image_reference("x86_64")
         details = self._valid_inspect(workspace)
         details["Mounts"].append({"Type": "bind", "Source": "/home/user"})
-        with self.assertRaisesRegex(SandboxError, "somente o workspace"):
+        with self.assertRaisesRegex(SandboxError, "somente o bind do workspace"):
             _validate_container(details, image, workspace)
 
         details = self._valid_inspect(workspace)
