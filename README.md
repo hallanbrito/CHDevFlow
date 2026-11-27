@@ -1,3 +1,32 @@
+# CHDevFlow — AI Software Factory
+
+> Nova direção de produto (27/11/2026). Esta branch contém a documentação de transição, não uma implementação pronta da fábrica.
+
+O CHDevFlow evolui de uma esteira governada humano–IA para uma fábrica de software local-first, multiagente e independente de fornecedor. Profissionais predefinidos colaboram em reuniões e tarefas; o usuário escolhe suas IAs, modelos e permissões. O Maestro recomenda a alocação, o núcleo valida e o humano aprova decisões sensíveis.
+
+**Docker obrigatório para execução autônoma e testes não confiáveis.** Segurança precisa ser demonstrada, não presumida. O MVP pretende entregar uma aplicação funcional com testes e evidências, sem merge/deploy automático.
+
+## Documentação vigente nesta branch
+
+- [Visão de produto](VISION.md)
+- [Roadmap](ROADMAP.md)
+- [Arquitetura proposta](ARCHITECTURE.md)
+- [Contrato dos agentes](AGENT_CONTRACT.md)
+- [Segurança e Docker](SECURITY.md)
+- [Status atual](STATUS.md)
+- [Registro da transição](TRANSITION.md)
+
+## Situação atual
+
+A versão legada, CLI e Control Center, permanece preservada no Git. A fábrica ainda não está implementada; a próxima etapa é auditoria de reaproveitamento e prova de isolamento. Instruções e documentos históricos não são autorização de execução nem roadmap vigente. A branch main permanece legada até integração aprovada.
+
+## Documentação anterior (referência histórica)
+
+O texto abaixo descreve a arquitetura e operação legadas. Não deve ser interpretado como o novo plano de produto.
+
+<details>
+<summary>README legado preservado</summary>
+
 # C.H. DevFlow
 
 **Framework e CLI de esteiras de desenvolvimento humano–IA com governança do Método C.H.**
@@ -156,3 +185,6 @@ ch watch --once --dry-run
 - [Modelos de arquivos para novos projetos](templates/)
 - [Sentinela Python](apps/bootstrap/sentinela/)
 - [Método C.H. original](https://github.com/hallanbrito/metodo-ch)
+
+
+</details>
