@@ -13,6 +13,7 @@ O CHDevFlow evolui de uma esteira governada humano–IA para uma fábrica de sof
 - [Arquitetura proposta](ARCHITECTURE.md)
 - [Contrato dos agentes](AGENT_CONTRACT.md)
 - [Segurança e Docker](SECURITY.md)
+- [Equipe de desenvolvimento](TEAM.md)
 - [Status atual](STATUS.md)
 - [Registro da transição](TRANSITION.md)
 
