@@ -535,7 +535,8 @@ def run_acceptance(sandbox: DockerSandbox) -> dict[str, object]:
         version_output = version.stdout + version.stderr
         _require(
             version.returncode == 0 and CLI_VERSION in version_output,
-            "Copilot CLI --version falhou ou a versão divergiu.",
+            "Copilot CLI --version falhou ou a versão divergiu "
+            f"(exit={version.returncode}, output={version_output.strip()[:400]!r}).",
         )
         help_result = sandbox.execute(("--help",), workspace, timeout=15)
         help_output = help_result.stdout + help_result.stderr

@@ -56,3 +56,4 @@ Permanecem fora da prova: rootless local, contenção de egress para chamadas re
 
 - [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/copilot-surfaces/copilot-cli)
 - [Imagem oficial `ghcr.io/github/copilot-cli`](https://github.com/github/copilot-cli/pkgs/container/copilot-cli)
+- [Guia oficial da imagem container](https://github.com/github/copilot-cli/blob/main/container/README.md) documenta a substituição do entrypoint para executar `copilot --version`.
