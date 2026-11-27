@@ -544,7 +544,8 @@ def run_acceptance(sandbox: DockerSandbox) -> dict[str, object]:
         _require(
             help_result.returncode == 0
             and ("Usage" in help_output or "usage" in help_output),
-            "Copilot CLI --help falhou dentro do container.",
+            "Copilot CLI --help falhou dentro do container "
+            f"(exit={help_result.returncode}, output={help_output.strip()[:800]!r}).",
         )
 
         probe = sandbox.execute(
