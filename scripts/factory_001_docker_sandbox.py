@@ -26,9 +26,9 @@ IMAGE_DIGESTS = {
 IMAGE_REPOSITORY = "ghcr.io/github/copilot-cli"
 WORKSPACE_TARGET = "/home/copilot/workspace"
 CONTAINER_USER = "10001:10001"
-MEMORY_BYTES = 1024 * 1024 * 1024
+MEMORY_BYTES = 2 * 1024 * 1024 * 1024
 TMPFS_DEFAULT_SIZE_BYTES = 16 * 1024 * 1024
-TMPFS_SIZE_BYTES = 512 * 1024 * 1024
+TMPFS_SIZE_BYTES = 1024 * 1024 * 1024
 PID_LIMIT = 64
 CPU_LIMIT = "1"
 MAX_COMMAND_SECONDS = 60
@@ -219,6 +219,19 @@ def _validate_container(
         if isinstance(variable, str)
     ):
         raise SandboxError("Credencial de host foi encaminhada ao container.")
+    environment = {
+        variable.partition("=")[0]: variable.partition("=")[2]
+        for variable in variables
+        if isinstance(variable, str)
+    }
+    required_environment = {
+        "HOME": "/tmp",
+        "TMPDIR": "/var/tmp",
+        "COPILOT_HOME": "/tmp/copilot-home",
+        "COPILOT_AUTO_UPDATE": "false",
+    }
+    if any(environment.get(name) != value for name, value in required_environment.items()):
+        raise SandboxError("Variáveis de ambiente do container não correspondem à política.")
 
 
 class DockerSandbox:
@@ -349,7 +362,7 @@ class DockerSandbox:
             f"--cpus={CPU_LIMIT}",
             f"--user={CONTAINER_USER}",
             "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777",
-            "--tmpfs=/var/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+            "--tmpfs=/var/tmp:rw,nosuid,nodev,size=1g,mode=1777",
             "--mount",
             f"type=bind,src={workspace},dst={WORKSPACE_TARGET},readonly",
             f"--workdir={WORKSPACE_TARGET}",
@@ -515,7 +528,7 @@ test -x /usr/bin/openssl
 grep -Eq '^Seccomp:[[:space:]]*2$' /proc/self/status
 grep -Eq '^NoNewPrivs:[[:space:]]*1$' /proc/self/status
 grep -Eq '^CapEff:[[:space:]]*0+$' /proc/self/status
-test "$(cat /sys/fs/cgroup/memory.max)" = "1073741824"
+test "$(cat /sys/fs/cgroup/memory.max)" = "2147483648"
 test "$(cat /sys/fs/cgroup/pids.max)" = "64"
 test "$(cat /sys/fs/cgroup/cpu.max)" = "100000 100000"
 test ! -e "$1"

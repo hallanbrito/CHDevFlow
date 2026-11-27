@@ -66,7 +66,12 @@ class DockerSandboxUnitTests(unittest.TestCase):
             "Config": {
                 "Image": image,
                 "User": CONTAINER_USER,
-                "Env": ["HOME=/tmp", "COPILOT_AUTO_UPDATE=false"],
+                "Env": [
+                    "HOME=/tmp",
+                    "TMPDIR=/var/tmp",
+                    "COPILOT_HOME=/tmp/copilot-home",
+                    "COPILOT_AUTO_UPDATE=false",
+                ],
             },
             "HostConfig": {
                 "Privileged": False,
@@ -105,7 +110,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
             details = self._valid_inspect(workspace)
             details["HostConfig"]["Tmpfs"] = {
                 "/tmp": "rw,nosuid,nodev,noexec,size=16m,mode=1777",
-                "/var/tmp": "rw,nosuid,nodev,size=512m,mode=1777",
+                "/var/tmp": "rw,nosuid,nodev,size=1g,mode=1777",
             }
             _validate_container(details, image, workspace)
 
@@ -126,7 +131,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 {
                     "Tmpfs": {
                         "/tmp": "rw,size=16777216,mode=1777",
-                        "/var/tmp": "rw,nosuid,nodev,size=536870912,mode=1777",
+                        "/var/tmp": "rw,nosuid,nodev,size=1073741824,mode=1777",
                     }
                 },
             ),
@@ -135,8 +140,8 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 {
                     "Tmpfs": {
                         "/tmp": "rw,nosuid,nodev,noexec,size=16777216,mode=1777",
-                        "/var/tmp": "rw,nosuid,nodev,size=536870912,mode=1777",
-                        "/var/cache": "rw,nosuid,nodev,size=536870912,mode=1777",
+                        "/var/tmp": "rw,nosuid,nodev,size=1073741824,mode=1777",
+                        "/var/cache": "rw,nosuid,nodev,size=1073741824,mode=1777",
                     }
                 },
             ),
@@ -167,6 +172,11 @@ class DockerSandboxUnitTests(unittest.TestCase):
         details = self._valid_inspect(workspace)
         details["Config"]["Env"].append("COPILOT_GITHUB_TOKEN=fake")
         with self.assertRaisesRegex(SandboxError, "Credencial"):
+            _validate_container(details, image, workspace)
+
+        details = self._valid_inspect(workspace)
+        details["Config"]["Env"][1] = "TMPDIR=/tmp"
+        with self.assertRaisesRegex(SandboxError, "ambiente"):
             _validate_container(details, image, workspace)
 
     def test_missing_docker_blocks_before_any_execution(self):
