@@ -69,6 +69,7 @@ class DockerSandboxUnitTests(unittest.TestCase):
                 "Env": [
                     "HOME=/tmp",
                     "TMPDIR=/var/tmp",
+                    "XDG_CACHE_HOME=/var/tmp/.cache",
                     "COPILOT_HOME=/tmp/copilot-home",
                     "COPILOT_AUTO_UPDATE=false",
                 ],
@@ -176,6 +177,11 @@ class DockerSandboxUnitTests(unittest.TestCase):
 
         details = self._valid_inspect(workspace)
         details["Config"]["Env"][1] = "TMPDIR=/tmp"
+        with self.assertRaisesRegex(SandboxError, "ambiente"):
+            _validate_container(details, image, workspace)
+
+        details = self._valid_inspect(workspace)
+        details["Config"]["Env"][2] = "XDG_CACHE_HOME=/tmp/.cache"
         with self.assertRaisesRegex(SandboxError, "ambiente"):
             _validate_container(details, image, workspace)
 

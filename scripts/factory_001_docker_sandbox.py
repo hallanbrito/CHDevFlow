@@ -227,6 +227,7 @@ def _validate_container(
     required_environment = {
         "HOME": "/tmp",
         "TMPDIR": "/var/tmp",
+        "XDG_CACHE_HOME": "/var/tmp/.cache",
         "COPILOT_HOME": "/tmp/copilot-home",
         "COPILOT_AUTO_UPDATE": "false",
     }
@@ -368,6 +369,7 @@ class DockerSandbox:
             f"--workdir={WORKSPACE_TARGET}",
             "--env=HOME=/tmp",
             "--env=TMPDIR=/var/tmp",
+            "--env=XDG_CACHE_HOME=/var/tmp/.cache",
             "--env=COPILOT_HOME=/tmp/copilot-home",
             "--env=COPILOT_AUTO_UPDATE=false",
             f"--entrypoint={entrypoint}",
