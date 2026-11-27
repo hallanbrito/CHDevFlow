@@ -160,8 +160,14 @@ def _validate_container(
         if isinstance(mount, dict) and mount.get("Type") == "tmpfs"
     ]
     if len(bind_mounts) != 1 or len(tmpfs_mounts) != 1 or len(mounts) != 2:
+        summary = ", ".join(
+            f"{mount.get('Type', '?')}:{mount.get('Destination', '?')}"
+            for mount in mounts
+            if isinstance(mount, dict)
+        )
         raise SandboxError(
-            "O container deve receber somente o workspace e o tmpfs temporário."
+            "O container deve receber somente o workspace e o tmpfs temporário. "
+            f"Montagens observadas (tipo:destino): {summary or 'nenhuma'}."
         )
     mount = bind_mounts[0]
     if not (
