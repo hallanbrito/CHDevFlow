@@ -145,8 +145,84 @@ class MissionPreparationService:
             pass
         return self.safe_empty_hooks_dir
 
+    def _inspecionar_filtros_git(self, repo: Path) -> tuple[set[str], list[str]]:
+        """Descobre e valida filtros Git configurados de forma fail-closed (P1-A).
+
+        Retorna (drivers_configurados, filtros_inseguros_detectados).
+        Retorno de git config:
+        - 0: correspondências encontradas (analisa chaves e valores)
+        - 1: ausência legítima (nenhum filtro configurado)
+        - 2, 128 ou qualquer outro: falha na consulta (bloqueia fail-closed)
+        Exceções ou timeout: bloqueia fail-closed.
+        """
+        env = os.environ.copy()
+        env["GIT_CONFIG_NOSYSTEM"] = "1"
+        try:
+            proc = subprocess.run(
+                ["git", "config", "--get-regexp", r"^filter\."],
+                cwd=repo,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=15,
+                env=env,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PreparationValidationError(
+                f"Timeout ao consultar filtros Git no repositório '{repo.name}' (fail-closed)."
+            ) from exc
+        except Exception as exc:
+            raise PreparationValidationError(
+                f"Falha ao consultar filtros Git no repositório '{repo.name}': {sanitizar_log(str(exc))} (fail-closed)."
+            ) from exc
+
+        if proc.returncode == 1:
+            # Ausência legítima: nenhum filtro configurado
+            if proc.stdout.strip():
+                raise PreparationValidationError(
+                    f"Saída ambígua ao consultar filtros Git no repositório '{repo.name}' com código 1: "
+                    f"{sanitizar_log(proc.stdout[:200])} (fail-closed)."
+                )
+            return set(), []
+
+        if proc.returncode != 0:
+            erro = sanitizar_log(proc.stderr.strip() or proc.stdout.strip() or f"código de saída {proc.returncode}")
+            raise PreparationValidationError(
+                f"Erro na consulta de filtros Git no repositório '{repo.name}' (código {proc.returncode}): {erro} (fail-closed)."
+            )
+
+        drivers = set()
+        filtros_inseguros = []
+        for linha in proc.stdout.strip().splitlines():
+            linha_limpa = linha.strip()
+            if not linha_limpa:
+                continue
+            partes = linha_limpa.split(None, 1)
+            chave = partes[0]
+            valor = partes[1].strip() if len(partes) > 1 else ""
+
+            subpartes = chave.split(".")
+            if len(subpartes) >= 2 and subpartes[0] == "filter":
+                driver = subpartes[1]
+                drivers.add(driver)
+
+                # Se for propriedade de execução (smudge, clean, process) com valor não vazio
+                # e não for o driver padrão LFS
+                if len(subpartes) >= 3 and subpartes[2] in ("smudge", "clean", "process"):
+                    if valor and driver != "lfs":
+                        filtros_inseguros.append(chave)
+
+        return drivers, filtros_inseguros
+
     def _executar_git_seguro(
-        self, cwd: Path, *args: str, timeout: float = 30.0
+        self,
+        cwd: Path,
+        *args: str,
+        timeout: float = 30.0,
+        drivers_conhecidos: set[str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Executa comando Git inibindo hooks, fsmonitor e executores externos configuráveis (P1-A)."""
         empty_hooks = self._obter_diretorio_hooks_vazio()
@@ -165,32 +241,21 @@ class MissionPreparationService:
             "filter.lfs.required=false",
         ]
 
-        # P1-A residual: Neutraliza dinamicamente drivers de filtro arbitrários configurados
-        try:
-            proc_cfg = subprocess.run(
-                ["git", "config", "--name-only", "--get-regexp", r"^filter\."],
-                cwd=cwd,
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if proc_cfg.returncode == 0 and proc_cfg.stdout.strip():
-                drivers = set()
-                for linha in proc_cfg.stdout.strip().splitlines():
-                    partes = linha.split(".")
-                    if len(partes) >= 2 and partes[0] == "filter":
-                        drivers.add(partes[1])
-                for d in sorted(drivers):
-                    if d != "lfs":
-                        safe_opts.extend([
-                            "-c", f"filter.{d}.smudge=",
-                            "-c", f"filter.{d}.clean=",
-                            "-c", f"filter.{d}.process=",
-                            "-c", f"filter.{d}.required=false",
-                        ])
-        except Exception:
-            pass
+        # P1-A: Descoberta e neutralização fail-closed de drivers de filtro configurados
+        if drivers_conhecidos is not None:
+            drivers = drivers_conhecidos
+        else:
+            # Reutiliza o mesmo mecanismo unificado de inspeção fail-closed
+            drivers, _ = self._inspecionar_filtros_git(cwd)
+
+        for d in sorted(drivers):
+            if d != "lfs":
+                safe_opts.extend([
+                    "-c", f"filter.{d}.smudge=",
+                    "-c", f"filter.{d}.clean=",
+                    "-c", f"filter.{d}.process=",
+                    "-c", f"filter.{d}.required=false",
+                ])
 
         env = os.environ.copy()
         env["GIT_CONFIG_NOSYSTEM"] = "1"
@@ -207,27 +272,16 @@ class MissionPreparationService:
             check=False,
         )
 
-    def _verificar_filtros_externos(self, repo: Path) -> None:
+    def _verificar_filtros_externos(self, repo: Path) -> set[str]:
         """Verifica de forma fail-closed se existem drivers de filtro Git externos personalizados configurados (P1-A)."""
-        proc = self._executar_git_seguro(
-            repo, "config", "--get-regexp", r"^filter\..*\.(smudge|clean|process)"
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            linhas = proc.stdout.strip().splitlines()
-            filtros_inseguros = []
-            for linha in linhas:
-                partes = linha.split(None, 1)
-                if partes:
-                    chave = partes[0]
-                    valor = partes[1].strip() if len(partes) > 1 else ""
-                    if valor and not chave.startswith("filter.lfs."):
-                        filtros_inseguros.append(chave)
-            if filtros_inseguros:
-                raise PreparationValidationError(
-                    f"Filtro Git externo personalizado configurado detectado: {filtros_inseguros}. "
-                    "A preparação de missões recusa bases com drivers de filtro Git externos personalizados "
-                    "(fail-closed) para impedir execução arbitrária de código durante checkout/smudge/process."
-                )
+        drivers, filtros_inseguros = self._inspecionar_filtros_git(repo)
+        if filtros_inseguros:
+            raise PreparationValidationError(
+                f"Filtro Git externo personalizado configurado detectado: {filtros_inseguros}. "
+                "A preparação de missões recusa bases com drivers de filtro Git externos personalizados "
+                "(fail-closed) para impedir execução arbitrária de código durante checkout/smudge/process."
+            )
+        return drivers
 
     def _rollback_recursos_missao(
         self,
@@ -238,8 +292,11 @@ class MissionPreparationService:
         *,
         branch_criada_nesta_tentativa: bool = False,
         worktree_criada_nesta_tentativa: bool = False,
+        expected_base_sha: str | None = None,
+        created_commit_sha: str | None = None,
+        drivers_conhecidos: set[str] | None = None,
     ) -> None:
-        """Executa rollback estrito de recursos pertencentes exclusivamente a esta missão (P1-A/P1-C)."""
+        """Executa rollback estrito de recursos com comprovação inequívoca de propriedade (P1-A/P1-B/P1-C)."""
         nome_esperado_wt = f"CH-Lab-{m_id}"
         nome_esperado_manifest = f"CH-Manifest-{m_id}.json"
         nome_esperado_branch = f"ch-lab/{m_id.lower()}"
@@ -250,41 +307,123 @@ class MissionPreparationService:
             and worktree_dir.name == nome_esperado_wt
             and worktree_dir.parent.resolve() == self.labs_root.resolve()
         ):
+            wt_reconhecida = False
             try:
-                res_list = self._executar_git_seguro(self.source_repo, "worktree", "list", "--porcelain")
-                if res_list.returncode == 0 and str(worktree_dir) in res_list.stdout:
-                    self._executar_git_seguro(self.source_repo, "worktree", "remove", "--force", str(worktree_dir))
+                res_list = self._executar_git_seguro(
+                    self.source_repo,
+                    "worktree",
+                    "list",
+                    "--porcelain",
+                    drivers_conhecidos=drivers_conhecidos,
+                )
+                if res_list.returncode == 0:
+                    linhas_list = res_list.stdout.splitlines()
+                    for idx, linha in enumerate(linhas_list):
+                        if (
+                            linha.startswith("worktree ")
+                            and Path(linha.split(" ", 1)[1]).resolve() == worktree_dir.resolve()
+                        ):
+                            bloco = linhas_list[idx : idx + 4]
+                            if any(f"refs/heads/{branch_name}" in l for l in bloco):
+                                wt_reconhecida = True
+                            break
             except Exception:
-                pass
-            if worktree_dir.exists():
+                wt_reconhecida = False
+
+            if wt_reconhecida:
                 try:
-                    if worktree_dir.is_dir() and not worktree_dir.is_symlink():
-                        shutil.rmtree(worktree_dir, ignore_errors=True)
-                    else:
-                        worktree_dir.unlink(missing_ok=True)
+                    res_rm = self._executar_git_seguro(
+                        self.source_repo,
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(worktree_dir),
+                        drivers_conhecidos=drivers_conhecidos,
+                    )
+                    # P1-B: Checar falha de worktree remove antes de qualquer rmtree
+                    if res_rm.returncode == 0:
+                        if worktree_dir.exists():
+                            if worktree_dir.is_dir() and not worktree_dir.is_symlink():
+                                shutil.rmtree(worktree_dir, ignore_errors=True)
+                            else:
+                                worktree_dir.unlink(missing_ok=True)
                 except Exception:
                     pass
-            try:
-                self._executar_git_seguro(self.source_repo, "worktree", "prune")
-            except Exception:
-                pass
+                try:
+                    self._executar_git_seguro(
+                        self.source_repo,
+                        "worktree",
+                        "prune",
+                        drivers_conhecidos=drivers_conhecidos,
+                    )
+                except Exception:
+                    pass
 
-        # 2. Limpeza da branch (P1-C: apenas se for comprovadamente criada nesta tentativa e coincidir com a missão)
+        # 2. Limpeza da branch (apenas se for comprovadamente criada nesta tentativa e identidade for comprovada)
         if branch_criada_nesta_tentativa and branch_name == nome_esperado_branch:
             try:
                 res_b = self._executar_git_seguro(
-                    self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
+                    self.source_repo,
+                    "rev-parse",
+                    "--verify",
+                    f"refs/heads/{branch_name}",
+                    drivers_conhecidos=drivers_conhecidos,
                 )
                 if res_b.returncode == 0:
-                    self._executar_git_seguro(self.source_repo, "branch", "-D", branch_name)
+                    current_sha = res_b.stdout.strip()
+                    identidade_comprovada = False
+
+                    # Cenário A: Branch ainda aponta para o commit base (head_commit) no qual foi criada
+                    if expected_base_sha and current_sha == expected_base_sha:
+                        identidade_comprovada = True
+                    # Cenário B: Branch aponta para o commit gerado nesta tentativa
+                    elif created_commit_sha and current_sha == created_commit_sha:
+                        identidade_comprovada = True
+                    else:
+                        # Inspeciona commit da branch para verificar autoria e vinculação estrita à missão
+                        res_info = self._executar_git_seguro(
+                            self.source_repo,
+                            "log",
+                            "-1",
+                            "--format=%an%x00%ae%x00%s%x00%P",
+                            f"refs/heads/{branch_name}",
+                            drivers_conhecidos=drivers_conhecidos,
+                        )
+                        if res_info.returncode == 0 and res_info.stdout.strip():
+                            campos = res_info.stdout.strip().split("\x00")
+                            if len(campos) >= 3:
+                                autor, email, assunto = campos[0], campos[1], campos[2]
+                                pais = campos[3].split() if len(campos) > 3 else []
+                                if (
+                                    autor == "CHDevFlow Preparer"
+                                    and email == "chdevflow@local"
+                                    and assunto == f"prep: prompt da missão {m_id}"
+                                    and (not expected_base_sha or expected_base_sha in pais)
+                                ):
+                                    identidade_comprovada = True
+
+                    if identidade_comprovada:
+                        self._executar_git_seguro(
+                            self.source_repo,
+                            "branch",
+                            "-D",
+                            branch_name,
+                            drivers_conhecidos=drivers_conhecidos,
+                        )
             except Exception:
                 pass
 
         # 3. Limpeza do manifesto (apenas se for o manifesto desta missão sob labs_root)
         if manifest_path.name == nome_esperado_manifest and manifest_path.parent.resolve() == self.labs_root.resolve():
             try:
-                manifest_path.unlink(missing_ok=True)
                 manifest_path.with_suffix(".tmp").unlink(missing_ok=True)
+                if manifest_path.exists():
+                    try:
+                        conteudo = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        if isinstance(conteudo, dict) and conteudo.get("mission_id") == m_id:
+                            manifest_path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -669,8 +808,8 @@ class MissionPreparationService:
         if not test_files:
             raise PreparationValidationError("Nenhum arquivo de teste 'test_*.py' encontrado em 'tests/'.")
 
-        # P1-A residual: Validação fail-closed contra filtros Git externos personalizados configurados
-        self._verificar_filtros_externos(self.source_repo)
+        # P1-A: Validação fail-closed contra filtros Git externos personalizados configurados
+        drivers_git = self._verificar_filtros_externos(self.source_repo)
 
         with self._prep_lock:
             # P2: Fail-closed antecipado: bloqueia ANTES de criar worktree, branch ou manifesto se houver lock
@@ -696,7 +835,11 @@ class MissionPreparationService:
                 raise PreparationConflictError(f"Manifesto '{manifest_path}' já existe.")
 
             res_branch_preexistente = self._executar_git_seguro(
-                self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
+                self.source_repo,
+                "rev-parse",
+                "--verify",
+                f"refs/heads/{branch_name}",
+                drivers_conhecidos=drivers_git,
             )
             if res_branch_preexistente.returncode == 0:
                 raise PreparationConflictError(
@@ -707,6 +850,7 @@ class MissionPreparationService:
             # Rastreamento explícito de propriedade para garantir que rollback não toque em recursos alheios
             branch_criada_nesta_tentativa = False
             worktree_criada_nesta_tentativa = False
+            created_commit_sha = None
 
             try:
                 # 10. Criação do Laboratório Git descartável via worktree
@@ -719,21 +863,28 @@ class MissionPreparationService:
                     branch_name,
                     str(worktree_dir),
                     head_commit,
+                    drivers_conhecidos=drivers_git,
                 )
                 if res_wt.returncode != 0:
-                    # Se git falhou mas criou recursos parcialmente, marca para rollback estrito
+                    # P1-B: Falha de worktree add não comprova posse. Não marcar como criadas nesta tentativa.
                     res_b_pos = self._executar_git_seguro(
-                        self.source_repo, "rev-parse", "--verify", f"refs/heads/{branch_name}"
+                        self.source_repo,
+                        "rev-parse",
+                        "--verify",
+                        f"refs/heads/{branch_name}",
+                        drivers_conhecidos=drivers_git,
                     )
-                    if res_b_pos.returncode == 0:
-                        branch_criada_nesta_tentativa = True
-                    if worktree_dir.exists():
-                        worktree_criada_nesta_tentativa = True
-
+                    detalhe_extra = ""
+                    if res_b_pos.returncode == 0 or worktree_dir.exists():
+                        detalhe_extra = (
+                            " Recursos remanescentes ou concorrentes detectados; autoria não comprovada. "
+                            "Remoção automática bloqueada para prevenir perda de dados (limpeza manual requerida)."
+                        )
                     raise MissionPreparationError(
-                        f"Falha ao criar worktree descartável '{worktree_dir.name}': {sanitizar_log(res_wt.stderr)}"
+                        f"Falha ao criar worktree descartável '{worktree_dir.name}': {sanitizar_log(res_wt.stderr)}.{detalhe_extra}"
                     )
 
+                # Apenas após confirmação inequívoca de sucesso do git worktree add
                 branch_criada_nesta_tentativa = True
                 worktree_criada_nesta_tentativa = True
 
@@ -765,7 +916,12 @@ class MissionPreparationService:
                 prompt_path.write_text(conteudo_prompt, encoding="utf-8")
 
                 # 12. Commit temporário na branch descartável para garantir worktree limpa (requisito F6)
-                res_add = self._executar_git_seguro(worktree_dir, "add", prompt_filename)
+                res_add = self._executar_git_seguro(
+                    worktree_dir,
+                    "add",
+                    prompt_filename,
+                    drivers_conhecidos=drivers_git,
+                )
                 if res_add.returncode != 0:
                     raise MissionPreparationError("Falha ao registrar prompt no Git do laboratório.")
 
@@ -778,17 +934,31 @@ class MissionPreparationService:
                     "commit",
                     "-m",
                     f"prep: prompt da missão {m_id}",
+                    drivers_conhecidos=drivers_git,
                 )
                 if res_commit.returncode != 0:
                     raise MissionPreparationError("Falha ao versionar prompt na branch temporária.")
 
                 # 13. Obtenção do SHA base com o prompt commitado e verificação de worktree limpa
-                res_base = self._executar_git_seguro(worktree_dir, "rev-parse", "--verify", "HEAD")
+                res_base = self._executar_git_seguro(
+                    worktree_dir,
+                    "rev-parse",
+                    "--verify",
+                    "HEAD",
+                    drivers_conhecidos=drivers_git,
+                )
                 if res_base.returncode != 0:
                     raise MissionPreparationError("Falha ao verificar SHA da branch temporária.")
                 base_sha_lab = res_base.stdout.strip()
+                created_commit_sha = base_sha_lab
 
-                res_status = self._executar_git_seguro(worktree_dir, "status", "--porcelain", "--untracked-files=all")
+                res_status = self._executar_git_seguro(
+                    worktree_dir,
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                    drivers_conhecidos=drivers_git,
+                )
                 if res_status.stdout.strip() != "":
                     raise MissionPreparationError("Laboratório recém-criado não está em estado Git limpo.")
 
@@ -821,7 +991,7 @@ class MissionPreparationService:
                 temp_manifest.replace(manifest_path)
 
             except Exception:
-                # P1-A/P1-C: Rollback estrito de worktree, branch e manifesto comprovadamente criados nesta tentativa
+                # P1-A/P1-B/P1-C: Rollback estrito de worktree, branch e manifesto com identidade comprovada
                 self._rollback_recursos_missao(
                     m_id,
                     worktree_dir,
@@ -829,6 +999,9 @@ class MissionPreparationService:
                     manifest_path,
                     branch_criada_nesta_tentativa=branch_criada_nesta_tentativa,
                     worktree_criada_nesta_tentativa=worktree_criada_nesta_tentativa,
+                    expected_base_sha=head_commit,
+                    created_commit_sha=created_commit_sha,
+                    drivers_conhecidos=drivers_git,
                 )
                 raise
 

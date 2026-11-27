@@ -770,7 +770,7 @@ def test_preparacao_inibe_hooks_adversariais_git(repo_fonte_simulado, tmp_path):
 
 
 def test_rollback_apos_falha_parcial_worktree_add(repo_fonte_simulado):
-    """Comprova rollback estrito de branch e worktree após falha parcial de worktree add (P1-A)."""
+    """Comprova que falha em worktree add NÃO exclui branch ou pasta sem posse comprovada (R4 / P1-B)."""
     repo = repo_fonte_simulado["repo"]
     labs_root = repo_fonte_simulado["labs_root"]
 
@@ -791,10 +791,9 @@ def test_rollback_apos_falha_parcial_worktree_add(repo_fonte_simulado):
 
     original_exec = svc._executar_git_seguro
 
-    # Simula falha parcial: git cria a branch e cria arquivos na pasta, mas aborta com erro
+    # Simula falha: git worktree add aborta com erro enquanto recursos existem/foram criados externamente
     def fake_exec_git(cwd, *args, **kwargs):
         if len(args) >= 2 and args[0] == "worktree" and args[1] == "add":
-            # args: ("worktree", "add", "-b", branch_name, worktree_dir, head_commit)
             b_name = args[3]
             wt_path = Path(args[4])
             wt_path.mkdir(parents=True, exist_ok=True)
@@ -820,19 +819,22 @@ def test_rollback_apos_falha_parcial_worktree_add(repo_fonte_simulado):
                 mission_id="MISSAO-FALHA-PARCIAL",
             )
 
-    assert "erro simulado de checkout parcial" in str(exc_info.value)
+    msg_erro = str(exc_info.value)
+    assert "erro simulado de checkout parcial" in msg_erro
+    assert "autoria não comprovada" in msg_erro or "limpeza manual requerida" in msg_erro
 
-    # 1. Branch efêmera da missão falhada deve ter sido limpa pelo rollback
+    # 1. R4 / P1-B: Recursos com autoria incerta NÃO são excluídos pelo rollback; dados são preservados
     proc_branch = subprocess.run(
         ["git", "rev-parse", "--verify", "refs/heads/ch-lab/missao-falha-parcial"],
         cwd=repo,
         capture_output=True,
     )
-    assert proc_branch.returncode != 0, "Branch da missão falhada deveria ter sido removida no rollback!"
+    assert proc_branch.returncode == 0, "Branch de posse incerta deve ser PRESERVADA (não excluída)!"
 
-    # 2. Pasta temporária da missão falhada deve ter sido limpa pelo rollback
+    # 2. Pasta com autoria incerta NÃO é apagada via rmtree
     pasta_lab_falhada = labs_root / "CH-Lab-MISSAO-FALHA-PARCIAL"
-    assert not pasta_lab_falhada.exists(), "Diretório de worktree da missão falhada deveria ter sido removido!"
+    assert pasta_lab_falhada.exists(), "Diretório com posse incerta deve ser PRESERVADO (não excluído)!"
+    assert (pasta_lab_falhada / "arquivo_parcial.txt").read_text(encoding="utf-8") == "parcial"
 
     # 3. Recurso de terceiro em labs_root permaneceu intacto
     assert outro_lab.is_dir()
@@ -1127,3 +1129,323 @@ def test_rollback_nao_remove_branch_preexistente_sem_comprovacao_de_propriedade(
     )
     assert proc_sha_pos.returncode == 0
     assert proc_sha_pos.stdout.strip() == sha_original
+
+
+# ==============================================================================
+# TESTES DETERMINÍSTICOS R4 (P1-A Filtros Git fail-closed / P1-B Rollback estrito)
+# ==============================================================================
+
+def test_inspecionar_filtros_git_retorno_1_ausencia_legitima(repo_fonte_simulado):
+    """Comprova que git config com código 1 e saída vazia é tratado como ausência legítima (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+    drivers, filtros_inseguros = svc._inspecionar_filtros_git(repo)
+    assert drivers == set()
+    assert filtros_inseguros == []
+
+
+@pytest.mark.parametrize("exit_code,stderr_msg", [
+    (2, "error: invalid key or section syntax"),
+    (128, "fatal: not in a git directory"),
+    (255, "error: generic unexpected failure"),
+])
+def test_inspecionar_filtros_git_codigos_erro_bloqueiam_fail_closed(repo_fonte_simulado, exit_code, stderr_msg):
+    """Comprova que retornos diferentes de 0 e 1 em git config bloqueiam fail-closed (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    def mock_run(cmd, *args, **kwargs):
+        if "config" in cmd and "--get-regexp" in cmd:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=exit_code,
+                stdout="",
+                stderr=stderr_msg,
+            )
+        return subprocess.run(cmd, *args, **kwargs)
+
+    with patch("subprocess.run", side_effect=mock_run):
+        with pytest.raises(PreparationValidationError) as exc_info:
+            svc._inspecionar_filtros_git(repo)
+
+    msg = str(exc_info.value)
+    assert f"código {exit_code}" in msg
+    assert "fail-closed" in msg
+
+
+def test_inspecionar_filtros_git_retorno_1_saida_ambigua_fail_closed(repo_fonte_simulado):
+    """Comprova que código 1 com saída não-vazia é tratado como ambíguo e bloqueia fail-closed (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    def mock_run(cmd, *args, **kwargs):
+        if "config" in cmd and "--get-regexp" in cmd:
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=1,
+                stdout="filter.ambiguo.smudge algo_inesperado\n",
+                stderr="",
+            )
+        return subprocess.run(cmd, *args, **kwargs)
+
+    with patch("subprocess.run", side_effect=mock_run):
+        with pytest.raises(PreparationValidationError) as exc_info:
+            svc._inspecionar_filtros_git(repo)
+
+    assert "Saída ambígua" in str(exc_info.value)
+    assert "fail-closed" in str(exc_info.value)
+
+
+def test_inspecionar_filtros_git_timeout_fail_closed(repo_fonte_simulado):
+    """Comprova que timeout durante consulta de filtros é fail-closed e sanitizado (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    def mock_run(cmd, *args, **kwargs):
+        if "config" in cmd and "--get-regexp" in cmd:
+            raise subprocess.TimeoutExpired(cmd=cmd, timeout=15)
+        return subprocess.run(cmd, *args, **kwargs)
+
+    with patch("subprocess.run", side_effect=mock_run):
+        with pytest.raises(PreparationValidationError) as exc_info:
+            svc._inspecionar_filtros_git(repo)
+
+    assert "Timeout" in str(exc_info.value)
+    assert "fail-closed" in str(exc_info.value)
+
+
+def test_inspecionar_filtros_git_excecao_fail_closed(repo_fonte_simulado):
+    """Comprova que exceção durante consulta de filtros é fail-closed e sanitizada (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=repo_fonte_simulado["labs_root"],
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    def mock_run(cmd, *args, **kwargs):
+        if "config" in cmd and "--get-regexp" in cmd:
+            raise OSError("Falha simulada de sistema operacional ao invocar git")
+        return subprocess.run(cmd, *args, **kwargs)
+
+    with patch("subprocess.run", side_effect=mock_run):
+        with pytest.raises(PreparationValidationError) as exc_info:
+            svc._inspecionar_filtros_git(repo)
+
+    assert "Falha ao consultar filtros Git" in str(exc_info.value)
+    assert "fail-closed" in str(exc_info.value)
+
+
+def test_preparacao_recusada_antes_de_checkout_quando_filtros_falham(repo_fonte_simulado):
+    """Comprova que preparação falha de forma segura antes de criar worktree se inspeção de filtros falhar (P1-A)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    with patch.object(svc, "_inspecionar_filtros_git", side_effect=PreparationValidationError("Falha simulada na consulta de filtros (fail-closed)")):
+        with pytest.raises(PreparationValidationError) as exc_info:
+            svc.preparar_missao(
+                issue=124,
+                repository="hallanbrito/CHDevFlow",
+                target_file=repo_fonte_simulado["target_rel"],
+                objetivo="Teste recusa antecipada",
+                criterios_aceite="pytest tests/test_modulo_alvo.py",
+                confirmacao_po=True,
+                mission_id="TESTE-FILTRO-FALHA",
+            )
+
+    assert "Falha simulada na consulta de filtros" in str(exc_info.value)
+    # Clone principal intacto e nenhuma pasta criada
+    assert not (labs_root / "CH-Lab-TESTE-FILTRO-FALHA").exists()
+    proc_status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True)
+    assert proc_status.stdout.strip() == ""
+
+
+def test_rollback_nao_remove_branch_alheia_com_sha_diferente(repo_fonte_simulado):
+    """Comprova que _rollback_recursos_missao não remove branch cujo SHA pertence a terceiro (P1-B)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+
+    # Cria commit exclusivo de terceiro
+    src_file = repo / "src" / "chdevflow" / "core" / "modulo_alvo.py"
+    src_file.write_text("# alteracao de terceiro\n", encoding="utf-8")
+    subprocess.run(["git", "checkout", "-b", "ch-lab/terceiro"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "Commit legítimo de terceiro"], cwd=repo, check=True)
+    sha_terceiro = subprocess.run(
+        ["git", "rev-parse", "refs/heads/ch-lab/terceiro"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+    # Volta para main
+    subprocess.run(["git", "checkout", "main"], cwd=repo, check=True)
+    head_main = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert sha_terceiro != head_main
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    worktree_dir = labs_root / "CH-Lab-TERCEIRO"
+    manifest_path = labs_root / "CH-Manifest-TERCEIRO.json"
+
+    # Simula acionamento de rollback mesmo com branch_criada_nesta_tentativa=True
+    # mas expected_base_sha aponta para main (não correspondendo ao SHA de terceiro)
+    svc._rollback_recursos_missao(
+        "TERCEIRO",
+        worktree_dir,
+        "ch-lab/terceiro",
+        manifest_path,
+        branch_criada_nesta_tentativa=True,
+        worktree_criada_nesta_tentativa=False,
+        expected_base_sha=head_main,
+    )
+
+    # A branch de terceiro DEVE ser preservada intacta byte a byte
+    sha_pos = subprocess.run(
+        ["git", "rev-parse", "refs/heads/ch-lab/terceiro"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    assert sha_pos == sha_terceiro, "Branch de terceiro NÃO pode ser excluída quando a identidade não for comprovada!"
+
+
+def test_rollback_nao_executa_rmtree_quando_worktree_remove_falha(repo_fonte_simulado):
+    """Comprova que se git worktree remove falha, shutil.rmtree NÃO é chamado para evitar destruição de dados (P1-B)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+
+    # Cria pasta de worktree com arquivo valioso
+    worktree_dir = labs_root / "CH-Lab-FALHA-REMOVE"
+    worktree_dir.mkdir(parents=True)
+    arquivo_importante = worktree_dir / "preservar.txt"
+    arquivo_importante.write_text("conteudo critico", encoding="utf-8")
+
+    manifest_path = labs_root / "CH-Manifest-FALHA-REMOVE.json"
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    # Simula que a worktree está no worktree list, mas git worktree remove falha
+    original_exec = svc._executar_git_seguro
+
+    def mock_exec(cwd, *args, **kwargs):
+        if len(args) >= 2 and args[0] == "worktree" and args[1] == "list":
+            return subprocess.CompletedProcess(
+                args=["git", *args],
+                returncode=0,
+                stdout=f"worktree {worktree_dir}\nHEAD 12345\nbranch refs/heads/ch-lab/falha-remove\n\n",
+                stderr="",
+            )
+        if len(args) >= 2 and args[0] == "worktree" and args[1] == "remove":
+            return subprocess.CompletedProcess(
+                args=["git", *args],
+                returncode=1,
+                stdout="",
+                stderr="fatal: erro simulado ao remover worktree",
+            )
+        return original_exec(cwd, *args, **kwargs)
+
+    with patch.object(svc, "_executar_git_seguro", side_effect=mock_exec):
+        svc._rollback_recursos_missao(
+            "FALHA-REMOVE",
+            worktree_dir,
+            "ch-lab/falha-remove",
+            manifest_path,
+            worktree_criada_nesta_tentativa=True,
+            branch_criada_nesta_tentativa=False,
+        )
+
+    # Diretório e arquivo devem estar PRESERVADOS (rmtree não executado após falha de worktree remove)
+    assert worktree_dir.exists()
+    assert arquivo_importante.exists()
+    assert arquivo_importante.read_text(encoding="utf-8") == "conteudo critico"
+
+
+def test_rollback_legitimo_remove_recursos_quando_identidade_comprovada(repo_fonte_simulado):
+    """Comprova que rollback legítimo remove branch e worktree quando propriedade e identidade são comprovadas (P1-B)."""
+    repo = repo_fonte_simulado["repo"]
+    labs_root = repo_fonte_simulado["labs_root"]
+
+    svc = MissionPreparationService(
+        source_repo=repo,
+        labs_root=labs_root,
+        data_dir=repo_fonte_simulado["data_dir"],
+    )
+
+    # Simula falha na escrita do commit do prompt após sucesso de worktree add
+    original_exec = svc._executar_git_seguro
+
+    def mock_exec(cwd, *args, **kwargs):
+        if "commit" in args:
+            return subprocess.CompletedProcess(
+                args=["git", *args],
+                returncode=1,
+                stdout="",
+                stderr="fatal: falha simulada ao versionar commit do prompt",
+            )
+        return original_exec(cwd, *args, **kwargs)
+
+    with patch.object(svc, "_executar_git_seguro", side_effect=mock_exec):
+        with pytest.raises(MissionPreparationError) as exc_info:
+            svc.preparar_missao(
+                issue=124,
+                repository="hallanbrito/CHDevFlow",
+                target_file=repo_fonte_simulado["target_rel"],
+                objetivo="Teste rollback legítimo",
+                criterios_aceite="pytest tests/test_modulo_alvo.py",
+                confirmacao_po=True,
+                mission_id="ROLLBACK-LEGITIMO",
+            )
+
+    assert "Falha ao versionar prompt na branch temporária" in str(exc_info.value)
+
+    # Worktree, branch temporária e manifesto foram legitimamente limpos porque a identidade foi comprovada
+    wt_dir = labs_root / "CH-Lab-ROLLBACK-LEGITIMO"
+    assert not wt_dir.exists(), "Worktree criada legitimamente deveria ser limpa no rollback!"
+
+    proc_b = subprocess.run(
+        ["git", "rev-parse", "--verify", "refs/heads/ch-lab/rollback-legitimo"],
+        cwd=repo,
+        capture_output=True,
+    )
+    assert proc_b.returncode != 0, "Branch temporária criada legitimamente deveria ser limpa no rollback!"
+
+    proc_status = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True)
+    assert proc_status.stdout.strip() == ""
