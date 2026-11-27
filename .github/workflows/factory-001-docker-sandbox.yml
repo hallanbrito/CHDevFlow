@@ -1,0 +1,43 @@
+name: FACTORY-001 Docker Sandbox Proof
+
+"on":
+  pull_request:
+    branches:
+      - factory/v2
+    paths:
+      - ".github/workflows/factory-001-docker-sandbox.yml"
+      - "scripts/factory_001_docker_sandbox.py"
+      - "tests/test_factory_001_docker_sandbox.py"
+      - "docs/FACTORY-001-DOCKER-SANDBOX-ADR.md"
+
+permissions:
+  contents: read
+
+jobs:
+  docker-sandbox:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      CH_FACTORY001_DOCKER_INTEGRATION: "1"
+    steps:
+      - name: Checkout sem persistir credenciais
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Verificar Docker e baixar imagem oficial fixada
+        run: |
+          docker version
+          docker compose version || echo "Compose indisponível; não é necessário para esta prova"
+          python3 scripts/factory_001_docker_sandbox.py pull
+
+      - name: Testes unitários e prova real sem autenticação
+        run: python3 -m unittest discover -s tests -p "test_factory_001_docker_sandbox.py" -v
