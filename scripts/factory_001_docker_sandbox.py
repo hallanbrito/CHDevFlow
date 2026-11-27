@@ -27,6 +27,7 @@ IMAGE_REPOSITORY = "ghcr.io/github/copilot-cli"
 WORKSPACE_TARGET = "/home/copilot/workspace"
 CONTAINER_USER = "10001:10001"
 MEMORY_BYTES = 1024 * 1024 * 1024
+TMPFS_DEFAULT_SIZE_BYTES = 16 * 1024 * 1024
 TMPFS_SIZE_BYTES = 512 * 1024 * 1024
 PID_LIMIT = 64
 CPU_LIMIT = "1"
@@ -175,31 +176,39 @@ def _validate_container(
         raise SandboxError("Montagem do workspace não corresponde à política somente leitura.")
 
     tmpfs = host.get("Tmpfs")
-    if not isinstance(tmpfs, dict) or set(tmpfs) != {"/tmp"}:
-        raise SandboxError("Somente um tmpfs em /tmp é permitido.")
-    tmpfs_options = tmpfs["/tmp"]
-    if not isinstance(tmpfs_options, str):
-        raise SandboxError("Opções do tmpfs são inválidas.")
-    options = dict(
-        option.split("=", 1) if "=" in option else (option, "")
-        for option in tmpfs_options.split(",")
-    )
-    required_tmpfs_options = {"rw", "nosuid", "nodev", "noexec", "size", "mode"}
-    if set(options) != required_tmpfs_options or any(
-        options[name] for name in ("rw", "nosuid", "nodev", "noexec")
-    ):
-        raise SandboxError("Opções do tmpfs não correspondem à política.")
-    size_match = re.fullmatch(r"(?i)([0-9]+)([kmgt]?)", options["size"])
-    if not size_match:
-        raise SandboxError("Tamanho do tmpfs inválido.")
+    if not isinstance(tmpfs, dict) or set(tmpfs) != {"/tmp", "/var/tmp"}:
+        raise SandboxError("Tmpfs permitido somente em /tmp e /var/tmp.")
     size_units = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4}
-    size = int(size_match.group(1)) * size_units[size_match.group(2).lower()]
-    try:
-        mode = int(options["mode"], 8)
-    except ValueError as exc:
-        raise SandboxError("Modo do tmpfs inválido.") from exc
-    if size != TMPFS_SIZE_BYTES or mode != 0o1777:
-        raise SandboxError("Tmpfs permitido somente em /tmp.")
+    for destination, (expected_size, noexec) in {
+        "/tmp": (TMPFS_DEFAULT_SIZE_BYTES, True),
+        "/var/tmp": (TMPFS_SIZE_BYTES, False),
+    }.items():
+        tmpfs_options = tmpfs[destination]
+        if not isinstance(tmpfs_options, str):
+            raise SandboxError("Opções do tmpfs são inválidas.")
+        options = dict(
+            option.split("=", 1) if "=" in option else (option, "")
+            for option in tmpfs_options.split(",")
+        )
+        expected_options = {"rw", "nosuid", "nodev", "size", "mode"}
+        if noexec:
+            expected_options.add("noexec")
+        if set(options) != expected_options or any(
+            options[name] for name in expected_options - {"size", "mode"}
+        ):
+            raise SandboxError(
+                f"Opções do tmpfs em {destination} não correspondem à política."
+            )
+        size_match = re.fullmatch(r"(?i)([0-9]+)([kmgt]?)", options["size"])
+        if not size_match:
+            raise SandboxError("Tamanho do tmpfs inválido.")
+        size = int(size_match.group(1)) * size_units[size_match.group(2).lower()]
+        try:
+            mode = int(options["mode"], 8)
+        except ValueError as exc:
+            raise SandboxError("Modo do tmpfs inválido.") from exc
+        if size != expected_size or mode != 0o1777:
+            raise SandboxError(f"Tamanho ou modo inválido em {destination}.")
 
     variables = config.get("Env", [])
     if not isinstance(variables, list):
@@ -339,11 +348,13 @@ class DockerSandbox:
             f"--memory={MEMORY_BYTES}",
             f"--cpus={CPU_LIMIT}",
             f"--user={CONTAINER_USER}",
-            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777",
+            "--tmpfs=/tmp:rw,nosuid,nodev,noexec,size=16m,mode=1777",
+            "--tmpfs=/var/tmp:rw,nosuid,nodev,size=512m,mode=1777",
             "--mount",
             f"type=bind,src={workspace},dst={WORKSPACE_TARGET},readonly",
             f"--workdir={WORKSPACE_TARGET}",
             "--env=HOME=/tmp",
+            "--env=TMPDIR=/var/tmp",
             "--env=COPILOT_HOME=/tmp/copilot-home",
             "--env=COPILOT_AUTO_UPDATE=false",
             f"--entrypoint={entrypoint}",
